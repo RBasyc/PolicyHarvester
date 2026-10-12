@@ -221,7 +221,8 @@ async def _extract_one(
             model=model,
             facts=[{"label": f.label, "content": f.content} for f in payload.facts],
             info_summary=payload.info.summary,
-            info_points=list(payload.info.points),
+            # 落库形态与 knowledge_concepts 一致：[{"point": "..."}]（见 schema.sql）
+            info_points=[{"point": p} for p in payload.info.points],
             knowledge_concepts=[
                 {"term": c.term, "desc": c.desc} for c in payload.knowledge.concepts
             ],
@@ -336,7 +337,9 @@ def build_pipeline_graph():
 # ---------- 后台执行器 ----------
 
 _graph = None
-_running: set[asyncio.Task] = set()
+# 在跑的后台任务，**按 task_id 归组**：既可能是整条流水线，也可能是单篇重跑。
+# 终止 / 清空 / 关停都据此精确定位要取消哪些任务（见 cancel_pipeline）。
+_running: dict[int, set[asyncio.Task]] = {}
 
 
 def get_pipeline_graph():
@@ -347,20 +350,58 @@ def get_pipeline_graph():
     return _graph
 
 
+def _track(task_id: int, coro, name: str) -> asyncio.Task:
+    """登记一个后台任务，结束后自动从 `_running` 摘除（空桶一并删掉）。"""
+    task = asyncio.create_task(coro, name=name)
+    _running.setdefault(task_id, set()).add(task)
+
+    def _discard(finished: asyncio.Task) -> None:
+        bucket = _running.get(task_id)
+        if bucket is None:
+            return
+        bucket.discard(finished)
+        if not bucket:
+            _running.pop(task_id, None)
+
+    task.add_done_callback(_discard)
+    return task
+
+
 def start_pipeline(task_id: int) -> None:
     """把流水线丢进后台 asyncio 任务（由 `POST /api/tasks` 调用），立即返回。"""
-    task = asyncio.create_task(run_pipeline(task_id), name=f"pipeline-{task_id}")
-    _running.add(task)
-    task.add_done_callback(_running.discard)
+    _track(task_id, run_pipeline(task_id), f"pipeline-{task_id}")
 
 
 def start_single_extraction(task_id: int, policy_id: int) -> None:
     """重新提取单篇（由重试 / 重新提取接口调用）。"""
-    task = asyncio.create_task(
-        run_single_extraction(task_id, policy_id), name=f"reextract-{policy_id}"
-    )
-    _running.add(task)
-    task.add_done_callback(_running.discard)
+    _track(task_id, run_single_extraction(task_id, policy_id), f"reextract-{policy_id}")
+
+
+async def cancel_pipeline(task_id: int) -> bool:
+    """取消某个任务在跑的后台任务并等它们真正结束；返回是否确实取消了东西。
+
+    调用方应在返回后再落终态：`run_pipeline` 的 `CancelledError` 分支写的是「服务重启…」，
+    由调用方覆盖成终止文案（见 `POST /api/tasks/{id}/cancel`）。
+    """
+    tasks = list(_running.get(task_id, ()))
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        # return_exceptions：被取消的任务会抛 CancelledError，这里只需等它们退出
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return bool(tasks)
+
+
+async def cancel_all_pipelines() -> int:
+    """取消全部在跑的后台任务，返回取消掉的**任务数**（每个 task_id 计 1）。
+
+    清空数据前必须先调用：否则流水线会继续往已删除的任务里写日志 / 计数。
+    """
+    cancelled = 0
+    for task_id in list(_running):
+        if await cancel_pipeline(task_id):
+            cancelled += 1
+    return cancelled
 
 
 async def run_single_extraction(task_id: int, policy_id: int) -> None:
@@ -437,7 +478,4 @@ async def run_pipeline(task_id: int) -> None:
 
 async def shutdown_pipelines() -> None:
     """应用关停时取消在跑的流水线（由 lifespan 调用）。"""
-    for task in list(_running):
-        task.cancel()
-    if _running:
-        await asyncio.gather(*_running, return_exceptions=True)
+    await cancel_all_pipelines()

@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { form, startTask, starting, task } from '../store'
+import {
+  canCancel,
+  cancelTask,
+  clearAll,
+  clearing,
+  form,
+  startTask,
+  starting,
+  stopping,
+  task,
+} from '../store'
 import type { TaskStatus } from '../api/types'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -24,6 +34,14 @@ const spinning = computed(() => task.value?.status === 'running')
 const keywordHint = computed(() =>
   form.keywords.length ? `关键词 ${form.keywords.length} 个` : '未设置关键词',
 )
+
+/** 「清空」是破坏性操作：先点一下变成确认态，再点「确认」才真的删。 */
+const confirmingClear = ref(false)
+
+async function onConfirmClear() {
+  confirmingClear.value = false
+  await clearAll()
+}
 </script>
 
 <template>
@@ -43,6 +61,43 @@ const keywordHint = computed(() =>
         <span>{{ label }}</span>
       </div>
       <span class="hint">{{ keywordHint }}</span>
+
+      <button
+        v-if="canCancel"
+        class="ghost-btn"
+        type="button"
+        :disabled="stopping"
+        title="终止正在运行的抓取任务"
+        @click="cancelTask()"
+      >
+        <AppIcon name="square" :size="13" />
+        <span>{{ stopping ? '终止中…' : '终止' }}</span>
+      </button>
+
+      <button
+        v-if="!confirmingClear"
+        class="ghost-btn danger"
+        type="button"
+        :disabled="!task || clearing"
+        title="删除全部抓取任务与结果"
+        @click="confirmingClear = true"
+      >
+        <AppIcon name="trash-2" :size="13" />
+        <span>清空</span>
+      </button>
+      <div v-else class="confirm-group" role="alertdialog" aria-label="确认清空">
+        <span class="confirm-text">清空全部数据？</span>
+        <button
+          class="ghost-btn danger"
+          type="button"
+          :disabled="clearing"
+          @click="onConfirmClear()"
+        >
+          {{ clearing ? '清空中…' : '确认' }}
+        </button>
+        <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
+      </div>
+
       <button
         class="start-btn"
         type="button"
@@ -152,6 +207,54 @@ const keywordHint = computed(() =>
 .hint {
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+/* 次要操作（终止 / 清空）：描边按钮，与主按钮「开始抓取」拉开层级 */
+.ghost-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ghost-btn.danger {
+  color: var(--accent);
+}
+
+.ghost-btn.danger:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.confirm-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .start-btn {

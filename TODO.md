@@ -24,6 +24,7 @@
 | 5 | 进度实时推送（SSE） | 🟨 进行中（代码完成，待实机验收） | — |
 | 6 | 前端接入 | 🟨 进行中（代码完成，待实机验收） | — |
 | 7 | 端到端验收与文档 | 🟨 进行中（文档已对齐，端到端验收待用户执行） | — |
+| 8 | 终止 / 清空与重启收尾 | 🟨 进行中（代码完成，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -252,6 +253,44 @@ cd web && pnpm install && pnpm dev     # 需同时起后端（8000）
 
 ---
 
+## Phase 8 — 终止 / 清空与重启收尾
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：不再被上一次未跑完的任务卡住，可终止、可清空、可重新开始
+
+**背景**：上个进程被强杀（或 Ctrl-C 两次）后，`crawl_task` 里会残留一条 `running` 的任务——它的 asyncio 流水线已随进程消失，但 `GET /tasks/current` 仍返回它，前端于是**永远显示「运行中」**；页面上既没有终止按钮也没有清空入口，数据清不掉、也无法干净地重新开始。
+
+- [x] `crawl_graph._running` 由 `set[Task]` 改为 `dict[task_id, set[Task]]`（`_track()` 登记，结束自动摘除）
+- [x] 新增 `cancel_pipeline(task_id)` / `cancel_all_pipelines()`；`shutdown_pipelines()` 复用之
+- [x] 新增仓储函数 `delete_task()` / `delete_all_tasks()`（走外键 `ON DELETE CASCADE`）、`fail_stale_tasks(reason)`
+- [x] 新增 `POST /api/tasks/{id}/cancel`（终止）、`DELETE /api/tasks/{id}`（删单个）、`DELETE /api/tasks`（清空）
+- [x] `lifespan` 启动时 `fail_stale_tasks()`：把上次遗留的 `pending`/`running` 任务落成 `failed`（库不可用只告警）
+- [x] 前端：`TopBar` 加「终止」「清空」按钮（清空为二次确认）；`store` 加 `cancelTask()` / `clearAll()`、`canCancel`、`stopping` / `clearing`
+- [x] 新增图标 `square`（终止）、`trash-2`（清空）；`api/client.ts` 加 `cancelTask` / `clearTasks`，`types.ts` 加 `TaskDeleted`
+- [x] 文档：`server/README.md`（任务 API 表 + 「终止 / 清空 / 重启收尾」小节）、根 `README.md`、`CLAUDE.md`
+
+**设计取舍**：
+
+- **终止后复用 `failed` 状态**（`stage` = 「任务已手动终止」），**不新增 `task_status` 枚举值** —— 新增枚举要改 `schema.sql` 并让用户重跑脚本（`init.sh` 还会顺带重新灌 seed），而「清空」按钮本就能把数据清干净。代价是进度面板按「失败」色板显示终止态；如需中性色的「已终止」，再考虑加枚举（`cancelled`）。
+- **取消必须先 `await` 后台任务退出再落终态**：`run_pipeline` 的 `CancelledError` 分支会写「服务重启导致任务中断」，由接口在其后覆盖成终止文案。
+- **清空必须先 `cancel_all_pipelines()`**：否则被取消前流水线仍会往已删除的任务里写日志与计数。
+
+**验收**（待用户执行）：
+
+```bash
+# 1) 终止：起一个真实抓取，中途点「终止」→ 按钮消失、状态转「失败 · 任务已手动终止」、日志多一条终止记录
+curl -X POST http://localhost:8000/api/tasks/<id>/cancel
+curl -s http://localhost:8000/api/tasks/<id> | python -m json.tool   # status=failed / stage=任务已手动终止
+curl -i -X POST http://localhost:8000/api/tasks/<id>/cancel          # 再次调用 → 409
+
+# 2) 清空：应返回 {"deleted": n}，随后 /tasks/current 返回 null（前端回到「尚未抓取」空状态）
+curl -X DELETE http://localhost:8000/api/tasks
+curl -s http://localhost:8000/api/tasks/current                       # null
+
+# 3) 重启收尾：抓取进行中直接 Ctrl-C（强杀）→ 重新起服务 → 该任务的 status 应为 failed、stage 为「服务重启导致任务中断，请重新开始抓取」
+```
+
+---
+
 ## 进度日志
 
 > 规则：每完成一个 Phase（或发生阻塞/范围变更）追加一行，倒序不必——按时间正序追加。
@@ -273,3 +312,7 @@ cd web && pnpm install && pnpm dev     # 需同时起后端（8000）
 | 2026-10-12 | 6 | 有意偏差 | 设计稿「三栏加载中 = 骨架屏」：实现为「接口拉取期间显示骨架屏，`extracting` 态显示『正在提取…』状态块」，避免长时间提取被判读成页面卡住。已在 Phase 6 记录 |
 | 2026-10-12 | 7 | 文档对齐 | `CLAUDE.md`：仓库布局补 `database/`、改写前端「静态 mockup」为接口驱动；命令补 `scripts/test_db.py`、修正 `test_mcp.py` 描述（`source_catalog` → `get_latest_policies`）；新增「数据层与抓取流水线」章节（双图结构、池、仓储、派生计数、SSE、错误契约）与「扩展流水线」指引。`server/README.md`：补目录结构、任务 API 表、SSE 事件与进度语义。`database/README.md`：改写「后端接入」为已完成，说明 seed 与真实数据的差异。根 `README.md`：项目结构补 `db/pipeline/api/store`、删除 `data.ts` 条目，API 章节补任务/政策接口与 SSE，前端状态由「静态 UI 未对接后端」改为「已对接」，扩展指引改指流水线 |
 | 2026-10-12 | 7 | 验收清单就绪 | 已把 PLAN §2.2 的 10 项关键状态逐条映射到实现位置并列出实机确认方法（见 Phase 7 表）。**端到端验收待用户执行**——本仓库约定由用户自行编译运行，故 Phase 7 未标 `✅` |
+| 2026-10-12 | 8 | 代码完成 | 需求：首次启动页面上残留上次未跑完的提取内容，且无终止 / 清空入口，数据清不掉也无法重新开始。后端：`_running` 改 `dict[task_id, set[Task]]` + `_track()`/`cancel_pipeline()`/`cancel_all_pipelines()`；仓储加 `delete_task()`/`delete_all_tasks()`/`fail_stale_tasks()`；新增 `POST /tasks/{id}/cancel`、`DELETE /tasks/{id}`、`DELETE /tasks`；`lifespan` 启动收尾僵尸任务。前端：`TopBar` 加「终止」（运行中才显示）+「清空」（二次确认）；`store` 加 `cancelTask()`/`clearAll()`/`canCancel`/`stopping`/`clearing` 及 `manualStop` 抑制误报「抓取失败」Toast；`api` 加 `cancelTask`/`clearTasks` + `TaskDeleted`；图标补 `square`/`trash-2`。静态检查：Python 5 个文件 `ast.parse` 全通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：见 Phase 8 三条 curl |
+| 2026-10-12 | 8 | 决策记录 | 用户裁定：「清空」= 删除**全部**任务与结果（彻底重置）；同时**加入终止按钮**。实现上**复用 `failed` 状态**表示终止（`stage`=「任务已手动终止」）而非新增 `cancelled` 枚举——避免改 `schema.sql`、避免让用户重跑 `init.sh`（其会重新灌 seed）。若日后需要中性色的「已终止」再引入枚举 |
+| 2026-10-12 | 4 | 缺陷修复 | 实机报错 `AttributeError: 'str' object has no attribute 'get'`（`schemas/policy.py` 读 `info_points`）。根因：**写读形态不一致**——`info_points` 的契约是 `[{"point": "..."}]`（`schema.sql` 注释 + `seed.sql` + 读取端一致），但 `_extract_one` 传的是 `list(payload.info.points)` 裸字符串（同一次调用里的 `knowledge_concepts` 却是 `[{term,desc}]`，可见是笔误）。修：① `crawl_graph._extract_one` 改为 `[{"point": p} …]`，`save_extraction` 参数类型同步为 `list[dict[str, str]]`；② 读取端新增 `_info_points()`，同时兼容裸字符串与 `{"point":…}` 两种形态——**已被旧代码写坏的历史行无需迁移即可正常打开抽屉**。已用 `.venv` 跑断言验证 `_info_points()` 四种输入（含混合/空）与旧形态 detail 的端到端转换 |
+

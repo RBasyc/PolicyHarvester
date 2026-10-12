@@ -148,3 +148,9 @@ class TaskCreate(BaseModel):
 
 class TaskCreated(BaseModel):
     task_id: int
+
+
+class TaskDeleted(BaseModel):
+    """删除 / 清空任务的响应体：**实际**删除的任务数（清空时可能为 0）。"""
+
+    deleted: int

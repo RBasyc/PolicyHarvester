@@ -118,6 +118,11 @@ export interface TaskCreated {
   task_id: number
 }
 
+/** 删除 / 清空任务的响应体：实际删除的任务数。 */
+export interface TaskDeleted {
+  deleted: number
+}
+
 /** SSE 事件（`type` 字段区分）。 */
 export type StreamEvent =
   | { type: 'task'; task: TaskDTO }

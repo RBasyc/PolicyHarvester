@@ -330,6 +330,60 @@ async def finish_task(task_id: int, status: str, stage: str) -> Row | None:
             return await cur.fetchone()
 
 
+async def fail_stale_tasks(reason: str) -> list[int]:
+    """把上次进程遗留的 `pending`/`running` 任务落为 `failed` 终态，返回受影响的 task_id。
+
+    重启后这些任务的 asyncio 流水线已随上个进程消失，若不打标，前端会永远显示「运行中」
+    且无法重新开始（`GET /tasks/current` 返回的就是这条僵尸任务）。启动时调用一次。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE crawl_task
+                    SET status = 'failed', stage = %s, finished_at = now()
+                    WHERE status IN ('pending', 'running')
+                    RETURNING id
+                    """,
+                    (reason,),
+                )
+                ids = [int(row["id"]) for row in await cur.fetchall()]
+                for task_id in ids:
+                    await cur.execute(
+                        """
+                        INSERT INTO task_log (task_id, tone, message)
+                        VALUES (%s, 'info', %s)
+                        """,
+                        (task_id, reason),
+                    )
+                return ids
+
+
+# ---------- 写：删除与清空 ----------
+
+
+async def delete_task(task_id: int) -> bool:
+    """删除一个抓取任务；政策文件 / 提取结果 / 事实 / 日志由外键 `ON DELETE CASCADE` 一并清除。
+
+    返回是否真的删到了行（`False` 表示该任务本就不存在）。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM crawl_task WHERE id = %s RETURNING id", (task_id,)
+            )
+            return await cur.fetchone() is not None
+
+
+async def delete_all_tasks() -> int:
+    """清空全部抓取任务（级联删除其结果），返回删除的任务数。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM crawl_task RETURNING id")
+            return len(await cur.fetchall())
+
+
 async def refresh_task_counts(task_id: int) -> Row | None:
     """按**实际行数**重算任务计数并返回任务行。
 
@@ -369,7 +423,7 @@ async def save_extraction(
     model: str,
     facts: list[dict[str, str]],
     info_summary: str | None,
-    info_points: list[str],
+    info_points: list[dict[str, str]],
     knowledge_concepts: list[dict[str, str]],
     knowledge_fields: list[str],
     knowledge_extension: str | None,

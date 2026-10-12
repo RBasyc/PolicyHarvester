@@ -79,6 +79,8 @@ python main.py             # 或 uvicorn app.main:app --reload
 - `GET /api/tasks/{id}` / `GET /api/tasks/{id}/logs` — 任务快照 / 日志流。
 - `GET /api/tasks/{id}/policies` — 结果表格：`{items, summary:{total,extracted,extracting,pending,failed}}`。
 - `GET /api/tasks/{id}/stream` — **SSE** 进度推送（事件 `task` / `log` / `done` / `error`）。
+- `POST /api/tasks/{id}/cancel` — 终止运行中的任务（取消后台流水线 → 落 `failed` 终态）。
+- `DELETE /api/tasks/{id}` / `DELETE /api/tasks` — 删除单个任务 / **清空全部**任务与结果。
 - `GET /api/policies/{id}/extraction` — 抽屉三栏（事实 / 信息 / 知识）。
 - `POST /api/policies/{id}/retry` / `POST /api/policies/{id}/reextract` — 失败重试 / 重新提取。
 

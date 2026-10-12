@@ -41,6 +41,10 @@ export const summary = ref<PolicySummary>({ ...EMPTY_SUMMARY })
 export const booting = ref(true)
 /** 「开始抓取」请求进行中 */
 export const starting = ref(false)
+/** 「终止抓取」请求进行中 */
+export const stopping = ref(false)
+/** 「清空」请求进行中 */
+export const clearing = ref(false)
 /** 结果表格刷新中（不阻塞整页） */
 export const refreshing = ref(false)
 
@@ -66,10 +70,20 @@ export const phase = computed<Phase>(() => {
 
 export const hasResult = computed(() => policies.value.length > 0)
 
+/** 是否可以终止：任务在排队中或运行中 */
+export const canCancel = computed(
+  () => task.value?.status === 'pending' || task.value?.status === 'running',
+)
+
 // ---------- 内部 ----------
 
 let stopStream: (() => void) | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
+/**
+ * 用户主动终止 / 清空时为 true：抑制 SSE `done` 事件弹出的「抓取失败」Toast
+ * （那两个动作自己会给出提示，否则会重复弹一条误导性文案）。
+ */
+let manualStop = false
 
 function showToast(message: string, retry?: () => void): void {
   toast.value = { message, retry }
@@ -156,6 +170,8 @@ export function subscribe(taskId: number): void {
     onDone: (final) => {
       task.value = final
       void refreshPolicies(final.id)
+      // 手动终止 / 清空自己会给提示，这里不再弹「抓取失败」
+      if (manualStop) return
       if (final.status === 'failed') {
         showToast(`抓取失败：${final.stage ?? '未知原因'}`, () => void startTask())
       }
@@ -185,6 +201,49 @@ export async function startTask(): Promise<void> {
     showToast(`抓取失败：${errorText(error)}`, () => void startTask())
   } finally {
     starting.value = false
+  }
+}
+
+/** 点「终止抓取」：取消后台流水线 → 任务落「失败 · 任务已手动终止」终态，可重新开始。 */
+export async function cancelTask(): Promise<void> {
+  const current = task.value
+  if (!current || stopping.value || !canCancel.value) return
+  stopping.value = true
+  manualStop = true
+  try {
+    task.value = await api.cancelTask(current.id)
+    stopSubscription()
+    await Promise.all([refreshPolicies(current.id), refreshLogs()])
+    showToast('已终止本次抓取')
+  } catch (error) {
+    // 失败时保持订阅不变（如 409「任务已结束」），由 SSE 继续同步真实状态
+    showToast(`终止失败：${errorText(error)}`)
+  } finally {
+    stopping.value = false
+    manualStop = false
+  }
+}
+
+/** 点「清空」：删除全部任务与结果，页面回到「尚未抓取」空状态。 */
+export async function clearAll(): Promise<void> {
+  if (clearing.value) return
+  clearing.value = true
+  manualStop = true
+  // 任务即将被删除，先断开 SSE：否则服务端下一轮会推「任务不存在」错误事件
+  stopSubscription()
+  try {
+    const { deleted } = await api.clearTasks()
+    task.value = null
+    logs.value = []
+    policies.value = []
+    summary.value = { ...EMPTY_SUMMARY }
+    showToast(deleted ? `已清空 ${deleted} 个抓取任务` : '暂无可清空的数据')
+  } catch (error) {
+    showToast(`清空失败：${errorText(error)}`)
+    await bootstrap() // 清空失败：把服务端的真实状态拉回来
+  } finally {
+    clearing.value = false
+    manualStop = false
   }
 }
 

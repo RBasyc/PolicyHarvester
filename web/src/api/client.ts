@@ -13,6 +13,7 @@ import type {
   StreamEvent,
   TaskCreatePayload,
   TaskCreated,
+  TaskDeleted,
   TaskDTO,
 } from './types'
 
@@ -64,6 +65,13 @@ export const api = {
 
   createTask: (payload: TaskCreatePayload) =>
     request<TaskCreated>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 终止运行中的任务；返回落终态后的任务快照（已是终态时后端返回 409 → ApiError）。 */
+  cancelTask: (taskId: number) =>
+    request<TaskDTO>(`/tasks/${taskId}/cancel`, { method: 'POST' }),
+
+  /** 清空全部任务与结果；返回实际删除的任务数。 */
+  clearTasks: () => request<TaskDeleted>('/tasks', { method: 'DELETE' }),
 
   policyExtraction: (policyId: number) =>
     request<PolicyExtractionResponse>(`/policies/${policyId}/extraction`),

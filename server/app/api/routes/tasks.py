@@ -4,8 +4,11 @@
 - GET  /api/tasks/{id}          单个任务
 - GET  /api/tasks/{id}/logs     日志流
 - GET  /api/tasks/{id}/stream   进度实时推送（SSE）
-- GET  /api/tasks/{id}/policies 抓取结果列表 + 四态统计
-- POST /api/tasks               创建任务并后台启动流水线（Phase 4）
+- GET    /api/tasks/{id}/policies 抓取结果列表 + 四态统计
+- POST   /api/tasks               创建任务并后台启动流水线（Phase 4）
+- POST   /api/tasks/{id}/cancel   终止运行中的任务（取消后台流水线 → 落 failed 终态）
+- DELETE /api/tasks/{id}          删除单个任务及其全部结果
+- DELETE /api/tasks               清空全部任务与结果（页面回到空状态）
 
 注意：`/current` 必须声明在 `/{task_id}` 之前，否则会被当作路径参数解析。
 """
@@ -20,9 +23,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.db import repositories as repo
-from app.pipeline.crawl_graph import start_pipeline
+from app.pipeline.crawl_graph import cancel_all_pipelines, cancel_pipeline, start_pipeline
 from app.schemas.policy import PolicyResultsResponse, PolicyResultItem, PolicySummary
-from app.schemas.task import TaskCreate, TaskCreated, TaskDTO, TaskLogDTO
+from app.schemas.task import TaskCreate, TaskCreated, TaskDTO, TaskDeleted, TaskLogDTO
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -30,6 +33,9 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 _STREAM_POLL_SECONDS = 0.6
 _STREAM_HEARTBEAT_SECONDS = 15.0
 _TERMINAL_STATUSES = ("completed", "failed")
+
+# 手动终止后写进 `stage` 的文案（进度面板直接展示这一段）
+_CANCELLED_STAGE = "任务已手动终止"
 
 
 def _sse(payload: dict) -> str:
@@ -74,6 +80,45 @@ async def create_task(payload: TaskCreate) -> TaskCreated:
     )
     start_pipeline(task_id)
     return TaskCreated(task_id=task_id)
+
+
+@router.post("/{task_id}/cancel", response_model=TaskDTO)
+async def cancel_task(task_id: int) -> TaskDTO:
+    """终止运行中的任务。
+
+    先取消后台 asyncio 流水线并等它退出，再把任务落 `failed` 终态 ——
+    顺序不能反：`run_pipeline` 的取消分支写的是「服务重启…」，由这里覆盖成终止文案。
+    已是终态的任务返回 `409`（前端据此提示「任务已结束」）。
+    """
+    task = await _get_task_or_404(task_id)
+    if task["status"] in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=409, detail=f"任务已结束（{task['status']}），无需终止"
+        )
+
+    await cancel_pipeline(task_id)
+    await repo.finish_task(task_id, "failed", _CANCELLED_STAGE)
+    await repo.add_task_log(task_id, _CANCELLED_STAGE, tone="info")
+    return TaskDTO.from_row(await _get_task_or_404(task_id))
+
+
+@router.delete("/{task_id}", response_model=TaskDeleted)
+async def delete_task(task_id: int) -> TaskDeleted:
+    """删除单个任务及其全部结果（政策 / 提取 / 事实 / 日志随外键级联删除）。"""
+    await cancel_pipeline(task_id)  # 先停掉后台写入，再删行
+    if not await repo.delete_task(task_id):
+        raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+    return TaskDeleted(deleted=1)
+
+
+@router.delete("", response_model=TaskDeleted)
+async def clear_tasks() -> TaskDeleted:
+    """清空全部任务与结果（页面回到「尚未抓取」）。
+
+    必须先取消在跑的后台任务：否则它们会继续往已删除的任务里写日志与计数。
+    """
+    await cancel_all_pipelines()
+    return TaskDeleted(deleted=await repo.delete_all_tasks())
 
 
 @router.get("/{task_id}", response_model=TaskDTO)

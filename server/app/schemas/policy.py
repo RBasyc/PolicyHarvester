@@ -129,6 +129,25 @@ class PolicyExtractionResponse(BaseModel):
     extraction: ExtractionOut
 
 
+def _info_points(raw: Any) -> list[str]:
+    """把 JSONB `info_points` 读成字符串列表。
+
+    契约为 `[{"point": "..."}]`（见 database/schema.sql），但流水线早期版本误写成过裸字符串
+    `["..."]` —— 两种都要能读，否则历史行会让抽屉接口直接 500。
+    """
+    points: list[str] = []
+    for item in raw or []:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(item.get("point") or "").strip()
+        else:
+            continue
+        if text:
+            points.append(text)
+    return points
+
+
 def build_extraction_response(detail: dict[str, Any]) -> PolicyExtractionResponse:
     """把 repositories 返回的裸行转成契约形状（含「无 extraction 行」的兜底）。"""
     row = detail["policy"]
@@ -152,7 +171,7 @@ def build_extraction_response(detail: dict[str, Any]) -> PolicyExtractionRespons
         )
 
     # info_points / knowledge_concepts 是 JSONB，形如 [{"point": "..."}] / [{"term":..,"desc":..}]
-    points = [p["point"] for p in (raw.get("info_points") or []) if p.get("point")]
+    points = _info_points(raw.get("info_points"))
     concepts = [
         ConceptOut(term=c["term"], desc=c.get("desc", ""))
         for c in (raw.get("knowledge_concepts") or [])
