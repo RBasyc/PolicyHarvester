@@ -29,6 +29,15 @@ pnpm dev       # vite dev server
 pnpm build     # vue-tsc -b && vite build (type-check + build; there is no separate lint/test script)
 ```
 
+## Build & run (do not do this yourself)
+
+The user compiles and runs the project themselves. After writing or changing code:
+
+- **Do NOT** proactively run builds or dev servers (`pnpm build`, `pnpm dev`, `uvicorn`, `python main.py`, `uv sync`, `docker exec ... psql`, etc.).
+- **Do NOT** start background/long-running processes to "verify" a change.
+- Instead, state what you changed and tell the user what to run and what to expect.
+- Quick read-only checks that don't build or start a server are fine when they genuinely help (e.g. a one-off script the user asked for), but prefer describing the verification over performing it.
+
 ## Server architecture
 
 The backend is a LangGraph **ReAct agent** exposed over HTTP:
@@ -47,6 +56,15 @@ Key flows that span multiple files:
 - **LLM auth quirk** (`app/agent/nodes.py`): `ChatAnthropic` doesn't accept `auth_token`, so Bearer-token gateways are passed via `default_headers={"Authorization": "Bearer ..."}`.
 - **SSE streaming** (`app/api/routes/agent.py`): `POST /api/chat/stream` emits `data: {"type": "token", "content": ...}` lines, always terminated by `{"type": "done"}`; errors are sent as `{"type": "error"}` events in-stream rather than HTTP errors. `_extract_text` filters content blocks to `text` only, skipping thinking/tool blocks — reuse it when handling message content.
 - **Config** (`app/config.py`): `pydantic-settings` reads `.env`, but `load_dotenv()` is also called explicitly because the `anthropic` SDK reads `ANTHROPIC_*` straight from the environment.
+
+## Progress tracking (required)
+
+This repo is being built out phase-by-phase to connect the frontend, backend, and database.
+
+- The plan lives in [PLAN.md](PLAN.md); the task checklist lives in [TODO.md](TODO.md).
+- **After completing any phase (or work item within it), you MUST update `TODO.md`**: tick the finished checkboxes, change the phase's status in the 总进度 table and the per-phase `状态` line, and append a row to the 进度日志 table at the bottom (date, phase, event, note).
+- Record blockers as `⛔ 阻塞` rather than leaving them unstated.
+- Keep `TODO.md` truthful — only mark a phase `✅ 已完成` once its stated acceptance criteria have actually been verified, and include the verification evidence in the log entry.
 
 ## Extending the agent
 
