@@ -12,9 +12,14 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE task_status AS ENUM ('pending', 'running', 'completed', 'failed');
+    CREATE TYPE task_status AS ENUM ('pending', 'running', 'awaiting_confirmation', 'completed', 'failed');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- 补丁：老库的类型已存在，上面的 DO 块不会改动它，这里单独补一档。
+-- `awaiting_confirmation` = 已检索到政策、等用户确认要抓哪些（见 app/pipeline/crawl_graph.py）。
+-- 只加枚举值、不动任何数据，可重复执行；`ADD VALUE` 不能与其他语句同事务，故单独成句。
+ALTER TYPE task_status ADD VALUE IF NOT EXISTS 'awaiting_confirmation';
 
 DO $$ BEGIN
     CREATE TYPE content_type AS ENUM ('policy', 'notice', 'all');
@@ -37,11 +42,11 @@ END $$;
 CREATE TABLE IF NOT EXISTS crawl_task (
     id              BIGSERIAL PRIMARY KEY,
     source          TEXT NOT NULL DEFAULT '国务院政策文件库（gov.cn）',
-    content_type    content_type NOT NULL DEFAULT 'policy',  -- 政策文件 / 通知公告 / 全部
     date_from       DATE,
-    date_to         DATE,
-    schedule        schedule_type NOT NULL DEFAULT 'manual',  -- 手动 / 每天 / 每周（demo 不执行定时）
-    keywords        TEXT[] NOT NULL DEFAULT '{}',
+    date_to         DATE,    keywords        TEXT[] NOT NULL DEFAULT '{}',
+    -- gov.cn 检索筛选项（对齐官网「发布机构分类 / 文种」；API 重复参数被静默忽略，多选由服务端扇出）
+    agencies        TEXT[] NOT NULL DEFAULT '{}',             -- 发布机构分类（bmfl 参数，facetMap.bmfl 的键）
+    doc_types       TEXT[] NOT NULL DEFAULT '{}',             -- 文种（pcodeJiguan 参数：国令/国发/国函/国办发/国办函）
     status          task_status NOT NULL DEFAULT 'pending',
     -- 进度统计（冗余计数，便于前端直接读取，日志中的「已抓取 10/10 · 已提取 6/10」）
     total_count     INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +60,11 @@ CREATE TABLE IF NOT EXISTS crawl_task (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 补丁：老库的 crawl_task 已存在，上面的 CREATE TABLE IF NOT EXISTS 不会改动它；
+-- 这里幂等补上「gov.cn 检索筛选项」列。只加列、不动数据，可重复执行（重跑 init.sh 安全）。
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS agencies  TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS doc_types TEXT[] NOT NULL DEFAULT '{}';
+
 -- 政策文件（对应「抓取结果」表格每行 + 抽屉头部元信息）
 CREATE TABLE IF NOT EXISTS policy_document (
     id           BIGSERIAL PRIMARY KEY,
@@ -65,11 +75,15 @@ CREATE TABLE IF NOT EXISTS policy_document (
     source_url   TEXT,                                        -- 原文链接
     agency       TEXT,                                        -- 发文机关
     doc_no       TEXT,                                        -- 文号
+    catalog      TEXT,                                        -- 来源目录（gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读）
     fetched_by   TEXT,                                        -- 抓取方式（如 China-Central-Policy-MCP）
     fetched_at   TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (task_id, source_url)
 );
+
+-- 补丁：老库的 policy_document 已存在，幂等补 catalog 列。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS catalog TEXT;
 
 -- 提取结果（与 policy_document 一对一；对应抽屉「事实 / 信息 / 知识」三区）
 CREATE TABLE IF NOT EXISTS extraction (
@@ -83,9 +97,9 @@ CREATE TABLE IF NOT EXISTS extraction (
     info_summary        TEXT,                                 -- 摘要
     info_points         JSONB NOT NULL DEFAULT '[]',          -- 要点：[{ "point": "..." }]
     -- 知识 Knowledge
-    knowledge_concepts  JSONB NOT NULL DEFAULT '[]',          -- 背景概念：[{ "term": "...", "desc": "..." }]
-    knowledge_fields    TEXT[] NOT NULL DEFAULT '{}',         -- 相关领域
-    knowledge_extension TEXT,                                 -- 延伸解释
+    knowledge_concepts  JSONB NOT NULL DEFAULT '[]',          -- 知识点：[{ "term": "标题", "desc": "依据与做法" }]
+    knowledge_fields    TEXT[] NOT NULL DEFAULT '{}',         -- 适用领域
+    knowledge_extension TEXT,                                 -- 行动建议
     extracted_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -145,6 +159,7 @@ SELECT
     p.title,
     p.publish_date,
     p.source_url,
+    p.catalog,
     COALESCE(e.status, 'pending') AS status,
     e.extracted_at
 FROM policy_document p

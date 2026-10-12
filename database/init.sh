@@ -30,8 +30,12 @@ fi
 echo ">>> 执行 schema.sql ..."
 docker exec -i "$CONTAINER" psql -U "$PGUSER" -d "$DB" -v ON_ERROR_STOP=1 < "$DIR/schema.sql"
 
-# 3. 演示数据
-echo ">>> 执行 seed.sql ..."
-docker exec -i "$CONTAINER" psql -U "$PGUSER" -d "$DB" -v ON_ERROR_STOP=1 < "$DIR/seed.sql"
+# 3. 演示数据（默认不灌，打开即干净系统；需要演示数据时 SEED=1 database/init.sh）
+if [ "${SEED:-0}" = "1" ]; then
+    echo ">>> 执行 seed.sql ..."
+    docker exec -i "$CONTAINER" psql -U "$PGUSER" -d "$DB" -v ON_ERROR_STOP=1 < "$DIR/seed.sql"
+else
+    echo ">>> 跳过演示数据（SEED=1 可灌入）"
+fi
 
 echo ">>> 完成。连接串: postgresql://$PGUSER@localhost:5433/$DB"

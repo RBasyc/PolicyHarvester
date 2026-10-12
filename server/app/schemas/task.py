@@ -7,10 +7,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-TaskStatus = Literal["pending", "running", "completed", "failed"]
-ContentType = Literal["policy", "notice", "all"]
-ScheduleType = Literal["manual", "daily", "weekly"]
+TaskStatus = Literal["pending", "running", "awaiting_confirmation", "completed", "failed"]
+ContentType = Literal["policy", "notice", "all"]  # 已弃用：对抓取无过滤作用，仅遗留列保留
+ScheduleType = Literal["manual", "daily", "weekly"]  # 已弃用：demo 不执行定时，仅遗留列保留
 LogTone = Literal["info", "success", "active"]
+
+# 文种（gov.cn 检索 pcodeJiguan 参数的可选值）
+DOC_TYPES: tuple[str, ...] = ("国令", "国发", "国函", "国办发", "国办函")
 
 # `started_at` 距今超过这个秒数就不再外推剩余时间（老任务/演示数据上外推没有意义）
 _MAX_ELAPSED_FOR_ETA = 6 * 3600
@@ -21,11 +24,12 @@ class TaskDTO(BaseModel):
 
     id: int
     source: str
-    content_type: ContentType
     date_from: date | None = None
     date_to: date | None = None
-    schedule: ScheduleType
     keywords: list[str] = Field(default_factory=list)
+    # gov.cn 检索筛选项（发布机构分类 bmfl / 文种 pcodeJiguan；对齐官网筛选面板）
+    agencies: list[str] = Field(default_factory=list)
+    doc_types: list[str] = Field(default_factory=list)
 
     status: TaskStatus
     stage: str | None = None
@@ -46,13 +50,16 @@ class TaskDTO(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "TaskDTO":
+        # 新列用 .get(...) 防御未迁移的老库（硬下标 row[k] 会在 KeyError 时 500）
         return cls(
             **{k: row[k] for k in (
-                "id", "source", "content_type", "date_from", "date_to", "schedule",
+                "id", "source", "date_from", "date_to",
                 "keywords", "status", "stage",
                 "total_count", "fetched_count", "extracted_count", "failed_count",
                 "started_at", "finished_at", "created_at",
             )},
+            agencies=list(row.get("agencies") or []),
+            doc_types=list(row.get("doc_types") or []),
             progress=_progress(row),
             eta_seconds=_eta_seconds(row),
         )
@@ -62,6 +69,7 @@ def _progress(row: dict[str, Any]) -> int:
     """进度条：抓取阶段 0→50（`fetched/total`），提取阶段 50→100（已完成篇数占比）。
 
     提取阶段的分子用「已提取 + 失败」——失败篇目也算处理完，否则进度条会永远差一截。
+    `awaiting_confirmation`（抓完了、还没确认）自然落在 50%：`fetched == total` 且一篇都没提取。
     """
     status = row["status"]
     if status == "pending":
@@ -118,11 +126,11 @@ class TaskCreate(BaseModel):
     """「抓取配置」表单提交体。"""
 
     source: str = Field("国务院政策文件库（gov.cn）", min_length=1, max_length=200)
-    content_type: ContentType = "policy"
     date_from: date | None = None
     date_to: date | None = None
-    schedule: ScheduleType = "manual"
     keywords: list[str] = Field(default_factory=list)
+    agencies: list[str] = Field(default_factory=list, description="发布机构分类（bmfl），可多选")
+    doc_types: list[str] = Field(default_factory=list, description="文种（pcodeJiguan），可多选")
 
     @field_validator("keywords")
     @classmethod
@@ -139,15 +147,66 @@ class TaskCreate(BaseModel):
                 cleaned.append(word)
         return cleaned
 
+    @field_validator("agencies")
+    @classmethod
+    def _clean_agencies(cls, value: list[str]) -> list[str]:
+        return _dedup_clean(value, "发布机构")
+
+    @field_validator("doc_types")
+    @classmethod
+    def _clean_doc_types(cls, value: list[str]) -> list[str]:
+        cleaned = _dedup_clean(value, "文种")
+        invalid = [v for v in cleaned if v not in DOC_TYPES]
+        if invalid:
+            raise ValueError(f"未知文种：{'、'.join(invalid)}（可选：{'、'.join(DOC_TYPES)}）")
+        return cleaned
+
     @model_validator(mode="after")
     def _check_date_range(self) -> "TaskCreate":
         if self.date_from and self.date_to and self.date_from > self.date_to:
             raise ValueError("开始日期不能晚于结束日期")
+        if self.date_from is None and self.date_to is not None:
+            raise ValueError("设置结束日期时也要设置开始日期")
         return self
+
+
+def _dedup_clean(value: list[str], label: str, max_len: int = 100) -> list[str]:
+    """筛选项共用清洗：去空白、去空串、保序去重、限长。"""
+    cleaned: list[str] = []
+    for raw in value:
+        word = raw.strip()
+        if not word:
+            continue
+        if len(word) > max_len:
+            raise ValueError(f"{label}过长（最多 {max_len} 字）：{word[:20]}…")
+        if word not in cleaned:
+            cleaned.append(word)
+    return cleaned
+
+
+class FacetOption(BaseModel):
+    """单个筛选项（名字 + 当前检索条件下的条数）。"""
+
+    name: str
+    count: int
+
+
+class FacetList(BaseModel):
+    """筛选器可选值：优先实时 facet（带条数），失败时回退静态名单。"""
+
+    agencies: list[FacetOption]
+    doc_types: list[FacetOption]
+    source: Literal["live", "fallback"]
 
 
 class TaskCreated(BaseModel):
     task_id: int
+
+
+class TaskConfirm(BaseModel):
+    """「检索结果确认」提交体：用户勾选要抓取的篇目（其余在确认时被丢弃）。"""
+
+    policy_ids: list[int] = Field(default_factory=list, description="勾选的政策 id，至少一个")
 
 
 class TaskDeleted(BaseModel):

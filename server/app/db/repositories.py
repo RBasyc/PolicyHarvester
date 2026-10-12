@@ -25,6 +25,7 @@ class PolicyRow(TypedDict, total=False):
     source_name: str | None
     agency: str | None
     doc_no: str | None
+    catalog: str | None
     fetched_by: str | None
 
 
@@ -71,7 +72,7 @@ async def fetch_task_policies(task_id: int) -> list[Row]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT id, task_id, title, publish_date, source_url, status, extracted_at
+                SELECT id, task_id, title, publish_date, source_url, catalog, status, extracted_at
                 FROM v_policy_results
                 WHERE task_id = %s
                 ORDER BY publish_date DESC NULLS LAST, id
@@ -144,23 +145,26 @@ async def fetch_extraction_detail(policy_id: int) -> Row | None:
 async def create_task(
     *,
     source: str,
-    content_type: str,
     date_from: date | None,
     date_to: date | None,
-    schedule: str,
     keywords: list[str],
+    agencies: list[str] | None = None,
+    doc_types: list[str] | None = None,
 ) -> int:
-    """新建抓取任务（status=pending），返回 task_id。"""
+    """新建抓取任务（status=pending），返回 task_id。
+
+    已弃用的 content_type / schedule 列交给 schema 默认值兜底，不再写入。
+    """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO crawl_task
-                    (source, content_type, date_from, date_to, schedule, keywords, status)
+                    (source, date_from, date_to, keywords, agencies, doc_types, status)
                 VALUES (%s, %s, %s, %s, %s, %s, 'pending')
                 RETURNING id
                 """,
-                (source, content_type, date_from, date_to, schedule, keywords),
+                (source, date_from, date_to, keywords, agencies or [], doc_types or []),
             )
             row = await cur.fetchone()
             return int(row["id"])
@@ -252,8 +256,8 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                     """
                     INSERT INTO policy_document
                         (task_id, title, publish_date, source_name, source_url,
-                         agency, doc_no, fetched_by, fetched_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                         agency, doc_no, catalog, fetched_by, fetched_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (task_id, source_url) DO NOTHING
                     """,
                     (
@@ -264,6 +268,7 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                         policy["source_url"],
                         policy.get("agency"),
                         policy.get("doc_no"),
+                        policy.get("catalog"),
                         policy.get("fetched_by"),
                     ),
                 )
@@ -302,6 +307,41 @@ async def set_task_running(task_id: int, stage: str) -> None:
                 """,
                 (stage, task_id),
             )
+
+
+async def await_task_confirmation(task_id: int, stage: str) -> None:
+    """任务停在「检索完成、等用户确认要抓哪些」这一档（非终态，SSE 不会结束）。
+
+    与 `set_task_running` 的区别：不改 `started_at`（抓取阶段已经开始），也不写 `finished_at`。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE crawl_task
+                SET status = 'awaiting_confirmation', stage = %s
+                WHERE id = %s
+                """,
+                (stage, task_id),
+            )
+
+
+async def discard_unselected_policies(task_id: int, keep_ids: list[int]) -> int:
+    """确认抓取时丢弃未勾选的篇目（直接删行），返回删除条数。
+
+    调用方需保证 `keep_ids` 非空——空列表会被解释成 `NOT (id = ANY('{}'))`，即删光该任务全部篇目。
+    删除后调用方必须紧跟一次 `refresh_task_counts()`。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                DELETE FROM policy_document
+                WHERE task_id = %s AND NOT (id = ANY(%s))
+                """,
+                (task_id, keep_ids),
+            )
+            return cur.rowcount
 
 
 async def set_task_stage(task_id: int, stage: str) -> None:
