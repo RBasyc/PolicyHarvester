@@ -628,7 +628,8 @@
                               "fill": "$text-primary",
                               "content": "国务院政策文件库（gov.cn）",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             },
                             {
                               "type": "icon",
@@ -639,120 +640,6 @@
                               "icon": "chevron-down",
                               "library": "lucide",
                               "fill": "$text-tertiary"
-                            }
-                          ]
-                        }
-                      ]
-                    },
-                    {
-                      "type": "frame",
-                      "id": "j1wPNu",
-                      "name": "内容类型字段",
-                      "width": "fill_container",
-                      "layout": "vertical",
-                      "gap": 8,
-                      "children": [
-                        {
-                          "type": "text",
-                          "id": "ciagn",
-                          "name": "标签",
-                          "fill": "$text-secondary",
-                          "content": "内容类型",
-                          "fontFamily": "$font",
-                          "fontSize": 13,
-                          "fontWeight": "500"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "G5Ea3h",
-                          "name": "分段选择",
-                          "fill": "#F1F2F4",
-                          "cornerRadius": 8,
-                          "gap": 2,
-                          "padding": 3,
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "HxPtd",
-                              "name": "政策文件",
-                              "fill": "#FFFFFF",
-                              "cornerRadius": 6,
-                              "effect": {
-                                "type": "shadow",
-                                "shadowType": "outer",
-                                "color": "#0000001A",
-                                "offset": {
-                                  "x": 0,
-                                  "y": 1
-                                },
-                                "blur": 3
-                              },
-                              "padding": [
-                                7,
-                                16
-                              ],
-                              "justifyContent": "center",
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "C1WWY",
-                                  "name": "文字",
-                                  "fill": "$text-primary",
-                                  "content": "政策文件",
-                                  "fontFamily": "$font",
-                                  "fontSize": 13,
-                                  "fontWeight": "500"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "Y0DQMc",
-                              "name": "通知公告",
-                              "fill": "#F1F2F4",
-                              "cornerRadius": 6,
-                              "padding": [
-                                7,
-                                16
-                              ],
-                              "justifyContent": "center",
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "GVeII",
-                                  "name": "文字",
-                                  "fill": "$text-secondary",
-                                  "content": "通知公告",
-                                  "fontFamily": "$font",
-                                  "fontSize": 13
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "LsjLS",
-                              "name": "全部",
-                              "fill": "#F1F2F4",
-                              "cornerRadius": 6,
-                              "padding": [
-                                7,
-                                16
-                              ],
-                              "justifyContent": "center",
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "U92qh5",
-                                  "name": "文字",
-                                  "fill": "$text-secondary",
-                                  "content": "全部",
-                                  "fontFamily": "$font",
-                                  "fontSize": 13
-                                }
-                              ]
                             }
                           ]
                         }
@@ -825,7 +712,8 @@
                                   "fill": "$text-primary",
                                   "content": "2025-06-01",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -836,7 +724,8 @@
                               "fill": "$text-tertiary",
                               "content": "至",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             },
                             {
                               "type": "frame",
@@ -870,7 +759,8 @@
                                   "fill": "$text-primary",
                                   "content": "2025-06-08",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -921,7 +811,8 @@
                                   "fill": "$text-secondary",
                                   "content": "近 30 天",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -1001,7 +892,8 @@
                                   "fill": "$text-secondary",
                                   "content": "每天",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -1026,7 +918,8 @@
                                   "fill": "$text-secondary",
                                   "content": "每周",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -1049,7 +942,8 @@
                                   "fill": "$text-tertiary",
                                   "content": "Demo 仅展示，不执行定时任务",
                                   "fontFamily": "$font",
-                                  "fontSize": 11
+                                  "fontSize": 11,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -1072,7 +966,7 @@
                       "id": "TSCYC",
                       "name": "标签",
                       "fill": "$text-secondary",
-                      "content": "关键词（可添加多个）",
+                      "content": "关键词（可选，可添加多个）",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "500"
@@ -1094,115 +988,216 @@
                       "alignItems": "center",
                       "children": [
                         {
-                          "type": "frame",
-                          "id": "kjFnA",
-                          "name": "关键词-人工智能",
-                          "fill": "#F1F2F4",
-                          "cornerRadius": 6,
-                          "gap": 6,
-                          "padding": [
-                            5,
-                            8
-                          ],
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "KcS9l",
-                              "name": "文字",
-                              "fill": "$text-primary",
-                              "content": "人工智能",
-                              "fontFamily": "$font",
-                              "fontSize": 13
-                            },
-                            {
-                              "type": "icon",
-                              "id": "UyOjQ",
-                              "name": "删除",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "x",
-                              "library": "lucide",
-                              "fill": "$text-tertiary"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "gAVxv",
-                          "name": "关键词-中小企业",
-                          "fill": "#F1F2F4",
-                          "cornerRadius": 6,
-                          "gap": 6,
-                          "padding": [
-                            5,
-                            8
-                          ],
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "HxFRz",
-                              "name": "文字",
-                              "fill": "$text-primary",
-                              "content": "中小企业",
-                              "fontFamily": "$font",
-                              "fontSize": 13
-                            },
-                            {
-                              "type": "icon",
-                              "id": "kKHNv",
-                              "name": "删除",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "x",
-                              "library": "lucide",
-                              "fill": "$text-tertiary"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "vnD66",
-                          "name": "关键词-产业基金",
-                          "fill": "#F1F2F4",
-                          "cornerRadius": 6,
-                          "gap": 6,
-                          "padding": [
-                            5,
-                            8
-                          ],
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "JSflZ",
-                              "name": "文字",
-                              "fill": "$text-primary",
-                              "content": "产业基金",
-                              "fontFamily": "$font",
-                              "fontSize": 13
-                            },
-                            {
-                              "type": "icon",
-                              "id": "Y7qyA",
-                              "name": "删除",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "x",
-                              "library": "lucide",
-                              "fill": "$text-tertiary"
-                            }
-                          ]
-                        },
-                        {
                           "type": "text",
                           "id": "F2NMgm",
                           "name": "占位",
                           "fill": "$text-tertiary",
-                          "content": "输入关键词，回车添加",
+                          "content": "输入关键词，回车添加；留空则按下方筛选条件抓取最新发文",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rD50Q",
+                  "name": "筛选行",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "uneLk",
+                      "name": "字段行",
+                      "width": "fill_container",
+                      "gap": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "xTQ5D",
+                          "name": "发布机构字段",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "ja4BH",
+                              "name": "标签",
+                              "fill": "$text-secondary",
+                              "content": "发布机构",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Tg9nn",
+                              "name": "下拉选择",
+                              "width": "fill_container",
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 8,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "justifyContent": "space_between",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "zPR82",
+                                  "name": "值",
+                                  "gap": 8,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "DlF7Z",
+                                      "name": "图标",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "building-2",
+                                      "library": "lucide",
+                                      "fill": "$text-tertiary"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "JUzj0",
+                                      "name": "文字",
+                                      "fill": "$text-primary",
+                                      "content": "全部发布机构",
+                                      "fontFamily": "$font",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "yTgsa",
+                                  "name": "箭头",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "chevron-down",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "YeQRh",
+                          "name": "文种字段",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "y0ycw",
+                              "name": "标签",
+                              "fill": "$text-secondary",
+                              "content": "文种",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "qpSY2",
+                              "name": "下拉选择",
+                              "width": "fill_container",
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 8,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "justifyContent": "space_between",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "f0K9g",
+                                  "name": "值",
+                                  "gap": 8,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "DLYWM",
+                                      "name": "图标",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "file-text",
+                                      "library": "lucide",
+                                      "fill": "$text-tertiary"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "X3zbPU",
+                                      "name": "文字",
+                                      "fill": "$text-primary",
+                                      "content": "全部文种",
+                                      "fontFamily": "$font",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "x8QeUo",
+                                  "name": "箭头",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "chevron-down",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "h18iOj",
+                      "name": "提示行",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "aUSTa",
+                          "name": "图标",
+                          "width": 12,
+                          "height": 12,
+                          "icon": "info",
+                          "library": "lucide",
+                          "fill": "$text-tertiary"
+                        },
+                        {
+                          "type": "text",
+                          "id": "c5yXF",
+                          "name": "文字",
+                          "fill": "$text-tertiary",
+                          "content": "输入关键词后，选项将按检索结果实时更新并标注数量；无匹配时提示「没有相关内容」；留空可直接浏览全部机构与文种",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -1268,7 +1263,8 @@
                       "fill": "$text-tertiary",
                       "content": "支持 .json 文件，导入后将覆盖当前表单配置",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 }
@@ -1356,7 +1352,8 @@
                       "fill": "$text-tertiary",
                       "content": "开始于 2025-06-08 10:23:41",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -1440,7 +1437,8 @@
                   "fill": "$text-tertiary",
                   "content": "已抓取 10/10 篇 · 已提取 6/10 篇 · 失败 0 · 预计剩余约 2 分钟",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -1675,7 +1673,8 @@
                       "fill": "$text-tertiary",
                       "content": "已提取 6 · 提取中 1 · 未提取 2 · 失败 1",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -1831,7 +1830,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-06-05",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1866,7 +1866,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -1976,7 +1977,8 @@
                           "fill": "$text-primary",
                           "content": "关于进一步做好中小企业纾困工作的通知",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1994,7 +1996,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-06-04",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2029,7 +2032,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2139,7 +2143,8 @@
                           "fill": "$text-primary",
                           "content": "数字政府建设一体化政务服务实施方案",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2157,7 +2162,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-06-03",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2192,7 +2198,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2302,7 +2309,8 @@
                           "fill": "$text-primary",
                           "content": "关于加强数据要素市场培育的指导意见",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2320,7 +2328,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-06-02",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2355,7 +2364,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2465,7 +2475,8 @@
                           "fill": "$text-primary",
                           "content": "2025 年节能减排重点工作安排",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2483,7 +2494,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-06-01",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2518,7 +2530,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2628,7 +2641,8 @@
                           "fill": "$text-primary",
                           "content": "关于优化口岸营商环境促进跨境贸易便利化的公告",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2646,7 +2660,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-05-30",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2681,7 +2696,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2801,7 +2817,8 @@
                           "fill": "$text-primary",
                           "content": "关于推进养老服务体系建设提质增效的意见",
                           "fontFamily": "$font",
-                          "fontSize": 14
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2819,7 +2836,8 @@
                           "fill": "$text-secondary",
                           "content": "2025-05-29",
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2854,7 +2872,8 @@
                               "fill": "$blue",
                               "content": "原文",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -2963,7 +2982,8 @@
                       "fill": "$text-tertiary",
                       "content": "点击任意一行，在右侧抽屉中查看「事实 / 信息 / 知识」三部分提取结果",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 }
@@ -3309,7 +3329,8 @@
                                   "fill": "$text-primary",
                                   "content": "国务院政策文件库（gov.cn）",
                                   "fontFamily": "$font",
-                                  "fontSize": 14
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "icon",
@@ -3407,7 +3428,8 @@
                                       "fill": "$text-secondary",
                                       "content": "通知公告",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -3431,7 +3453,8 @@
                                       "fill": "$text-secondary",
                                       "content": "全部",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -3506,7 +3529,8 @@
                                       "fill": "$text-primary",
                                       "content": "2025-06-01",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -3517,7 +3541,8 @@
                                   "fill": "$text-tertiary",
                                   "content": "至",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "frame",
@@ -3551,7 +3576,8 @@
                                       "fill": "$text-primary",
                                       "content": "2025-06-08",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -3602,7 +3628,8 @@
                                       "fill": "$text-secondary",
                                       "content": "近 30 天",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -3682,7 +3709,8 @@
                                       "fill": "$text-secondary",
                                       "content": "每天",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -3707,7 +3735,8 @@
                                       "fill": "$text-secondary",
                                       "content": "每周",
                                       "fontFamily": "$font",
-                                      "fontSize": 13
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -3730,7 +3759,8 @@
                                       "fill": "$text-tertiary",
                                       "content": "Demo 仅展示，不执行定时任务",
                                       "fontFamily": "$font",
-                                      "fontSize": 11
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -3794,7 +3824,8 @@
                                   "fill": "$text-primary",
                                   "content": "人工智能",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "icon",
@@ -3828,7 +3859,8 @@
                                   "fill": "$text-primary",
                                   "content": "中小企业",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "icon",
@@ -3862,7 +3894,8 @@
                                   "fill": "$text-primary",
                                   "content": "产业基金",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "icon",
@@ -3883,7 +3916,8 @@
                               "fill": "$text-tertiary",
                               "content": "输入关键词，回车添加",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -3949,7 +3983,8 @@
                           "fill": "$text-tertiary",
                           "content": "支持 .json 文件，导入后将覆盖当前表单配置",
                           "fontFamily": "$font",
-                          "fontSize": 12
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -4037,7 +4072,8 @@
                           "fill": "$text-tertiary",
                           "content": "开始于 2025-06-08 10:23:41",
                           "fontFamily": "$font",
-                          "fontSize": 12
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -4121,7 +4157,8 @@
                       "fill": "$text-tertiary",
                       "content": "已抓取 10/10 篇 · 已提取 6/10 篇 · 失败 0 · 预计剩余约 2 分钟",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "frame",
@@ -4356,7 +4393,8 @@
                           "fill": "$text-tertiary",
                           "content": "已提取 6 · 提取中 1 · 未提取 2 · 失败 1",
                           "fontFamily": "$font",
-                          "fontSize": 12
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -4512,7 +4550,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-06-05",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -4547,7 +4586,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -4657,7 +4697,8 @@
                               "fill": "$text-primary",
                               "content": "关于进一步做好中小企业纾困工作的通知",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -4675,7 +4716,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-06-04",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -4710,7 +4752,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -4820,7 +4863,8 @@
                               "fill": "$text-primary",
                               "content": "数字政府建设一体化政务服务实施方案",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -4838,7 +4882,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-06-03",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -4873,7 +4918,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -4983,7 +5029,8 @@
                               "fill": "$text-primary",
                               "content": "关于加强数据要素市场培育的指导意见",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5001,7 +5048,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-06-02",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5036,7 +5084,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -5146,7 +5195,8 @@
                               "fill": "$text-primary",
                               "content": "2025 年节能减排重点工作安排",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5164,7 +5214,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-06-01",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5199,7 +5250,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -5309,7 +5361,8 @@
                               "fill": "$text-primary",
                               "content": "关于优化口岸营商环境促进跨境贸易便利化的公告",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5327,7 +5380,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-05-30",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5362,7 +5416,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -5482,7 +5537,8 @@
                               "fill": "$text-primary",
                               "content": "关于推进养老服务体系建设提质增效的意见",
                               "fontFamily": "$font",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5500,7 +5556,8 @@
                               "fill": "$text-secondary",
                               "content": "2025-05-29",
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5535,7 +5592,8 @@
                                   "fill": "$blue",
                                   "content": "原文",
                                   "fontFamily": "$font",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -5644,7 +5702,8 @@
                           "fill": "$text-tertiary",
                           "content": "点击任意一行，在右侧抽屉中查看「事实 / 信息 / 知识」三部分提取结果",
                           "fontFamily": "$font",
-                          "fontSize": 12
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -5737,7 +5796,8 @@
                               "fill": "$text-secondary",
                               "content": "国务院政策文件库",
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5829,7 +5889,8 @@
                       "fill": "$text-secondary",
                       "content": "发文机关：国务院",
                       "fontFamily": "$font",
-                      "fontSize": 13
+                      "fontSize": 13,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "text",
@@ -5838,7 +5899,8 @@
                       "fill": "$text-secondary",
                       "content": "发布日期：2025-06-05",
                       "fontFamily": "$font",
-                      "fontSize": 13
+                      "fontSize": 13,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "text",
@@ -5847,7 +5909,8 @@
                       "fill": "$text-secondary",
                       "content": "文号：国发〔2025〕12 号",
                       "fontFamily": "$font",
-                      "fontSize": 13
+                      "fontSize": 13,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -5903,7 +5966,8 @@
                       "fill": "$text-tertiary",
                       "content": "由 chuance-policy-mcp 抓取",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 }
@@ -6000,7 +6064,8 @@
                               "fill": "$text-tertiary",
                               "content": "复制",
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -6047,7 +6112,8 @@
                               "content": "2025 年 6 月 5 日印发，2025 年 9 月 1 日起施行",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6079,7 +6145,8 @@
                               "content": "国务院（国发〔2025〕12 号）",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6111,7 +6178,8 @@
                               "content": "工业和信息化部、财政部、科技部",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6143,7 +6211,8 @@
                               "content": "设立 600 亿元国家人工智能产业投资基金",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6175,7 +6244,8 @@
                               "content": "建设 10 个国家级人工智能创新应用先导区",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6207,7 +6277,8 @@
                               "content": "到 2027 年核心产业规模突破 1.2 万亿元",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6239,7 +6310,8 @@
                               "content": "培育 100 家以上行业龙头企业",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6271,7 +6343,8 @@
                               "content": "规上企业智能化改造覆盖率达 80%",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -6359,7 +6432,8 @@
                               "fill": "$text-tertiary",
                               "content": "复制",
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -6398,7 +6472,8 @@
                           "content": "文件部署推动人工智能与实体经济深度融合，从产业基金、创新先导区、人才引育、场景开放四个方面提出 16 条具体措施，并明确 2027 年阶段性目标与部门分工。",
                           "lineHeight": 1.6,
                           "fontFamily": "$font",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         },
                         {
                           "type": "text",
@@ -6450,7 +6525,8 @@
                               "content": "设立产业基金，重点投向基础大模型与行业应用",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6494,7 +6570,8 @@
                               "content": "先导区实行「一区一策」，先行先试监管沙盒机制",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6538,7 +6615,8 @@
                               "content": "对中小企业智能化改造给予最高 30% 费用补贴",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6582,7 +6660,8 @@
                               "content": "建立跨部门推进机制，每年发布产业发展报告",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 13
+                              "fontSize": 13,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -6670,7 +6749,8 @@
                               "fill": "$text-tertiary",
                               "content": "复制",
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -6727,7 +6807,8 @@
                               "content": "政府引导基金，通过市场化运作支持 AI 初创企业与关键技术攻关。",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6759,7 +6840,8 @@
                               "content": "在受控环境中测试创新业务，降低合规不确定性，常见于金融科技与 AI 治理。",
                               "lineHeight": 1.5,
                               "fontFamily": "$font",
-                              "fontSize": 12
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6799,7 +6881,8 @@
                                   "fill": "$purple",
                                   "content": "产业政策",
                                   "fontFamily": "$font",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -6823,7 +6906,8 @@
                                   "fill": "$purple",
                                   "content": "人工智能",
                                   "fontFamily": "$font",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -6847,7 +6931,8 @@
                                   "fill": "$purple",
                                   "content": "财政补贴",
                                   "fontFamily": "$font",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -6873,7 +6958,8 @@
                           "content": "与 2024 年《新一代人工智能发展规划》衔接，政策工具从「研发资助」转向「基金 + 场景」组合，释放产业化加速信号。",
                           "lineHeight": 1.5,
                           "fontFamily": "$font",
-                          "fontSize": 12
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -6919,7 +7005,8 @@
                       "fill": "$text-tertiary",
                       "content": "提取模型：Qwen3-235B-A22B",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "text",
@@ -6928,7 +7015,8 @@
                       "fill": "$text-tertiary",
                       "content": "提取时间：2025-06-08 10:24:03",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -7011,7 +7099,679 @@
               "fill": "$text-tertiary",
               "content": "进度条 · 结果行状态 · 空状态 · 三栏加载骨架屏 · 抓取失败 / 提取失败 · 空内容",
               "fontFamily": "$font",
-              "fontSize": 12
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "OeVlb",
+          "name": "筛选下拉状态",
+          "width": "fill_container",
+          "fill": "$card",
+          "cornerRadius": 10,
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "v1Sjrp",
+              "name": "分区标题",
+              "fill": "$text-secondary",
+              "content": "筛选下拉：关键词实时匹配 / 无匹配 / 留空浏览全部（文种下拉结构相同）",
+              "fontFamily": "$font",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "cBZ9C",
+              "name": "下拉面板行",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ed6QC",
+                  "name": "面板-已输入关键词「人工智能」· 实时匹配",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t0ehB",
+                      "name": "场景说明",
+                      "fill": "$text-tertiary",
+                      "content": "已输入关键词「人工智能」· 实时匹配",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "K2RDVt",
+                      "name": "下拉菜单",
+                      "width": "fill_container",
+                      "fill": "#FFFFFF",
+                      "cornerRadius": 8,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "effect": {
+                        "type": "shadow",
+                        "shadowType": "outer",
+                        "color": "#1F232914",
+                        "offset": {
+                          "x": 0,
+                          "y": 4
+                        },
+                        "blur": 16
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 6,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "N37bL",
+                          "name": "选项-工业和信息化部",
+                          "width": "fill_container",
+                          "fill": "$accent-soft",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "E6bzID",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "$accent",
+                              "cornerRadius": 4,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "hkVuW",
+                                  "name": "勾",
+                                  "width": 10,
+                                  "height": 10,
+                                  "icon": "check",
+                                  "library": "lucide",
+                                  "fill": "#FFFFFF"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "uMIZH",
+                              "name": "名称",
+                              "fill": "$primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "工业和信息化部",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "EA7R2",
+                              "name": "数量",
+                              "fill": "$primary",
+                              "content": "12",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "H6uJd",
+                          "name": "选项-国家发展和改革委员会",
+                          "width": "fill_container",
+                          "fill": "$accent-soft",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "xThm3",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "$accent",
+                              "cornerRadius": 4,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "l0DI4u",
+                                  "name": "勾",
+                                  "width": 10,
+                                  "height": 10,
+                                  "icon": "check",
+                                  "library": "lucide",
+                                  "fill": "#FFFFFF"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "Jtdus",
+                              "name": "名称",
+                              "fill": "$primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "国家发展和改革委员会",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "aA7op",
+                              "name": "数量",
+                              "fill": "$primary",
+                              "content": "7",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RPq0F",
+                          "name": "选项-教育部",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "diLIv",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "Gmjr7",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "教育部",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "QezDz",
+                              "name": "数量",
+                              "fill": "$text-tertiary",
+                              "content": "3",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "YxhQN",
+                          "name": "选项-国家数据局",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "IAF1N",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "auE2Z",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "国家数据局",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "S5HxV",
+                              "name": "数量",
+                              "fill": "$text-tertiary",
+                              "content": "3",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "rectangle",
+                          "id": "nn2Uo",
+                          "name": "分割线",
+                          "fill": "$divider",
+                          "width": "fill_container",
+                          "height": 1
+                        },
+                        {
+                          "type": "frame",
+                          "id": "hy90B",
+                          "name": "底部栏",
+                          "width": "fill_container",
+                          "padding": [
+                            4,
+                            8
+                          ],
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Ua5lb",
+                              "name": "左",
+                              "fill": "$text-tertiary",
+                              "content": "已选 2 项",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "xncwI",
+                              "name": "右",
+                              "fill": "$accent",
+                              "content": "清除",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "f1QSQ",
+                  "name": "面板-关键词「元宇宙」· 无匹配机构",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "l8lVb",
+                      "name": "场景说明",
+                      "fill": "$text-tertiary",
+                      "content": "关键词「元宇宙」· 无匹配机构",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "TAACW",
+                      "name": "下拉菜单",
+                      "width": "fill_container",
+                      "fill": "#FFFFFF",
+                      "cornerRadius": 8,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "effect": {
+                        "type": "shadow",
+                        "shadowType": "outer",
+                        "color": "#1F232914",
+                        "offset": {
+                          "x": 0,
+                          "y": 4
+                        },
+                        "blur": 16
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 6,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "g8SBJp",
+                          "name": "空提示",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "padding": [
+                            24,
+                            16
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "Ik94T",
+                              "name": "图标",
+                              "width": 20,
+                              "height": 20,
+                              "icon": "search-x",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "h1L20U",
+                              "name": "主文案",
+                              "fill": "$text-secondary",
+                              "content": "没有相关内容",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "QkNew",
+                              "name": "副文案",
+                              "fill": "$text-tertiary",
+                              "content": "换个关键词试试，或清空关键词浏览全部",
+                              "textAlign": "center",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xwmFu",
+                  "name": "面板-未输入关键词 · 直接浏览全部机构",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "FQAjY",
+                      "name": "场景说明",
+                      "fill": "$text-tertiary",
+                      "content": "未输入关键词 · 直接浏览全部机构",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "DcNg6",
+                      "name": "下拉菜单",
+                      "width": "fill_container",
+                      "fill": "#FFFFFF",
+                      "cornerRadius": 8,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "effect": {
+                        "type": "shadow",
+                        "shadowType": "outer",
+                        "color": "#1F232914",
+                        "offset": {
+                          "x": 0,
+                          "y": 4
+                        },
+                        "blur": 16
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 6,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "QuOY5",
+                          "name": "选项-国务院办公厅",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "L3llVT",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "Ep3iY",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "国务院办公厅",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "giFuE",
+                          "name": "选项-工业和信息化部",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "U5o3wD",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "E0Iuqv",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "工业和信息化部",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "WxSTH",
+                          "name": "选项-国家发展和改革委员会",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "tpzgW",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "kvOza",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "国家发展和改革委员会",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "HN82a",
+                          "name": "选项-教育部",
+                          "width": "fill_container",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            7,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "HFCGl",
+                              "name": "勾选框",
+                              "width": 14,
+                              "height": 14,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": 4,
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "justifyContent": "center",
+                              "alignItems": "center"
+                            },
+                            {
+                              "type": "text",
+                              "id": "WnFrW",
+                              "name": "名称",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "教育部",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "rectangle",
+                          "id": "YI0mn",
+                          "name": "分割线",
+                          "fill": "$divider",
+                          "width": "fill_container",
+                          "height": 1
+                        },
+                        {
+                          "type": "frame",
+                          "id": "LPrW7",
+                          "name": "底部栏",
+                          "width": "fill_container",
+                          "padding": [
+                            4,
+                            8
+                          ],
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "B9cUf",
+                              "name": "左",
+                              "fill": "$text-tertiary",
+                              "content": "不按关键词过滤，可滚动浏览",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
             }
           ]
         },
@@ -7052,7 +7812,8 @@
                   "fill": "$text-tertiary",
                   "content": "未开始",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7072,7 +7833,8 @@
                   "fill": "$text-tertiary",
                   "content": "未开始",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             },
@@ -7090,7 +7852,8 @@
                   "fill": "$text-tertiary",
                   "content": "进行中",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7123,7 +7886,8 @@
                   "fill": "$text-tertiary",
                   "content": "60% · 正在提取第 3/10 篇",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             },
@@ -7141,7 +7905,8 @@
                   "fill": "$text-tertiary",
                   "content": "已完成",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7174,7 +7939,8 @@
                   "fill": "$text-tertiary",
                   "content": "100% · 已完成",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             },
@@ -7192,7 +7958,8 @@
                   "fill": "$text-tertiary",
                   "content": "失败",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7225,7 +7992,8 @@
                   "fill": "$accent",
                   "content": "失败 · 连接超时，请重试",
                   "fontFamily": "$font",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             }
@@ -7481,7 +8249,8 @@
                   "fill": "$text-tertiary",
                   "content": "配置抓取参数后，点击右上角「开始抓取」获取政策原文",
                   "fontFamily": "$font",
-                  "fontSize": 13
+                  "fontSize": 13,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7900,7 +8669,8 @@
                   "width": "fill_container",
                   "content": "抓取失败：连接 chuance-policy-mcp 超时（10s），请确认本地服务已启动后重试",
                   "fontFamily": "$font",
-                  "fontSize": 13
+                  "fontSize": 13,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -7971,7 +8741,8 @@
                   "fill": "#FFFFFF",
                   "content": "模型调用失败：第 6 篇提取超时，已标记为失败",
                   "fontFamily": "$font",
-                  "fontSize": 13
+                  "fontSize": 13,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "text",
@@ -8058,7 +8829,8 @@
                       "fill": "$text-tertiary",
                       "content": "模型返回超时（30s），请点击重试",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "frame",
@@ -8131,7 +8903,8 @@
                       "fill": "$text-tertiary",
                       "content": "暂无提取内容",
                       "fontFamily": "$font",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 }

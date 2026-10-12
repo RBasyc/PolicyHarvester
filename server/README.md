@@ -86,7 +86,8 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/api/tasks` | 创建任务并**异步启动**抓取流水线，返回 `201 {"task_id": n}` |
+| `POST` | `/api/tasks` | 创建任务并**异步启动检索段**，返回 `201 {"task_id": n}`；检索完停在 `awaiting_confirmation` |
+| `POST` | `/api/tasks/{id}/confirm` | **确认要抓取的篇目**（body `{"policy_ids":[...]}`）→ 丢弃未勾选的 → 异步启动提取段；非 `awaiting_confirmation` 状态返回 `409`，一篇都没勾选返回 `400` |
 | `GET` | `/api/tasks/current` | 最近一个任务（`TaskDTO`）；无任务时返回 `null`（前端空状态） |
 | `GET` | `/api/tasks/{id}` | 单个任务快照（轮询用） |
 | `GET` | `/api/tasks/{id}/logs` | 日志流 `[{time, tone, message}]`（`time` 已是 `[HH:MM:SS]`） |
@@ -98,20 +99,35 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 | `GET` | `/api/policies/{id}/extraction` | 抽屉三栏（`policy` 元信息 + `extraction` 事实/信息/知识） |
 | `POST` | `/api/policies/{id}/retry` | 失败重试（仅 `failed` 可重试，否则 `409`），随后重跑该篇 |
 | `POST` | `/api/policies/{id}/reextract` | 清空旧结果并重新提取（`extracting` 中返回 `409`） |
+| `GET` | `/api/filters/facets` | **筛选器可选值**（发布机构 / 文种 + 条数），`?q=&date_from=&date_to=`；`source` = `live`（实时 facet）/ `fallback`（静态名单） |
 
 ```bash
 # 创建任务并观察进度（真实抓取需要 node + China-Central-Policy-MCP 本地构建 + 已配置的 LLM）
+# 新增筛选参数：agencies（发布机构分类 bmfl）/ doc_types（文种 pcodeJiguan），均可多选
 curl -X POST http://localhost:8000/api/tasks \
   -H "Content-Type: application/json" \
-  -d '{"source":"国务院政策文件库（gov.cn）","content_type":"policy",
-       "date_from":null,"date_to":null,"schedule":"manual","keywords":["人工智能"]}'
+  -d '{"source":"国务院政策文件库（gov.cn）",
+       "date_from":null,"date_to":null,"keywords":["人工智能"],
+       "agencies":["工业和信息化部"],"doc_types":["国办发"]}'
 
 curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done / error
 ```
 
+**筛选器可选值**：`GET /api/filters/facets?q=&date_from=&date_to=` 返回发布机构 / 文种名单（随关键词与日期实时统计条数，像官网筛选面板）；gov.cn 不可用时回退静态名单（`source="fallback"`）。
+
+**检索筛选说明**：gov.cn 检索 API 的筛选参数**按通道区分**——`bmfl`（发布机构）/`pcodeJiguan`（文种）只在通道 `t=zhengcelibrary_gw_bm_gb` 上生效；`searchfield` 只有 `title` 一个有效值（其它值静默等于不过滤）。API 会**静默忽略重复筛选参数**（`bmfl=A&bmfl=B` 等于不过滤），故多选由服务端逐值扇出再按 URL 去重；**公报（`gongbao`）不受筛选影响**，筛选生效时服务端单独丢弃；接口在「严格条件 0 命中」时会**静默退回全量浏览列表**，故服务端另做客户端复核（标题含关键词 + 日期在窗口内），否则「无相关政策」不可信。
+
 **SSE 事件**：`{"type":"task","task":{…}}`（快照，计数变化时推送）、`{"type":"log","log":{…}}`、`{"type":"done","status":…,"task":{…}}`（终态，前端收到后应主动关闭连接）、`{"type":"error","message":…}`。订阅时会先补发全部历史日志，再增量推送；每 15 秒发一条 `: ping` 心跳。
 
 **错误约定**：所有 HTTP 错误均为 `{"detail": "<字符串>"}`（含 422 校验错误，已被压成单条字符串）——前端 `ApiError.message` 可直接展示。
+
+**检索结果确认（人工确认环节）**：
+
+- 流水线分成两段：`POST /api/tasks` 只跑「检索」（`prepare → fetch`），跑完任务停在 `awaiting_confirmation`（**非终态**，SSE 不会推 `done`、连接保持打开）；用户在「检索结果确认」面板里勾选篇目后，`POST /api/tasks/{id}/confirm` 丢掉未勾选的、后台启动「提取」段。
+- 之所以拆两段：LangGraph 图**没有 checkpointer**，`PipelineState` 只活在单次 `ainvoke` 的内存里，暂停后无法恢复；而检索结果此时已落在 `policy_document`，所以第二段直接从库里读回来跑（`run_extraction_phase()` 直接调用 `extract_node` / `summarize_node`，这两个节点是纯函数式的 `dict → dict`）。
+- 未勾选的篇目**直接删行**（它们只是检索噪声），删除后立即 `refresh_task_counts()`，保证 `total_count` 与实际篇目数一致。
+- `task_status` 新增 `awaiting_confirmation` 一档（`schema.sql` 里有幂等的 `ALTER TYPE … ADD VALUE IF NOT EXISTS`，老库跑一次 `database/init.sh` 即可补上，不重置数据）。
+- **重启收尾不影响这一档**：`fail_stale_tasks()` 只扫 `pending`/`running`，停在「待确认」的任务会保留下来——候选篇目在库里，重启后照样能确认。
 
 **终止 / 清空 / 重启收尾**：
 
@@ -122,7 +138,7 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 
 ### 进度与计数语义
 
-- `progress`：抓取阶段 `0→50`（`fetched/total`），提取阶段 `50→100`（`(extracted+failed)/total`）；`completed` 时为 100。
+- `progress`：抓取阶段 `0→50`（`fetched/total`），提取阶段 `50→100`（`(extracted+failed)/total`）；`completed` 时为 100，停在 `awaiting_confirmation` 时自然为 50。
 - `eta_seconds`：按 `elapsed / 已完成篇数 × 剩余篇数` 外推；数据过旧（>6 小时）时返回 `null`，前端隐藏该行。
 - `total/fetched/extracted/failed_count` 由 `repositories.refresh_task_counts()` 从 `policy_document` / `extraction` 的实际行数**聚合派生**，不累加——保证进度面板与结果表格 `summary` 永远同源一致。
 
