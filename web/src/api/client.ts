@@ -6,11 +6,13 @@
  */
 
 import type {
+  FacetList,
   LogLine,
   PolicyActionResponse,
   PolicyExtractionResponse,
   PolicyResultsResponse,
   StreamEvent,
+  TaskConfirmPayload,
   TaskCreatePayload,
   TaskCreated,
   TaskDeleted,
@@ -65,6 +67,23 @@ export const api = {
 
   createTask: (payload: TaskCreatePayload) =>
     request<TaskCreated>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 筛选器可选值（发布机构 / 文种）；失败时后端回退静态名单，不会抛错。 */
+  loadFacets: (params: { q?: string; date_from?: string | null; date_to?: string | null }) => {
+    const search = new URLSearchParams()
+    if (params.q) search.set('q', params.q)
+    if (params.date_from) search.set('date_from', params.date_from)
+    if (params.date_to) search.set('date_to', params.date_to)
+    const qs = search.toString()
+    return request<FacetList>(`/filters/facets${qs ? `?${qs}` : ''}`)
+  },
+
+  /** 确认要抓取的篇目；未勾选的会被后端丢弃，返回置为 running 后的任务快照。 */
+  confirmTask: (taskId: number, policyIds: number[]) =>
+    request<TaskDTO>(`/tasks/${taskId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ policy_ids: policyIds } satisfies TaskConfirmPayload),
+    }),
 
   /** 终止运行中的任务；返回落终态后的任务快照（已是终态时后端返回 409 → ApiError）。 */
   cancelTask: (taskId: number) =>

@@ -10,6 +10,7 @@ import { computed, reactive, ref } from 'vue'
 
 import { ApiError, api, subscribeTaskStream } from './api/client'
 import type {
+  FacetList,
   LogLine,
   PolicyExtractionResponse,
   PolicyResultItem,
@@ -19,8 +20,8 @@ import type {
   TaskStatus,
 } from './api/types'
 
-/** 页面级阶段：驱动骨架屏 / 空状态 / 错误态。 */
-export type Phase = 'loading' | 'idle' | 'running' | 'done' | 'error'
+/** 页面级阶段：驱动骨架屏 / 空状态 / 错误态 / 检索结果确认面板。 */
+export type Phase = 'loading' | 'idle' | 'running' | 'confirming' | 'done' | 'error'
 
 const EMPTY_SUMMARY: PolicySummary = {
   total: 0,
@@ -45,6 +46,8 @@ export const starting = ref(false)
 export const stopping = ref(false)
 /** 「清空」请求进行中 */
 export const clearing = ref(false)
+/** 「确认抓取」请求进行中（检索结果确认面板） */
+export const confirming = ref(false)
 /** 结果表格刷新中（不阻塞整页） */
 export const refreshing = ref(false)
 
@@ -53,27 +56,34 @@ export const toast = ref<{ message: string; retry?: () => void } | null>(null)
 /** 抓取配置表单（ConfigPanel 双向绑定，TopBar 提交） */
 export const form = reactive<TaskCreatePayload>({
   source: '国务院政策文件库（gov.cn）',
-  content_type: 'policy',
   date_from: null,
   date_to: null,
-  schedule: 'manual',
-  keywords: ['人工智能', '中小企业', '产业基金'],
+  // 不预填关键词：留空时按下方筛选条件浏览（如只看某机构的近期发文），关键词只是可选范围
+  keywords: [],
+  agencies: [],
+  doc_types: [],
 })
+
+/** 筛选器可选值（发布机构 / 文种）；loadFacets 填充，失败时后端已回退静态名单 */
+export const facets = ref<FacetList>({ agencies: [], doc_types: [], source: 'fallback' })
+export const facetsLoading = ref(false)
 
 export const phase = computed<Phase>(() => {
   if (booting.value) return 'loading'
   if (!task.value) return 'idle'
   if (task.value.status === 'failed') return 'error'
+  if (task.value.status === 'awaiting_confirmation') return 'confirming'
   if (task.value.status === 'running') return 'running'
   return 'done'
 })
 
 export const hasResult = computed(() => policies.value.length > 0)
 
-/** 是否可以终止：任务在排队中或运行中 */
-export const canCancel = computed(
-  () => task.value?.status === 'pending' || task.value?.status === 'running',
-)
+/** 是否可以终止：任务在排队中、运行中，或停在「等确认」（此时终止即放弃本次抓取） */
+export const canCancel = computed(() => {
+  const status = task.value?.status
+  return status === 'pending' || status === 'running' || status === 'awaiting_confirmation'
+})
 
 // ---------- 内部 ----------
 
@@ -125,16 +135,21 @@ function stopSubscription(): void {
 
 // ---------- 动作 ----------
 
-/** 首屏：拉当前任务 + 日志 + 结果；没有任务则进入空状态。 */
+/** 首屏：拉当前任务 + 日志 + 结果 + 筛选器名单；没有任务则进入空状态。 */
 export async function bootstrap(): Promise<void> {
   booting.value = true
   try {
+    // 筛选器名单与任务无关，并行拉（失败时后端已回退静态名单，不阻塞首屏）
+    void loadFacets()
     const current = await api.currentTask()
     task.value = current
     if (current) {
       logs.value = await api.taskLogs(current.id)
       await refreshPolicies(current.id)
-      if (current.status === 'running') subscribe(current.id)
+      // 停在「等确认」时也要订阅：确认后进度要能继续推过来（服务端在非终态不会关流）
+      if (current.status === 'running' || current.status === 'awaiting_confirmation') {
+        subscribe(current.id)
+      }
     } else {
       logs.value = []
       policies.value = []
@@ -144,6 +159,22 @@ export async function bootstrap(): Promise<void> {
     showToast(`初始化失败：${errorText(error)}`)
   } finally {
     booting.value = false
+  }
+}
+
+/** 拉筛选器可选值（发布机构 / 文种）；失败时后端已回退静态名单，这里不弹错。 */
+export async function loadFacets(): Promise<void> {
+  facetsLoading.value = true
+  try {
+    facets.value = await api.loadFacets({
+      q: form.keywords[0] || undefined,
+      date_from: form.date_from,
+      date_to: form.date_to,
+    })
+  } catch {
+    /* 后端失败时已回退静态名单；保留旧值即可 */
+  } finally {
+    facetsLoading.value = false
   }
 }
 
@@ -201,6 +232,27 @@ export async function startTask(): Promise<void> {
     showToast(`抓取失败：${errorText(error)}`, () => void startTask())
   } finally {
     starting.value = false
+  }
+}
+
+/** 「检索结果确认」：提交勾选的篇目 → 后端丢弃未勾选的并开始提取。 */
+export async function confirmSelection(policyIds: number[]): Promise<void> {
+  const current = task.value
+  if (!current || confirming.value) return
+  if (!policyIds.length) {
+    showToast('请至少勾选一篇要抓取的政策')
+    return
+  }
+  confirming.value = true
+  try {
+    task.value = await api.confirmTask(current.id, policyIds)
+    await refreshPolicies(current.id)
+    // 首屏若停在「等确认」已经订阅过；这里兜底，保证后续进度有流可推
+    if (!stopStream) subscribe(current.id)
+  } catch (error) {
+    showToast(`确认失败：${errorText(error)}`)
+  } finally {
+    confirming.value = false
   }
 }
 

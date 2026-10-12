@@ -7,6 +7,7 @@ import type { TaskStatus } from '../api/types'
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '未开始',
   running: '运行中',
+  awaiting_confirmation: '待确认',
   completed: '已完成',
   failed: '失败',
 }
@@ -14,6 +15,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 const STATUS_TONE: Record<TaskStatus, string> = {
   pending: 'wait',
   running: 'run',
+  awaiting_confirmation: 'wait',
   completed: 'ok',
   failed: 'fail',
 }

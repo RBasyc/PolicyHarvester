@@ -17,6 +17,7 @@ import type { TaskStatus } from '../api/types'
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '排队中',
   running: '运行中',
+  awaiting_confirmation: '待确认',
   completed: '已完成',
   failed: '失败',
 }
@@ -24,6 +25,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 const STATUS_TONE: Record<TaskStatus, string> = {
   pending: 'wait',
   running: 'run',
+  awaiting_confirmation: 'wait',
   completed: 'ok',
   failed: 'fail',
 }
@@ -31,9 +33,26 @@ const STATUS_TONE: Record<TaskStatus, string> = {
 const label = computed(() => (task.value ? STATUS_LABEL[task.value.status] : '尚未抓取'))
 const tone = computed(() => (task.value ? STATUS_TONE[task.value.status] : 'wait'))
 const spinning = computed(() => task.value?.status === 'running')
+/** 停在「待确认」时后台并没有东西在跑，此时的「终止」语义上其实是「放弃本次抓取」。 */
+const cancelLabel = computed(() =>
+  task.value?.status === 'awaiting_confirmation' ? '放弃' : '终止',
+)
+const cancelTitle = computed(() =>
+  task.value?.status === 'awaiting_confirmation'
+    ? '放弃本次抓取（丢弃已检索到的候选篇目）'
+    : '终止正在运行的抓取任务',
+)
 const keywordHint = computed(() =>
   form.keywords.length ? `关键词 ${form.keywords.length} 个` : '未设置关键词',
 )
+
+/**
+ * 关键词是可选范围而非前置条件：留空时后端会按筛选条件（发布机构/文种/时间）浏览发文，
+ * 所以这里不再拦截——用户「不输关键词、只看某机构近期发文」是合法用法。
+ */
+function onStart() {
+  void startTask()
+}
 
 /** 「清空」是破坏性操作：先点一下变成确认态，再点「确认」才真的删。 */
 const confirmingClear = ref(false)
@@ -67,11 +86,11 @@ async function onConfirmClear() {
         class="ghost-btn"
         type="button"
         :disabled="stopping"
-        title="终止正在运行的抓取任务"
+        :title="cancelTitle"
         @click="cancelTask()"
       >
         <AppIcon name="square" :size="13" />
-        <span>{{ stopping ? '终止中…' : '终止' }}</span>
+        <span>{{ stopping ? '处理中…' : cancelLabel }}</span>
       </button>
 
       <button
@@ -103,7 +122,7 @@ async function onConfirmClear() {
         type="button"
         :disabled="starting"
         :title="`抓取源：${form.source}`"
-        @click="startTask()"
+        @click="onStart"
       >
         <AppIcon name="play" :size="14" />
         <span>{{ starting ? '提交中…' : '开始抓取' }}</span>

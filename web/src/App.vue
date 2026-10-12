@@ -4,9 +4,10 @@ import AppIcon from './components/AppIcon.vue'
 import TopBar from './components/TopBar.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
+import ConfirmPanel from './components/ConfirmPanel.vue'
 import ResultTable from './components/ResultTable.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
-import { bootstrap, dismissToast, toast } from './store'
+import { bootstrap, dismissToast, phase, toast } from './store'
 
 const drawerPolicyId = ref<number | null>(null)
 const drawerOpen = ref(false)
@@ -43,7 +44,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     <main class="content">
       <ConfigPanel />
       <ProgressPanel />
-      <ResultTable @row-click="openDrawer" />
+      <!-- 检索完成、等用户确认：确认面板取代结果表（同一批篇目，避免重复展示两遍） -->
+      <ConfirmPanel v-if="phase === 'confirming'" />
+      <ResultTable v-else @row-click="openDrawer" />
     </main>
 
     <DetailDrawer :open="drawerOpen" :policy-id="drawerPolicyId" @close="closeDrawer" />
