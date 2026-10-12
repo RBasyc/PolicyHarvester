@@ -5,7 +5,8 @@
 - GET  /api/tasks/{id}/logs     日志流
 - GET  /api/tasks/{id}/stream   进度实时推送（SSE）
 - GET    /api/tasks/{id}/policies 抓取结果列表 + 四态统计
-- POST   /api/tasks               创建任务并后台启动流水线（Phase 4）
+- POST   /api/tasks               创建任务并后台启动「检索」段（Phase 4）
+- POST   /api/tasks/{id}/confirm  确认要抓取的篇目 → 后台启动「提取」段（Phase 9）
 - POST   /api/tasks/{id}/cancel   终止运行中的任务（取消后台流水线 → 落 failed 终态）
 - DELETE /api/tasks/{id}          删除单个任务及其全部结果
 - DELETE /api/tasks               清空全部任务与结果（页面回到空状态）
@@ -23,9 +24,21 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.db import repositories as repo
-from app.pipeline.crawl_graph import cancel_all_pipelines, cancel_pipeline, start_pipeline
+from app.pipeline.crawl_graph import (
+    cancel_all_pipelines,
+    cancel_pipeline,
+    start_extraction,
+    start_pipeline,
+)
 from app.schemas.policy import PolicyResultsResponse, PolicyResultItem, PolicySummary
-from app.schemas.task import TaskCreate, TaskCreated, TaskDTO, TaskDeleted, TaskLogDTO
+from app.schemas.task import (
+    TaskConfirm,
+    TaskCreate,
+    TaskCreated,
+    TaskDTO,
+    TaskDeleted,
+    TaskLogDTO,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -33,6 +46,8 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 _STREAM_POLL_SECONDS = 0.6
 _STREAM_HEARTBEAT_SECONDS = 15.0
 _TERMINAL_STATUSES = ("completed", "failed")
+# 检索完成、等用户确认要抓哪些篇目（非终态：SSE 会一直保持连接）
+_AWAITING_STATUS = "awaiting_confirmation"
 
 # 手动终止后写进 `stage` 的文案（进度面板直接展示这一段）
 _CANCELLED_STAGE = "任务已手动终止"
@@ -66,20 +81,61 @@ async def create_task(payload: TaskCreate) -> TaskCreated:
     """
     task_id = await repo.create_task(
         source=payload.source,
-        content_type=payload.content_type,
         date_from=payload.date_from,
         date_to=payload.date_to,
-        schedule=payload.schedule,
         keywords=payload.keywords,
+        agencies=payload.agencies,
+        doc_types=payload.doc_types,
     )
     keyword_hint = "、".join(payload.keywords) if payload.keywords else "未设置"
+    filter_bits = []
+    if payload.agencies:
+        filter_bits.append(f"发布机构：{'、'.join(payload.agencies)}")
+    if payload.doc_types:
+        filter_bits.append(f"文种：{'、'.join(payload.doc_types)}")
+    filter_hint = ("；" + "；".join(filter_bits)) if filter_bits else ""
     await repo.add_task_log(
         task_id,
-        f"已创建抓取任务（源：{payload.source}；关键词：{keyword_hint}）",
+        f"已创建抓取任务（源：{payload.source}；关键词：{keyword_hint}{filter_hint}）",
         tone="info",
     )
     start_pipeline(task_id)
     return TaskCreated(task_id=task_id)
+
+
+@router.post("/{task_id}/confirm", response_model=TaskDTO)
+async def confirm_task(task_id: int, payload: TaskConfirm) -> TaskDTO:
+    """确认要抓取哪些篇目 → 丢弃未勾选的 → 后台启动提取段（Phase 9）。
+
+    只有 `awaiting_confirmation`（检索完成、等确认）的任务可以确认，其余返回 `409`。
+    未勾选的篇目**直接删行**（它们只是检索噪声，没有提取价值）；随后重算计数，
+    否则进度面板的 `total_count` 会与实际篇目数对不上。
+    """
+    task = await _get_task_or_404(task_id)
+    if task["status"] != _AWAITING_STATUS:
+        raise HTTPException(
+            status_code=409, detail=f"任务当前状态为 {task['status']}，无需确认"
+        )
+
+    rows = await repo.fetch_task_policies(task_id)
+    valid = {row["id"] for row in rows}
+    # 保序去重 + 过滤掉不属于本任务 / 已被删除的 id
+    keep = list(dict.fromkeys(pid for pid in payload.policy_ids if pid in valid))
+    if not keep:
+        raise HTTPException(status_code=400, detail="请至少勾选一篇要抓取的政策")
+
+    dropped = await repo.discard_unselected_policies(task_id, keep)
+    await repo.refresh_task_counts(task_id)
+    await repo.add_task_log(
+        task_id,
+        f"已确认抓取 {len(keep)} 篇"
+        + (f"，丢弃未勾选的 {dropped} 篇" if dropped else ""),
+        tone="info",
+    )
+    # 先同步置 running 再丢后台：这样本响应与 SSE 立刻反映「提取中」，不会闪回等待态
+    await repo.set_task_running(task_id, f"已确认，开始提取 {len(keep)} 篇")
+    start_extraction(task_id)
+    return TaskDTO.from_row(await _get_task_or_404(task_id))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskDTO)

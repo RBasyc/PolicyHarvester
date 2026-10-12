@@ -1,16 +1,28 @@
-"""抓取 + 提取流水线图（Phase 4）。
+"""抓取 + 提取流水线（Phase 4；Phase 9 在中间插入人工确认）。
 
-    START → prepare → fetch ─┬─(有政策)→ extract → summarize → END
+分两段执行，中间由用户在页面上确认「要抓哪些篇目」：
+
+    第一段（图 A，由 `POST /api/tasks` 触发）
+    START → prepare → fetch ─┬─(有政策)→ await_confirm → END
                              └─(出错/0 结果)→ fail → END
 
-- `prepare`   任务置 running、写首条日志
-- `fetch`     调用 MCP `get_latest_policies`（多关键词逐个检索后按 URL 去重）→ 落库 → 重算计数
-- `extract`   逐篇：`get_policy_fulltext` 取正文 → 大模型结构化提取 → 写 extraction + fact_item
-- `summarize` 任务置 completed、汇总日志
-- `fail`      任务置 failed，stage 里带出设计稿要求的中文提示
+    第二段（图 B，由 `POST /api/tasks/{id}/confirm` 触发，见 `start_extraction`）
+    （丢弃未勾选篇目）→ extract → summarize → END
+
+- `prepare`       任务置 running、写首条日志
+- `fetch`         调用 MCP `get_latest_policies`（多关键词逐个检索后按 URL 去重）→ 落库 → 重算计数
+- `await_confirm` 任务置 `awaiting_confirmation` 并停住——**图到此结束**，等用户确认
+- `extract`       逐篇：`get_policy_fulltext` 取正文 → 大模型结构化提取 → 写 extraction + fact_item
+- `summarize`     任务置 completed、汇总日志
+- `fail`          任务置 failed，stage 里带出设计稿要求的中文提示
+
+为什么拆成两段：图**没有 checkpointer**（`builder.compile()` 无 saver），`PipelineState` 只活在
+一次 `ainvoke` 的内存里，没法「暂停后再恢复」。所以第一段跑完就结束，检索结果已落库
+（`policy_document`）；用户确认后由 `run_extraction_phase()` 从库里重新读出篇目，**直接调用**
+`extract_node` / `summarize_node` 跑完尾段——两个节点是纯函数式的 `dict → dict`，不依赖图的状态机。
 
 设计要点：
-- 由 `POST /api/tasks` 以**后台 asyncio 任务**触发（见 `start_pipeline`），不阻塞请求；
+- 由 `POST /api/tasks` / `POST /api/tasks/{id}/confirm` 以**后台 asyncio 任务**触发，不阻塞请求；
 - 单篇失败只标记该篇 `failed` 并继续，不影响其他篇；
 - 计数一律走 `refresh_task_counts()`（按实际行数派生），保证进度面板与结果表格同源一致；
 - 工具按名字在运行时查找（`find_tool`），因此本图不依赖「先加载 MCP 再编译」的顺序。
@@ -19,6 +31,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import re
 from datetime import date
@@ -47,6 +60,8 @@ class PipelineState(TypedDict, total=False):
     keywords: list[str]
     date_from: date | None
     date_to: date | None
+    agencies: list[str]  # 发布机构分类（bmfl）
+    doc_types: list[str]  # 文种（pcodeJiguan）
     policies: list[dict[str, Any]]  # 待提取篇目（id / title / source_url）
     error: str | None
 
@@ -72,6 +87,8 @@ async def fetch_node(state: PipelineState) -> dict:
             state.get("keywords") or [],
             state.get("date_from"),
             state.get("date_to"),
+            state.get("agencies") or [],
+            state.get("doc_types") or [],
         )
     except PipelineError as exc:
         return {"error": str(exc)}
@@ -79,7 +96,7 @@ async def fetch_node(state: PipelineState) -> dict:
     rows = [row for item in items if (row := _to_policy_row(item, state.get("source")))]
     if not rows:
         return {
-            "error": "未检索到匹配的政策原文，请调整关键词或时间范围后重试",
+            "error": "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试",
         }
 
     await repo.insert_policies(task_id, rows[: get_settings().pipeline_max_policies])
@@ -87,8 +104,8 @@ async def fetch_node(state: PipelineState) -> dict:
 
     # 以落库结果为准（去重/截断后真实入库的篇目）
     stored = await repo.fetch_task_policies(task_id)
-    await repo.set_task_stage(task_id, f"已抓取 {len(stored)} 篇，开始结构化提取")
-    await repo.add_task_log(task_id, f"抓取完成：共获取 {len(stored)} 篇政策原文", tone="info")
+    await repo.set_task_stage(task_id, f"已检索到 {len(stored)} 篇，等待确认抓取")
+    await repo.add_task_log(task_id, f"检索完成：共获取 {len(stored)} 篇候选原文", tone="info")
     return {
         "policies": [
             {"id": p["id"], "title": p["title"], "source_url": p["source_url"]}
@@ -98,10 +115,39 @@ async def fetch_node(state: PipelineState) -> dict:
     }
 
 
+# ---------- await_confirm ----------
+
+
+async def await_confirm_node(state: PipelineState) -> dict:
+    """停在「等用户确认」这一档：图到此结束，提取由确认接口另行触发。
+
+    检索到的篇目此刻已经落在 `policy_document`（`fetch_node` 里写好的），
+    因此即使用户不马上确认、甚至服务重启，候选列表也不会丢。
+    """
+    task_id = state["task_id"]
+    count = len(state.get("policies") or [])
+    stage = f"已检索到 {count} 篇，等待确认后开始提取"
+    await repo.await_task_confirmation(task_id, stage)
+    await repo.add_task_log(
+        task_id,
+        f"已检索到 {count} 篇，请在「检索结果确认」中勾选要抓取的篇目（不勾选的将被丢弃）",
+        tone="active",
+    )
+    return {}
+
+
 async def _search_policies(
-    keywords: list[str], date_from: date | None, date_to: date | None
+    keywords: list[str],
+    date_from: date | None,
+    date_to: date | None,
+    agencies: list[str] | None = None,
+    doc_types: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """按关键词逐个检索并合并去重；无关键词时取最新政策列表。"""
+    """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重。
+
+    gov.cn 检索 API 会静默忽略重复的筛选参数（`bmfl=A&bmfl=B` 等于不过滤），所以多选只能
+    由服务端逐值扇出；组合数由 `pipeline_max_search_calls` 封顶，防止组合爆炸。
+    """
     tool = find_tool("get_latest_policies")
     if tool is None:
         raise PipelineError(
@@ -110,16 +156,29 @@ async def _search_policies(
         )
 
     settings = get_settings()
-    base_args: dict[str, Any] = {"limit": settings.pipeline_per_keyword_limit}
-    if date_from:
-        base_args["startdate"] = date_from.isoformat()
-    if date_to:
-        base_args["enddate"] = date_to.isoformat()
+    kw_list = keywords or [None]
+    agency_list = agencies or [None]
+    doc_type_list = doc_types or [None]
 
+    combos = list(
+        itertools.product(kw_list, agency_list, doc_type_list)
+    )[: settings.pipeline_max_search_calls]
+
+    facet_active = bool(agencies or doc_types)
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for keyword in keywords or [None]:
-        args = {**base_args, **({"keyword": keyword} if keyword else {})}
+    for keyword, agency, doc_type in combos:
+        args: dict[str, Any] = {"limit": settings.pipeline_per_keyword_limit}
+        if date_from:
+            args["startdate"] = date_from.isoformat()
+        if date_to:
+            args["enddate"] = date_to.isoformat()
+        if keyword:
+            args["keyword"] = keyword
+        if agency:
+            args["agency"] = agency
+        if doc_type:
+            args["doc_type"] = doc_type
         try:
             raw = await asyncio.wait_for(
                 tool.ainvoke(args), timeout=settings.pipeline_mcp_timeout
@@ -136,6 +195,27 @@ async def _search_policies(
             raise PipelineError(f"抓取失败：{exc}") from exc
 
         for item in (data or {}).get("items") or []:
+            # ① 公报不参与 bmfl/pcodeJiguan 等筛选（实测恒 56 条纹丝不动）——筛选生效时整批丢弃。
+            #    MCP 侧现在也会在「截断成 limit 条」之前先丢掉公报，这里保留作为兜底：万一线上
+            #    跑的是未重建的旧 build/index.js，公报仍会混进来。
+            catalog_key = str(item.get("catalog_key") or item.get("catalog") or "")
+            if facet_active and catalog_key == "gongbao":
+                continue
+            # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——标题不含关键词的直接丢弃
+            #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）
+            title = str(item.get("title") or "").strip()
+            if keyword and keyword not in title:
+                continue
+            # ③ 日期必须落在窗口内；窗口已设但日期缺失也丢弃（否则「无」不可信）。
+            #    前提：MCP 报的 date 必须与接口做窗口过滤用的是同一个日期——即站点显示的发布日期
+            #    （取 ptimeStr/pubtimeStr，文本缺失才落到 ptime 这个常为成文日期的 epoch）。若 MCP
+            #    又改回优先取 epoch，这里会把接口按窗口返回的行整批误判成越界，出现「facet 有 1 条、
+            #    实际 0 条」。
+            item_date = _parse_date(item.get("date"))
+            if date_from and (item_date is None or item_date < date_from):
+                continue
+            if date_to and (item_date is None or item_date > date_to):
+                continue
             url = str(item.get("url") or "").strip()
             if not url or url in seen:
                 continue
@@ -158,6 +238,7 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
         "source_name": source,
         "agency": (str(item.get("issuing_agency") or "").strip() or None),
         "doc_no": (str(item.get("document_number") or "").strip() or None),
+        "catalog": (str(item.get("catalog_key") or item.get("catalog") or "").strip() or None),
         "fetched_by": MCP_SOURCE_LABEL,
     }
 
@@ -312,24 +393,28 @@ async def fail_node(state: PipelineState) -> dict:
 
 
 def _route_after_fetch(state: PipelineState) -> str:
-    return "fail" if state.get("error") or not state.get("policies") else "extract"
+    """检索到篇目 → 停下来等确认；出错或 0 结果 → 直接失败（0 结果即「近 N 天无相关政策」）。"""
+    return "fail" if state.get("error") or not state.get("policies") else "await_confirm"
 
 
 def build_pipeline_graph():
+    """第一段：`prepare → fetch → (await_confirm | fail)`。
+
+    注意这里**不包含** `extract` / `summarize`——人工确认把它们隔到了第二段
+    （见 `run_extraction_phase`），两个节点函数仍在本模块，被直接调用。
+    """
     builder = StateGraph(PipelineState)
     builder.add_node("prepare", prepare_node)
     builder.add_node("fetch", fetch_node)
-    builder.add_node("extract", extract_node)
-    builder.add_node("summarize", summarize_node)
+    builder.add_node("await_confirm", await_confirm_node)
     builder.add_node("fail", fail_node)
 
     builder.add_edge(START, "prepare")
     builder.add_edge("prepare", "fetch")
     builder.add_conditional_edges(
-        "fetch", _route_after_fetch, {"extract": "extract", "fail": "fail"}
+        "fetch", _route_after_fetch, {"await_confirm": "await_confirm", "fail": "fail"}
     )
-    builder.add_edge("extract", "summarize")
-    builder.add_edge("summarize", END)
+    builder.add_edge("await_confirm", END)
     builder.add_edge("fail", END)
     return builder.compile()
 
@@ -375,6 +460,14 @@ def start_pipeline(task_id: int) -> None:
 def start_single_extraction(task_id: int, policy_id: int) -> None:
     """重新提取单篇（由重试 / 重新提取接口调用）。"""
     _track(task_id, run_single_extraction(task_id, policy_id), f"reextract-{policy_id}")
+
+
+def start_extraction(task_id: int) -> None:
+    """用户确认后跑第二段（由 `POST /api/tasks/{id}/confirm` 调用）。
+
+    未勾选的篇目已被确认接口删掉，这里只需要把剩下的逐篇提取完。
+    """
+    _track(task_id, run_extraction_phase(task_id), f"extract-{task_id}")
 
 
 async def cancel_pipeline(task_id: int) -> bool:
@@ -449,6 +542,33 @@ async def run_single_extraction(task_id: int, policy_id: int) -> None:
         await repo.set_task_stage(task_id, f"重新提取失败：{_short_error(exc)}")
 
 
+async def run_extraction_phase(task_id: int) -> None:
+    """第二段：把任务里**剩下的**篇目逐篇提取完并汇总。
+
+    进入时任务已被确认接口置为 `running`（`set_task_running`），因此这里从读库开始。
+    `extract_node` / `summarize_node` 是纯函数式的 `dict → dict`（内部只写数据库、不改状态），
+    所以不需要再包一层图，直接调用即可。
+    """
+    try:
+        rows = await repo.fetch_task_policies(task_id)
+        policies = [
+            {"id": p["id"], "title": p["title"], "source_url": p["source_url"]}
+            for p in rows
+            if p["status"] in ("pending", "extracting")  # 只处理还没出结果的
+        ]
+        await extract_node({"task_id": task_id, "policies": policies})
+        await summarize_node({"task_id": task_id})
+    except asyncio.CancelledError:  # 终止 / 关停
+        logger.info("任务 %s 的提取阶段被取消", task_id)
+        await repo.finish_task(task_id, "failed", "服务重启导致任务中断，请重试")
+        raise
+    except Exception as exc:  # noqa: BLE001 - 兜底，任务必须有终态
+        logger.exception("任务 %s 的提取阶段异常退出", task_id)
+        message = f"提取失败：{_short_error(exc)}"
+        await repo.finish_task(task_id, "failed", message)
+        await repo.add_task_log(task_id, message, tone="info")
+
+
 async def run_pipeline(task_id: int) -> None:
     """执行一次流水线。任何未捕获异常都会把任务落到 failed 终态，避免前端一直转圈。"""
     task_row = await repo.fetch_task(task_id)
@@ -462,6 +582,9 @@ async def run_pipeline(task_id: int) -> None:
         "keywords": list(task_row["keywords"] or []),
         "date_from": task_row["date_from"],
         "date_to": task_row["date_to"],
+        # 用 .get 防御未迁移的老库（schema 迁移是先决条件）
+        "agencies": list(task_row.get("agencies") or []),
+        "doc_types": list(task_row.get("doc_types") or []),
     }
     try:
         await get_pipeline_graph().ainvoke(state)
