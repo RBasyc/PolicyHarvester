@@ -3,8 +3,8 @@
 复用 `app/agent/nodes.py` 的 `_build_llm()`（沿用同一份模型配置，不引入新模型/依赖）。
 
 两条路径：
-1. `with_structured_output` —— 走工具调用拿严格 schema（首选）；
-2. 网关不支持工具调用时回退到「要求输出 JSON」的纯文本提示 + 宽松解析。
+1. 工具调用拿严格 schema —— 但**不强制** `tool_choice`（见 `_extract_via_tool`）；
+2. 模型没调工具时回退到「要求输出 JSON」的纯文本提示 + 宽松解析。
 
 两条都失败则抛异常，由流水线把该篇标记为 `failed`（不影响其他篇）。
 """
@@ -40,18 +40,26 @@ class InfoPayload(BaseModel):
 
 
 class ConceptPayload(BaseModel):
-    """一个背景概念。"""
+    """一条沉淀下来的知识点。
 
-    term: str = Field(description="政策中出现、但一般读者可能不熟的术语")
-    desc: str = Field(description="用一句话解释这个术语")
+    存库键沿用 `term` / `desc`（见 database/schema.sql 的 `knowledge_concepts`），
+    语义是「标题 / 说明」——不是「术语 / 术语解释」。
+    """
+
+    term: str = Field(description="知识点标题：一句陈述句，说清一条可供行动参考的结论，不要写术语名")
+    desc: str = Field(description="该知识点的依据与做法：结合原文的数字、时限、条件，说明我们能据此做什么")
 
 
 class KnowledgePayload(BaseModel):
-    """知识区：背景概念 + 相关领域 + 延伸解释。"""
+    """知识区：可沉淀的知识点 + 适用领域 + 行动建议。
 
-    concepts: list[ConceptPayload] = Field(description="2-4 个背景概念")
-    fields: list[str] = Field(description="3-5 个相关领域标签，如「产业政策」「人工智能」")
-    extension: str = Field(description="1-2 句延伸解释：该政策在政策脉络中的位置与信号")
+    存库键沿用 `concepts` / `fields` / `extension`（见 database/schema.sql），
+    语义分别对应「知识点 / 适用领域 / 行动建议」。
+    """
+
+    concepts: list[ConceptPayload] = Field(description="2-4 条可沉淀的知识点，每条是一句可执行的判断，不要名词解释")
+    fields: list[str] = Field(description="3-5 个适用领域标签：这些知识在哪些业务场景下用得上，如「产业政策」「人工智能」")
+    extension: str = Field(description="1-2 句行动建议：我们该做什么、要避开什么（窗口期、合规红线、资源投向）")
 
 
 class ExtractionPayload(BaseModel):
@@ -69,7 +77,10 @@ SYSTEM_PROMPT = """你是政策文件结构化提取助手。用户会给你一�
 - 全部用简体中文；只依据原文，不得推测或编造原文没有的内容；
 - 事实（facts）是可核验的硬信息：时间、发文机构、涉及机构、政策动作、数字指标等，逐条列明；
 - 信息（info）是对文件的归纳：摘要 + 要点；
-- 知识（knowledge）是背景补充：术语解释、相关领域、该文件在政策脉络中的位置；
+- 知识（knowledge）不是「读懂这份文件所需的背景知识」，而是从这份文件里能沉淀下来、
+  用来指导我们下一步行动的知识：政策划了哪些线、开了哪些口子、留了多长的窗口、
+  钱和资源往哪投，什么样的主体在什么条件下能拿到什么，读完我们该据此做什么；
+- 知识区要写成可执行的结论，不要写名词解释、概念科普、政策沿革这类背景性内容；
 - 正文可能被截断，若某一部分在给定正文里找不到依据，就给出更少但更可靠的条目，不要编。
 """
 
@@ -97,17 +108,30 @@ async def extract_policy(*, title: str, body: str, url: str | None = None) -> tu
 
     llm = _build_llm()
     try:
-        structured = llm.with_structured_output(ExtractionPayload)
-        result = await structured.ainvoke(messages)
-        if isinstance(result, ExtractionPayload):
-            return result, settings.model_name
-        # 个别网关会把结构化结果退化成 dict
-        return ExtractionPayload.model_validate(result), settings.model_name
+        result = await _extract_via_tool(llm, messages)
+        return result, settings.model_name
     except Exception as exc:  # noqa: BLE001 - 回退到纯文本 JSON 路径
-        logger.warning("结构化输出失败（%s），回退到 JSON 文本解析", exc)
+        logger.warning("工具调用结构化输出失败（%s），回退到 JSON 文本解析", exc)
 
     payload = await _extract_via_json(llm, messages)
     return payload, settings.model_name
+
+
+async def _extract_via_tool(llm: Any, messages: list) -> ExtractionPayload:
+    """首选路径：把 schema 绑成一个工具，让模型自己决定调用。
+
+    刻意**不**走 `with_structured_output`——它会强制 `tool_choice={"type": "tool", ...}`，
+    而 Anthropic 兼容协议里「thinking 开启 + tool_choice 指定工具」必然 400：
+    `tool_choice 'specified' is incompatible with thinking enabled`
+    （Kimi `kimi-for-coding` 默认开启 thinking，实测必现）。
+    不指定 `tool_choice` 时模型照样会调用该工具（实测 stop_reason=tool_use），
+    真没调再回退纯文本 JSON，所以这里不必强制。
+    """
+    response = await llm.bind_tools([ExtractionPayload]).ainvoke(messages)
+    for call in response.tool_calls or []:
+        if call.get("name") == ExtractionPayload.__name__:
+            return ExtractionPayload.model_validate(call["args"])
+    raise ValueError("模型没有返回工具调用")
 
 
 async def _extract_via_json(llm: Any, messages: list) -> ExtractionPayload:

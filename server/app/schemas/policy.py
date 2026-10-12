@@ -88,11 +88,15 @@ class InfoOut(BaseModel):
 
 
 class ConceptOut(BaseModel):
+    """一条可沉淀的知识点。`term` 是知识点标题、`desc` 是其依据与做法（沿用库里的键名）。"""
+
     term: str
     desc: str
 
 
 class KnowledgeOut(BaseModel):
+    """知识区：可沉淀的知识点 + 适用领域 + 行动建议。"""
+
     concepts: list[ConceptOut] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
     extension: str | None = None

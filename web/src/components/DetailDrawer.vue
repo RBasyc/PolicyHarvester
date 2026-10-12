@@ -121,8 +121,8 @@ const knowledgeText = computed(() => {
   if (!data) return ''
   return [
     ...data.knowledge.concepts.map((c) => `${c.term}：${c.desc}`),
-    `相关领域：${data.knowledge.fields.join('、')}`,
-    `延伸解释：${data.knowledge.extension ?? ''}`,
+    `适用领域：${data.knowledge.fields.join('、')}`,
+    `行动建议：${data.knowledge.extension ?? ''}`,
   ].join('\n')
 })
 </script>
@@ -290,8 +290,8 @@ const knowledgeText = computed(() => {
               </button>
             </div>
             <div class="col-body knowledge-body">
-              <p class="sec-label knowledge-label">背景概念</p>
-              <p v-if="!extraction?.knowledge.concepts.length" class="col-empty">暂无背景概念</p>
+              <p class="sec-label knowledge-label">知识点</p>
+              <p v-if="!extraction?.knowledge.concepts.length" class="col-empty">暂无知识点</p>
               <div
                 v-for="(concept, i) in extraction?.knowledge.concepts ?? []"
                 :key="i"
@@ -300,7 +300,7 @@ const knowledgeText = computed(() => {
                 <p class="concept-term">{{ concept.term }}</p>
                 <p class="concept-desc">{{ concept.desc }}</p>
               </div>
-              <p class="sec-label knowledge-label">相关领域</p>
+              <p class="sec-label knowledge-label">适用领域</p>
               <div class="field-tags">
                 <span
                   v-for="field in extraction?.knowledge.fields ?? []"
@@ -311,7 +311,7 @@ const knowledgeText = computed(() => {
                 </span>
                 <span v-if="!extraction?.knowledge.fields.length" class="col-empty">—</span>
               </div>
-              <p class="sec-label knowledge-label">延伸解释</p>
+              <p class="sec-label knowledge-label">行动建议</p>
               <p class="concept-desc">{{ extraction?.knowledge.extension ?? '—' }}</p>
             </div>
           </div>
