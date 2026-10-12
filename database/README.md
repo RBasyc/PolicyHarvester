@@ -1,0 +1,55 @@
+# Database
+
+Agent Demo 的 PostgreSQL 数据库脚本与表结构设计。按前端（[web/src/data.ts](../web/src/data.ts) + 各面板组件）所需的数据形态设计。
+
+## 连接信息
+
+使用本机 docker 容器 **`server-db-1`**（镜像 `pgvector/pgvector:pg16`，端口 `5433`）中独立的 **`agent_demo`** 数据库——与容器内已有的 `kos` 库完全隔离，互不影响。
+
+```
+postgresql://kos:kos@localhost:5433/agent_demo
+```
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `PG_CONTAINER` | `server-db-1` | docker 容器名 |
+| `PGUSER` | `kos` | 数据库用户 |
+| `PGDATABASE` | `agent_demo` | 数据库名 |
+
+## 脚本
+
+```bash
+bash database/init.sh    # 初始化：创建数据库（幂等）-> 建表 -> 灌入演示数据
+bash database/reset.sh   # 删库重建（只影响 agent_demo）
+```
+
+两个脚本都可重复执行；`schema.sql` / `seed.sql` 也可单独用 psql 执行。
+
+## 表结构设计
+
+五张表 + 一个视图，完全对齐前端三个面板的字段：
+
+| 表 | 对应前端 | 关键字段 |
+|---|---|---|
+| `crawl_task` | 「抓取配置」+「抓取进度」 | `source`（抓取源）、`content_type`（政策文件/通知公告/全部）、`date_from`/`date_to`、`schedule`（手动/每天/每周，demo 不执行定时）、`keywords[]`、`status`、`total/fetched/extracted/failed_count`（进度统计）、`stage`（当前阶段文案） |
+| `policy_document` | 「抓取结果」每行 + 抽屉头部元信息 | `title`、`publish_date`、`source_url`（原文链接）、`agency`（发文机关）、`doc_no`（文号）、`fetched_by` |
+| `extraction` | 抽屉「事实 / 信息 / 知识」三区（与政策文件 1:1） | `status`（pending/extracting/extracted/failed）、`error`（失败原因，支持重试）、`model`、`info_summary`、`info_points`（JSONB）、`knowledge_concepts`（JSONB：`[{term, desc}]`）、`knowledge_fields[]`、`knowledge_extension` |
+| `fact_item` | 抽屉「事实 Facts」明细行 | `label`（时间/发文机构/政策动作/数字指标…）、`content`、`position`（顺序）；计数用 `COUNT(*)` 得出 |
+| `task_log` | 「抓取进度」日志流 | `tone`（info/success/active，对应前端三种颜色）、`message` |
+| `v_policy_results` | 「抓取结果」表格数据源 | `policy_document LEFT JOIN extraction`：标题、发布日期、原文链接、提取状态 |
+
+设计要点：
+
+- **枚举约束状态**：`extract_status` / `task_status` / `content_type` / `schedule_type` / `log_tone`，与前端 TS 联合类型一一对应，防止脏数据。
+- **JSONB vs 拆表**：`info_points`、`knowledge_concepts` 结构固定且只整体读写，用 JSONB 避免过度设计；`fact_item` 需要按维度计数/筛选，拆成明细表。
+- **进度计数冗余在 `crawl_task` 上**：前端「已抓取 10/10 · 已提取 6/10 · 失败 0」直接读字段，无需实时聚合。
+- **`UNIQUE (task_id, source_url)`**：同一任务内按原文链接去重；`extraction.policy_id UNIQUE` 保证一篇文件一份提取结果。
+- **`ON DELETE CASCADE`**：删任务即清干净其政策文件、提取结果、事实与日志。
+
+## 种子数据
+
+[seed.sql](seed.sql) 与前端 mock 完全同源（7 篇政策、1 个运行中任务、5 条日志、1 篇完整提取含 8 条事实/摘要/要点/概念），前端联调时可直接替换 `data.ts`。
+
+## 后端接入
+
+[server/.env](../server/.env) 中可加 `DATABASE_URL=postgresql://kos:kos@localhost:5433/agent_demo`，用 `psycopg` / SQLAlchemy 连接。后续可把 LangGraph 的 `InMemorySaver` 换成 `PostgresSaver`（连接同一数据库）实现对话记忆持久化。

@@ -32,7 +32,7 @@ export const results: PolicyResult[] = [
 ]
 
 export const logs: LogLine[] = [
-  { time: '[10:23:41]', text: '已连接 chuance-policy-mcp（抓取源：国务院政策文件库）', tone: 'info' },
+  { time: '[10:23:41]', text: '已连接 China-Central-Policy-MCP（抓取源：国务院政策文件库）', tone: 'info' },
   { time: '[10:23:47]', text: '抓取完成：共获取 10 篇政策原文', tone: 'info' },
   { time: '[10:23:52]', text: '第 1 篇提取成功（事实 12 · 信息 5 · 知识 4）', tone: 'success' },
   { time: '[10:23:55]', text: '第 2 篇提取成功（事实 9 · 信息 4 · 知识 3）', tone: 'success' },
@@ -45,7 +45,7 @@ export const drawerMeta = {
   agency: '发文机关：国务院',
   date: '发布日期：2025-06-05',
   docNo: '文号：国发〔2025〕12 号',
-  fetchedBy: '由 chuance-policy-mcp 抓取',
+  fetchedBy: '由 China-Central-Policy-MCP 抓取',
   model: '提取模型：Qwen3-235B-A22B',
   extractedAt: '提取时间：2025-06-08 10:24:03',
 }

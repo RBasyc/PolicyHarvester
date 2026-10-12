@@ -1,6 +1,7 @@
 """配置管理：从环境变量 / .env 文件读取配置。"""
 
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,6 +10,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # anthropic SDK 会自动读取 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL 等变量，
 # 而 pydantic-settings 只把 .env 读进 Settings 对象，不会写回环境。
 load_dotenv()
+
+# 仓库根目录（server/app/config.py -> 上三级）
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# China-Central-Policy-MCP 本地构建产物（tools/ 下克隆并自带 build/）
+_DEFAULT_POLICY_MCP_ENTRY = str(
+    _REPO_ROOT / "tools" / "China-Central-Policy-MCP" / "build" / "index.js"
+)
 
 
 class Settings(BaseSettings):
@@ -32,14 +41,10 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: list[str] = ["*"]
 
-    # --- MCP: chuance-policy（川策智行 · 权威政策检索，stdio/uvx 启动，无需 API Key）---
-    mcp_chuance_enabled: bool = True
-    mcp_chuance_command: str = "uvx"
-    mcp_chuance_args: list[str] = [
-        "--from",
-        "git+https://github.com/wenyi3370-lgtm/chuance-policy-mcp.git",
-        "chuance-policy-mcp",
-    ]
+    # --- MCP: central-policy（China-Central-Policy-MCP · 国务院政策检索，node stdio 启动，无需 API Key）---
+    mcp_policy_enabled: bool = True
+    mcp_policy_command: str = "node"
+    mcp_policy_args: list[str] = [_DEFAULT_POLICY_MCP_ENTRY]
 
 
 @lru_cache

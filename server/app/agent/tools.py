@@ -18,7 +18,7 @@ def get_current_time() -> str:
 # 本地工具注册表
 TOOLS = [get_current_time]
 
-# MCP 工具（chuance-policy-mcp 等），由应用启动时（lifespan）异步加载后填充
+# MCP 工具（China-Central-Policy-MCP 等），由应用启动时（lifespan）异步加载后填充
 MCP_TOOLS: list[BaseTool] = []
 
 

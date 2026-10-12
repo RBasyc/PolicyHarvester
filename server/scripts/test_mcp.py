@@ -1,14 +1,18 @@
-"""chuance-policy-mcp 连通性测试。
+"""China-Central-Policy-MCP 连通性测试。
 
 直接运行：uv run python scripts/test_mcp.py
 
 验证内容：
-1. MCP 服务能否通过 stdio (uvx) 启动并列出工具
-2. 调用 source_catalog（数据源清单，轻量、不依赖外部检索）验证调用链路
+1. MCP 服务能否通过 stdio (node) 启动并列出工具
+2. 调用 get_latest_policies（关键词检索，轻量）验证调用链路
 """
 
 import asyncio
 import sys
+from pathlib import Path
+
+# 直接从 scripts/ 运行时把 server/ 根目录加入 sys.path，以便导入 app 包
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.mcp import load_mcp_tools
 
@@ -22,9 +26,9 @@ async def main() -> int:
     for t in tools:
         print(f"  - {t.name}: {(t.description or '').splitlines()[0][:60]}")
 
-    print("\n=== 2. 调用 source_catalog ===")
-    catalog = next(t for t in tools if t.name == "source_catalog")
-    result = await catalog.ainvoke({})
+    print("\n=== 2. 调用 get_latest_policies ===")
+    search = next(t for t in tools if t.name == "get_latest_policies")
+    result = await search.ainvoke({"keyword": "人工智能", "limit": 3})
     text = result if isinstance(result, str) else str(result)
     print(text[:500])
 

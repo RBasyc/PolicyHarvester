@@ -1,31 +1,33 @@
 # Agent Demo
 
-一个「政策文件事实提取」Agent 演示项目：通过 **MCP（chuance-policy-mcp，川策智行 · 权威政策检索）** 抓取政策原文，由 **LangGraph + Claude** 循环调用工具完成提取，前端展示任务进度、结果表格与提取详情。
+一个「政策文件事实提取」Agent 演示项目：通过 **MCP（China-Central-Policy-MCP，国务院政策检索与解析）** 抓取政策原文，由 **LangGraph + Claude** 循环调用工具完成提取，前端展示任务进度、结果表格与提取详情。
 
 ## 项目结构
 
 ```
 Agent-Demo/
 ├── design.pen            # pen.dev 设计稿（加密格式，仅通过 pen.dev MCP 读取）
+├── database/             # PostgreSQL 脚本：建库 / 建表 / 种子数据（见 database/README.md）
 ├── server/               # 后端：FastAPI + LangGraph
 │   ├── main.py           # 开发启动入口（python main.py，带热重载）
 │   ├── pyproject.toml    # 依赖管理（uv）
 │   ├── .env.example      # 环境变量模板
 │   ├── scripts/
-│   │   └── test_mcp.py   # 单独测试 chuance-policy-mcp 连通性
+│   │   └── test_mcp.py   # 单独测试 China-Central-Policy-MCP 连通性
 │   └── app/
 │       ├── main.py       # FastAPI 应用工厂、中间件、路由注册
 │       ├── config.py     # pydantic-settings 配置（读取 .env）
 │       ├── agent/        # LangGraph 层
 │       │   ├── state.py  #   图状态（messages + add_messages reducer）
 │       │   ├── tools.py  #   本地 @tool 工具 + MCP_TOOLS 合并（all_tools）
-│       │   ├── mcp.py    #   MCP 接入：uvx stdio 启动 chuance-policy-mcp
+│       │   ├── mcp.py    #   MCP 接入：node stdio 启动本地 China-Central-Policy-MCP
 │       │   ├── nodes.py  #   agent 节点（LLM 调用，绑定工具）
 │       │   └── graph.py  #   ReAct 循环：START -> agent <-> tools -> END
 │       ├── api/routes/
 │       │   ├── health.py #   GET  /health
 │       │   └── agent.py  #   POST /api/chat、POST /api/chat/stream (SSE)
 │       └── schemas/      # 请求 / 响应模型
+├── tools/                # 本地 MCP 服务（China-Central-Policy-MCP，node 构建产物）
 └── web/                  # 前端：Vue 3 + TypeScript + Vite
     ├── design-export/    # 从 design.pen 导出的 HTML 设计稿（main / states 两页）
     └── src/
@@ -64,7 +66,7 @@ python main.py             # 或 uvicorn app.main:app --reload
 工具来源有两类（[tools.py](server/app/agent/tools.py)）：
 
 - **本地工具**：`@tool` 定义的函数（如 `get_current_time`），加入 `TOOLS` 列表即生效。
-- **MCP 工具**：[mcp.py](server/app/agent/mcp.py) 在应用启动时（lifespan）通过 `uvx` 以 stdio 方式拉起 `chuance-policy-mcp`，由 `langchain-mcp-adapters` 转成 LangChain 工具后填入 `MCP_TOOLS`。服务不可用时自动降级为仅本地工具，不影响启动。
+- **MCP 工具**：[mcp.py](server/app/agent/mcp.py) 在应用启动时（lifespan）通过 `node` 以 stdio 方式拉起本地构建的 [China-Central-Policy-MCP](https://github.com/guangxiangdebizi/China-Central-Policy-MCP)（`tools/China-Central-Policy-MCP/build/index.js`，提供 `get_latest_policies` / `get_policy_fulltext` 两个工具），由 `langchain-mcp-adapters` 转成 LangChain 工具后填入 `MCP_TOOLS`。服务不可用时自动降级为仅本地工具，不影响启动。
 
 可单独验证 MCP 连通性：
 
@@ -83,6 +85,17 @@ pnpm build      # vue-tsc 类型检查 + 产物构建
 ```
 
 **当前状态**：前端是依据 [design-export/](web/design-export/)（从 design.pen 导出的设计稿）实现的**静态 UI 演示**，数据全部来自 [data.ts](web/src/data.ts) 的 mock，**尚未对接后端** `POST /api/chat/stream` SSE 接口。
+
+## 数据库（database/）
+
+使用本机 docker 容器 `server-db-1`（pgvector/pgvector:pg16，端口 5433）中独立的 `agent_demo` 数据库，与容器内已有的 `kos` 库隔离：
+
+```bash
+bash database/init.sh    # 初始化（幂等）：建库 -> 建表 -> 灌入与前端 mock 同源的演示数据
+bash database/reset.sh   # 删库重建
+```
+
+表结构按前端三个面板设计：`crawl_task`（抓取配置/进度）、`policy_document`（结果列表/抽屉元信息）、`extraction` + `fact_item`（事实/信息/知识三区）、`task_log`（日志流），另有 `v_policy_results` 视图直接作为「抓取结果」表格数据源。连接串：`postgresql://kos:kos@localhost:5433/agent_demo`。详见 [database/README.md](database/README.md)。
 
 ## 设计稿
 
