@@ -1,0 +1,71 @@
+:root {
+  /* Design tokens from design.pen */
+  --font: 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --primary: #8c1f2f;
+  --accent: #cf121b;
+  --accent-soft: #fdf0f1;
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --border: #e4e6ea;
+  --divider: #eef0f2;
+  --text-primary: #1f2329;
+  --text-secondary: #646a73;
+  --text-tertiary: #8f959e;
+
+  --blue: #2b5aed;
+  --blue-bg: #eaf1fe;
+  --blue-soft: #f5f8fe;
+  --blue-border: #dce6fb;
+  --green: #1f7a3d;
+  --green-bg: #e7f5ec;
+  --green-soft: #f3faf5;
+  --green-border: #d5ebdc;
+  --purple: #7a3bc8;
+  --purple-bg: #f2ebfb;
+  --purple-soft: #f8f4fd;
+  --purple-border: #e4d8f5;
+  --red-bg: #fbecef;
+
+  --log-bg: #22252b;
+  --log-time: #7d828b;
+  --log-text: #c9ced6;
+  --log-success: #5bc98c;
+
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+p,
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}

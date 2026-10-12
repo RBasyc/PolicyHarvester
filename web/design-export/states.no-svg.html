@@ -1,0 +1,2241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      tailwind = { config: { corePlugins: { preflight: false } } };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono%3Awght%40100..800&family=Noto+Sans+SC%3Awght%40100..900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      *, ::before, ::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="relative w-[2460px] h-[1341px]">
+      <div
+        data-pencil-name="结果详情抽屉（覆盖态）"
+        class="box-border w-[1440px] h-[1120px] absolute left-0 top-0 bg-[#F4F5F7] overflow-hidden"
+      >
+        <div
+          data-pencil-name="主页面（背景）"
+          class="box-border w-[1440px] h-fit absolute left-0 top-0 flex flex-col gap-0 justify-start items-start bg-[#F4F5F7] overflow-hidden [z-index:0]"
+        >
+          <div
+            data-pencil-name="顶部栏"
+            class="[box-sizing:content-box] w-[1440px] h-[76.5px] shrink-0 flex flex-row gap-0 p-[16px_32px] justify-between items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#E4E6EA] [margin:0px_0px_-0.5px_0px]"
+          >
+            <div
+              data-pencil-name="品牌区"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[12px] justify-start items-center"
+            >
+              <div
+                data-pencil-name="Logo"
+                class="box-border w-[36px] shrink-0 h-[36px] flex flex-row gap-0 justify-center items-center bg-[#8C1F2F] rounded-[9px]"
+              >
+              </div>
+              <div
+                data-pencil-name="标题组"
+                class="box-border w-fit shrink-0 h-fit flex flex-col gap-[2px] justify-start items-start"
+              >
+                <div
+                  data-pencil-name="产品名"
+                  class="text-[18px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  PolicyHarvester
+                </div>
+                <div
+                  data-pencil-name="副标题"
+                  class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                >
+                  国务院政策抓取 · 大模型结构化提取 Demo
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="操作区"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[12px] justify-start items-center"
+            >
+              <div
+                data-pencil-name="状态标签"
+                class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+              >
+                <div
+                  data-pencil-name="状态文字"
+                  class="text-[12px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  运行中
+                </div>
+              </div>
+              <div
+                data-pencil-name="开始抓取按钮"
+                class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] p-[9px_16px] justify-start items-center bg-[#CF121B] rounded-[8px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[14px]/[normal] box-border text-[#FFFFFF] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  开始抓取
+                </div>
+              </div>
+            </div>
+          </div>
+          <div
+            data-pencil-name="内容区"
+            class="box-border w-full h-fit shrink-0 flex flex-col gap-[20px] p-[24px_80px_48px_80px] justify-start items-start"
+          >
+            <div
+              data-pencil-name="配置区"
+              class="box-border w-full h-fit shrink-0 flex flex-col gap-[16px] p-[20px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[12px]"
+            >
+              <div
+                data-pencil-name="配置头部"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+              >
+                <div
+                  data-pencil-name="左"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[16px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    抓取配置
+                  </div>
+                  <div
+                    data-pencil-name="说明"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    通过表单设置，或从 JSON 配置文件导入
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="收起"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    收起
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="表单行1"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-[16px] justify-start items-end"
+              >
+                <div
+                  data-pencil-name="抓取源字段"
+                  class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    抓取源
+                  </div>
+                  <div
+                    data-pencil-name="下拉选择"
+                    class="box-border w-full h-fit shrink-0 flex flex-row gap-0 p-[10px_12px] justify-between items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                  >
+                    <div
+                      data-pencil-name="选项"
+                      class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      国务院政策文件库（gov.cn）
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="内容类型字段"
+                  class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    内容类型
+                  </div>
+                  <div
+                    data-pencil-name="分段选择"
+                    class="box-border w-fit h-fit shrink-0 flex flex-row gap-[2px] p-[3px] justify-start items-start bg-[#F1F2F4] rounded-[8px]"
+                  >
+                    <div
+                      data-pencil-name="政策文件"
+                      class="box-border w-fit shrink-0 h-fit [box-shadow:0px_1px_3px_#0000001A] flex flex-row gap-0 p-[7px_16px] justify-center items-center bg-[#FFFFFF] rounded-[6px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        政策文件
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="通知公告"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[7px_16px] justify-center items-center bg-[#F1F2F4] rounded-[6px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        通知公告
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="全部"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[7px_16px] justify-center items-center bg-[#F1F2F4] rounded-[6px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        全部
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="表单行2"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-[16px] justify-start items-end"
+              >
+                <div
+                  data-pencil-name="时间范围字段"
+                  class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    时间范围
+                  </div>
+                  <div
+                    data-pencil-name="日期行"
+                    class="box-border w-fit h-fit shrink-0 flex flex-row gap-[8px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="日期"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] p-[9px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="值"
+                        class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        2025-06-01
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="至"
+                      class="text-[13px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      至
+                    </div>
+                    <div
+                      data-pencil-name="日期"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] p-[9px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="值"
+                        class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        2025-06-08
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="近 7 天"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[8px_12px] justify-start items-center bg-[#FDF0F1] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        近 7 天
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="近 30 天"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[8px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        近 30 天
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="抓取周期字段"
+                  class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    抓取周期
+                  </div>
+                  <div
+                    data-pencil-name="周期行"
+                    class="box-border w-fit h-fit shrink-0 flex flex-row gap-[8px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="手动"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[8px_12px] justify-start items-center bg-[#FDF0F1] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        手动
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="每天"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[8px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        每天
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="每周"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[8px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        每周
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="Demo提示"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_8px] justify-start items-center bg-[#F1F2F4] rounded-[4px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[11px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                      >
+                        Demo 仅展示，不执行定时任务
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="关键词字段"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[8px] justify-start items-start"
+              >
+                <div
+                  data-pencil-name="标签"
+                  class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  关键词（可添加多个）
+                </div>
+                <div
+                  data-pencil-name="标签输入框"
+                  class="box-border w-full h-fit shrink-0 flex flex-row gap-[8px] p-[8px_12px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                >
+                  <div
+                    data-pencil-name="关键词-人工智能"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_8px] justify-start items-center bg-[#F1F2F4] rounded-[6px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      人工智能
+                    </div>
+                  </div>
+                  <div
+                    data-pencil-name="关键词-中小企业"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_8px] justify-start items-center bg-[#F1F2F4] rounded-[6px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      中小企业
+                    </div>
+                  </div>
+                  <div
+                    data-pencil-name="关键词-产业基金"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_8px] justify-start items-center bg-[#F1F2F4] rounded-[6px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      产业基金
+                    </div>
+                  </div>
+                  <div
+                    data-pencil-name="占位"
+                    class="text-[13px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    输入关键词，回车添加
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="分割线"
+                class="box-border w-full h-[1px] shrink-0 bg-[#EEF0F2]"
+              ></div>
+              <div
+                data-pencil-name="配置底部"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+              >
+                <div
+                  data-pencil-name="导入配置按钮"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] p-[8px_14px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[8px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[normal] box-border text-[#8C1F2F] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    导入配置（JSON）
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="提示"
+                  class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                >
+                  支持 .json 文件，导入后将覆盖当前表单配置
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="进度区"
+              class="box-border w-full h-fit shrink-0 flex flex-col gap-[14px] p-[20px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[12px]"
+            >
+              <div
+                data-pencil-name="进度头部"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+              >
+                <div
+                  data-pencil-name="左"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[16px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    抓取进度
+                  </div>
+                  <div
+                    data-pencil-name="状态标签"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[4px_10px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[12px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                    >
+                      运行中
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="开始时间"
+                  class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                >
+                  开始于 2025-06-08 10:23:41
+                </div>
+              </div>
+              <div
+                data-pencil-name="进度条行"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+              >
+                <div
+                  data-pencil-name="进度条轨道"
+                  class="box-border [flex:1_1_0] h-[8px] bg-[#EDEFF2] rounded-[999px] overflow-hidden relative"
+                >
+                  <div
+                    data-pencil-name="已完成部分"
+                    class="box-border w-[715px] h-[8px] absolute left-0 top-0 bg-[#CF121B] rounded-[999px] [z-index:0]"
+                  ></div>
+                </div>
+                <div
+                  data-pencil-name="百分比"
+                  class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  60%
+                </div>
+              </div>
+              <div
+                data-pencil-name="阶段提示"
+                class="box-border w-fit h-fit shrink-0 flex flex-row gap-[8px] justify-start items-center"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  正在调用大模型提取：第 3/10 篇 ——《关于促进人工智能产业高质量发展的若干措施》
+                </div>
+              </div>
+              <div
+                data-pencil-name="统计"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                已抓取 10/10 篇 · 已提取 6/10 篇 · 失败 0 · 预计剩余约 2 分钟
+              </div>
+              <div
+                data-pencil-name="日志流"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[6px] p-[12px_16px] justify-start items-start bg-[#22252B] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="日志行"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="时间"
+                    class="text-[12px]/[normal] box-border text-[#7D828B] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    [10:23:41]
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[12px]/[normal] box-border text-[#C9CED6] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    已连接 chuance-policy-mcp（抓取源：国务院政策文件库）
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日志行"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="时间"
+                    class="text-[12px]/[normal] box-border text-[#7D828B] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    [10:23:47]
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[12px]/[normal] box-border text-[#C9CED6] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    抓取完成：共获取 10 篇政策原文
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日志行"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="时间"
+                    class="text-[12px]/[normal] box-border text-[#7D828B] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    [10:23:52]
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[12px]/[normal] box-border text-[#5BC98C] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    第 1 篇提取成功（事实 12 · 信息 5 · 知识 4）
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日志行"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="时间"
+                    class="text-[12px]/[normal] box-border text-[#7D828B] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    [10:23:55]
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[12px]/[normal] box-border text-[#5BC98C] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    第 2 篇提取成功（事实 9 · 信息 4 · 知识 3）
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日志行"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="时间"
+                    class="text-[12px]/[normal] box-border text-[#7D828B] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    [10:24:01]
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[12px]/[normal] box-border text-[#FFFFFF] font-['JetBrains_Mono',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    正在提取第 3 篇 …
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="结果区"
+              class="box-border w-full h-fit shrink-0 flex flex-col gap-0 justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[12px] overflow-hidden"
+            >
+              <div
+                data-pencil-name="结果头部"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 p-[18px_20px_14px_20px] justify-between items-center"
+              >
+                <div
+                  data-pencil-name="左"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[16px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    抓取结果
+                  </div>
+                  <div
+                    data-pencil-name="数量标签"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_10px] justify-start items-start bg-[#F1F2F4] rounded-[999px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[12px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                    >
+                      共 10 篇
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="摘要"
+                  class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                >
+                  已提取 6 · 提取中 1 · 未提取 2 · 失败 1
+                </div>
+              </div>
+              <div
+                data-pencil-name="表头"
+                class="[box-sizing:content-box] w-[1280px] h-[36px] shrink-0 flex flex-row gap-0 p-[10px_20px] justify-start items-center bg-[#F8F9FA] [border-width:1px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:-0.5px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    政策标题
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    发布日期
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    原文链接
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    提取状态
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-[16px] flex flex-row gap-0 justify-start items-center"
+                ></div>
+              </div>
+              <div
+                data-pencil-name="结果行-1"
+                class="[box-sizing:content-box] w-[1278.5px] h-[51px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FBF1F2] [border-width:0px_0px_0px_3px] [border-style:solid] [border-color:#CF121B] [margin:0px_0px_0px_-1.5px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    关于促进人工智能产业高质量发展的若干措施
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-06-05
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-已提取"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        已提取
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-2"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    关于进一步做好中小企业纾困工作的通知
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-06-04
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-已提取"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        已提取
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-3"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    数字政府建设一体化政务服务实施方案
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-06-03
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-提取中"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        提取中
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-4"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    关于加强数据要素市场培育的指导意见
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-06-02
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-已提取"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        已提取
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-5"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025 年节能减排重点工作安排
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-06-01
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-未提取"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#F1F2F4] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        未提取
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-6"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    关于优化口岸营商环境促进跨境贸易便利化的公告
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-05-30
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-提取失败"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#FBECEF] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        提取失败
+                      </div>
+                    </div>
+                    <div
+                      data-pencil-name="重试"
+                      class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                    >
+                      重试
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果行-7"
+                class="[box-sizing:content-box] w-[1280px] h-[50.5px] shrink-0 flex flex-row gap-0 p-[13px_20px] justify-start items-center bg-[#FFFFFF] [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#EEF0F2] [margin:0px_0px_-0.5px_0px]"
+              >
+                <div
+                  data-pencil-name="标题列"
+                  class="box-border [flex:1_1_0] h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="标题"
+                    class="text-[14px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    关于推进养老服务体系建设提质增效的意见
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="日期列"
+                  class="box-border w-[110px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="日期"
+                    class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    2025-05-29
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="链接列"
+                  class="box-border w-[80px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="链接"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      原文
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态列"
+                  class="box-border w-[132px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                  <div
+                    data-pencil-name="状态组"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-[10px] justify-start items-center"
+                  >
+                    <div
+                      data-pencil-name="状态-未提取"
+                      class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#F1F2F4] rounded-[999px]"
+                    >
+                      <div
+                        data-pencil-name="文字"
+                        class="text-[12px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                      >
+                        未提取
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="展开列"
+                  class="box-border w-[28px] shrink-0 h-fit flex flex-row gap-0 justify-start items-center"
+                >
+                </div>
+              </div>
+              <div
+                data-pencil-name="结果底部提示"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-[6px] p-[12px_20px] justify-start items-center"
+              >
+                <div
+                  data-pencil-name="提示"
+                  class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                >
+                  点击任意一行，在右侧抽屉中查看「事实 / 信息 / 知识」三部分提取结果
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="遮罩"
+          class="box-border w-[1440px] h-[1120px] absolute left-0 top-0 bg-[#1F232999] [z-index:1]"
+        ></div>
+        <div
+          data-pencil-name="详情抽屉"
+          class="box-border w-[960px] h-[1120px] [box-shadow:-8px_0px_32px_#0000002E] absolute left-[480px] top-0 flex flex-col gap-0 justify-start items-start bg-[#FFFFFF] overflow-hidden [z-index:2]"
+        >
+          <div
+            data-pencil-name="抽屉头部"
+            class="[box-sizing:content-box] w-[960px] h-[180.5px] shrink-0 flex flex-col gap-[12px] p-[18px_24px_16px_24px] justify-start items-start [border-width:0px_0px_1px_0px] [border-style:solid] [border-color:#E4E6EA] [margin:0px_0px_-0.5px_0px]"
+          >
+            <div
+              data-pencil-name="标签行"
+              class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+            >
+              <div
+                data-pencil-name="左"
+                class="box-border w-fit shrink-0 h-fit flex flex-row gap-[8px] justify-start items-center"
+              >
+                <div
+                  data-pencil-name="来源标签"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_10px] justify-start items-start bg-[#F1F2F4] rounded-[999px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    国务院政策文件库
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="状态标签"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[4px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                  >
+                    已提取
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="关闭按钮"
+                class="box-border w-[32px] shrink-0 h-[32px] flex flex-row gap-0 justify-center items-center rounded-[8px]"
+              >
+              </div>
+            </div>
+            <div
+              data-pencil-name="标题"
+              class="text-[18px]/[25px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left"
+            >
+              关于促进人工智能产业高质量发展的若干措施
+            </div>
+            <div
+              data-pencil-name="元信息"
+              class="box-border w-fit h-fit shrink-0 flex flex-row gap-[16px] justify-start items-center"
+            >
+              <div
+                data-pencil-name="机关"
+                class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                发文机关：国务院
+              </div>
+              <div
+                data-pencil-name="日期"
+                class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                发布日期：2025-06-05
+              </div>
+              <div
+                data-pencil-name="文号"
+                class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                文号：国发〔2025〕12 号
+              </div>
+            </div>
+            <div
+              data-pencil-name="操作行"
+              class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+            >
+              <div
+                data-pencil-name="查看原文按钮"
+                class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[8px_14px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[8px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[13px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  查看原文（gov.cn）
+                </div>
+              </div>
+              <div
+                data-pencil-name="来源"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                由 chuance-policy-mcp 抓取
+              </div>
+            </div>
+          </div>
+          <div
+            data-pencil-name="三栏提取结果"
+            class="box-border w-full h-fit shrink-0 flex flex-row gap-[14px] p-[20px_24px] justify-start items-start"
+          >
+            <div
+              data-pencil-name="事实栏"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="事实 Facts栏头"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+              >
+                <div
+                  data-pencil-name="标签"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    事实 Facts
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="复制按钮"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] p-[5px_8px] justify-start items-center rounded-[6px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    复制
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="事实内容"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[14px] justify-start items-start bg-[#F5F8FE] [outline:1px_solid_#DCE6FB] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="事实-1"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    时间
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    2025 年 6 月 5 日印发，2025 年 9 月 1 日起施行
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-2"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    发文机构
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    国务院（国发〔2025〕12 号）
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-3"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    涉及机构
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    工业和信息化部、财政部、科技部
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-4"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    政策动作
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    设立 600 亿元国家人工智能产业投资基金
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-5"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    政策动作
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    建设 10 个国家级人工智能创新应用先导区
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-6"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    数字指标
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    到 2027 年核心产业规模突破 1.2 万亿元
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-7"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    数字指标
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    培育 100 家以上行业龙头企业
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="事实-8"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="标签"
+                    class="text-[11px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    数字指标
+                  </div>
+                  <div
+                    data-pencil-name="内容"
+                    class="text-[13px]/[20px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    规上企业智能化改造覆盖率达 80%
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="信息栏"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="信息 Information栏头"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+              >
+                <div
+                  data-pencil-name="标签"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    信息 Information
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="复制按钮"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] p-[5px_8px] justify-start items-center rounded-[6px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    复制
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="信息内容"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[14px] justify-start items-start bg-[#F3FAF5] [outline:1px_solid_#D5EBDC] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="摘要标签"
+                  class="text-[11px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  摘要
+                </div>
+                <div
+                  data-pencil-name="摘要"
+                  class="text-[13px]/[21px] box-border w-full text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                >
+                  文件部署推动人工智能与实体经济深度融合，从产业基金、创新先导区、人才引育、场景开放四个方面提出
+                  16 条具体措施，并明确 2027 年阶段性目标与部门分工。
+                </div>
+                <div
+                  data-pencil-name="要点标签"
+                  class="text-[11px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  要点
+                </div>
+                <div
+                  data-pencil-name="要点-1"
+                  class="box-border w-full h-fit shrink-0 flex flex-row gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="圆点"
+                    class="box-border w-[12px] shrink-0 h-fit flex flex-row gap-0 p-[8px_0px_0px_0px] justify-center items-start"
+                  >
+                    <div
+                      data-pencil-name="点"
+                      class="box-border w-[5px] shrink-0 h-[5px] bg-[#1F7A3D] rounded-full"
+                    ></div>
+                  </div>
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[20px] box-border [flex:1_1_0] text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    设立产业基金，重点投向基础大模型与行业应用
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="要点-2"
+                  class="box-border w-full h-fit shrink-0 flex flex-row gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="圆点"
+                    class="box-border w-[12px] shrink-0 h-fit flex flex-row gap-0 p-[8px_0px_0px_0px] justify-center items-start"
+                  >
+                    <div
+                      data-pencil-name="点"
+                      class="box-border w-[5px] shrink-0 h-[5px] bg-[#1F7A3D] rounded-full"
+                    ></div>
+                  </div>
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[20px] box-border [flex:1_1_0] text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    先导区实行「一区一策」，先行先试监管沙盒机制
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="要点-3"
+                  class="box-border w-full h-fit shrink-0 flex flex-row gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="圆点"
+                    class="box-border w-[12px] shrink-0 h-fit flex flex-row gap-0 p-[8px_0px_0px_0px] justify-center items-start"
+                  >
+                    <div
+                      data-pencil-name="点"
+                      class="box-border w-[5px] shrink-0 h-[5px] bg-[#1F7A3D] rounded-full"
+                    ></div>
+                  </div>
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[20px] box-border [flex:1_1_0] text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    对中小企业智能化改造给予最高 30% 费用补贴
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="要点-4"
+                  class="box-border w-full h-fit shrink-0 flex flex-row gap-[8px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="圆点"
+                    class="box-border w-[12px] shrink-0 h-fit flex flex-row gap-0 p-[8px_0px_0px_0px] justify-center items-start"
+                  >
+                    <div
+                      data-pencil-name="点"
+                      class="box-border w-[5px] shrink-0 h-[5px] bg-[#1F7A3D] rounded-full"
+                    ></div>
+                  </div>
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[20px] box-border [flex:1_1_0] text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    建立跨部门推进机制，每年发布产业发展报告
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="知识栏"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="知识 Knowledge栏头"
+                class="box-border w-full h-fit shrink-0 flex flex-row gap-0 justify-between items-center"
+              >
+                <div
+                  data-pencil-name="标签"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#F2EBFB] rounded-[999px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[13px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    知识 Knowledge
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="复制按钮"
+                  class="box-border w-fit shrink-0 h-fit flex flex-row gap-[4px] p-[5px_8px] justify-start items-center rounded-[6px]"
+                >
+                  <div
+                    data-pencil-name="文字"
+                    class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                  >
+                    复制
+                  </div>
+                </div>
+              </div>
+              <div
+                data-pencil-name="知识内容"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[14px] justify-start items-start bg-[#F8F4FD] [outline:1px_solid_#E4D8F5] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="背景标签"
+                  class="text-[11px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  背景概念
+                </div>
+                <div
+                  data-pencil-name="概念-1"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="术语"
+                    class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    国家人工智能产业投资基金
+                  </div>
+                  <div
+                    data-pencil-name="解释"
+                    class="text-[12px]/[18px] box-border w-full text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    政府引导基金，通过市场化运作支持 AI 初创企业与关键技术攻关。
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="概念-2"
+                  class="box-border w-full h-fit shrink-0 flex flex-col gap-[3px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="术语"
+                    class="text-[13px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                  >
+                    监管沙盒
+                  </div>
+                  <div
+                    data-pencil-name="解释"
+                    class="text-[12px]/[18px] box-border w-full text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                  >
+                    在受控环境中测试创新业务，降低合规不确定性，常见于金融科技与 AI 治理。
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="领域标签"
+                  class="text-[11px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  相关领域
+                </div>
+                <div
+                  data-pencil-name="领域标签组"
+                  class="box-border w-fit h-fit shrink-0 flex flex-row gap-[6px] justify-start items-start"
+                >
+                  <div
+                    data-pencil-name="领域-产业政策"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_10px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4D8F5] [outline-offset:-0.5px] rounded-[999px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[12px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      产业政策
+                    </div>
+                  </div>
+                  <div
+                    data-pencil-name="领域-人工智能"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_10px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4D8F5] [outline-offset:-0.5px] rounded-[999px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[12px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      人工智能
+                    </div>
+                  </div>
+                  <div
+                    data-pencil-name="领域-财政补贴"
+                    class="box-border w-fit shrink-0 h-fit flex flex-row gap-0 p-[4px_10px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4D8F5] [outline-offset:-0.5px] rounded-[999px]"
+                  >
+                    <div
+                      data-pencil-name="文字"
+                      class="text-[12px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+                    >
+                      财政补贴
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-pencil-name="延伸标签"
+                  class="text-[11px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  延伸解释
+                </div>
+                <div
+                  data-pencil-name="延伸"
+                  class="text-[12px]/[18px] box-border w-full text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+                >
+                  与 2024 年《新一代人工智能发展规划》衔接，政策工具从「研发资助」转向「基金 +
+                  场景」组合，释放产业化加速信号。
+                </div>
+              </div>
+            </div>
+          </div>
+          <div
+            data-pencil-name="弹性占位"
+            class="box-border w-full [flex:1_1_0] flex flex-col gap-0 justify-start items-start"
+          ></div>
+          <div
+            data-pencil-name="抽屉底部"
+            class="[box-sizing:content-box] w-[960px] h-[58.5px] shrink-0 flex flex-row gap-0 p-[14px_24px] justify-between items-center [border-width:1px_0px_0px_0px] [border-style:solid] [border-color:#E4E6EA] [margin:-0.5px_0px_0px_0px]"
+          >
+            <div
+              data-pencil-name="左"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[16px] justify-start items-center"
+            >
+              <div
+                data-pencil-name="模型"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                提取模型：Qwen3-235B-A22B
+              </div>
+              <div
+                data-pencil-name="时间"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                提取时间：2025-06-08 10:24:03
+              </div>
+            </div>
+            <div
+              data-pencil-name="重新提取"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[6px] p-[7px_12px] justify-start items-center rounded-[6px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                重新提取
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        data-pencil-name="关键状态示例"
+        class="box-border w-[940px] h-fit absolute left-[1520px] top-0 flex flex-col gap-[18px] p-[24px] justify-start items-start bg-[#F4F5F7] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[16px]"
+      >
+        <div
+          data-pencil-name="面板头部"
+          class="box-border w-fit h-fit shrink-0 flex flex-col gap-[4px] justify-start items-start"
+        >
+          <div
+            data-pencil-name="标题"
+            class="text-[16px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            关键状态示例
+          </div>
+          <div
+            data-pencil-name="说明"
+            class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+          >
+            进度条 · 结果行状态 · 空状态 · 三栏加载骨架屏 · 抓取失败 / 提取失败 · 空内容
+          </div>
+        </div>
+        <div
+          data-pencil-name="进度条状态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            进度条：未开始 / 进行中 / 完成 / 失败
+          </div>
+          <div
+            data-pencil-name="进度态-1"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="名称"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              未开始
+            </div>
+            <div
+              data-pencil-name="轨道"
+              class="box-border w-[420px] shrink-0 h-[8px] bg-[#EDEFF2] rounded-[999px] overflow-hidden"
+            ></div>
+            <div
+              data-pencil-name="说明"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              未开始
+            </div>
+          </div>
+          <div
+            data-pencil-name="进度态-2"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="名称"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              进行中
+            </div>
+            <div
+              data-pencil-name="轨道"
+              class="box-border w-[420px] shrink-0 h-[8px] bg-[#EDEFF2] rounded-[999px] overflow-hidden relative"
+            >
+              <div
+                data-pencil-name="填充"
+                class="box-border w-[252px] h-[8px] absolute left-0 top-0 bg-[#CF121B] rounded-[999px] [z-index:0]"
+              ></div>
+            </div>
+            <div
+              data-pencil-name="说明"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              60% · 正在提取第 3/10 篇
+            </div>
+          </div>
+          <div
+            data-pencil-name="进度态-3"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="名称"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              已完成
+            </div>
+            <div
+              data-pencil-name="轨道"
+              class="box-border w-[420px] shrink-0 h-[8px] bg-[#EDEFF2] rounded-[999px] overflow-hidden relative"
+            >
+              <div
+                data-pencil-name="填充"
+                class="box-border w-[420px] h-[8px] absolute left-0 top-0 bg-[#1F7A3D] rounded-[999px] [z-index:0]"
+              ></div>
+            </div>
+            <div
+              data-pencil-name="说明"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              100% · 已完成
+            </div>
+          </div>
+          <div
+            data-pencil-name="进度态-4"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[12px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="名称"
+              class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              失败
+            </div>
+            <div
+              data-pencil-name="轨道"
+              class="box-border w-[420px] shrink-0 h-[8px] bg-[#EDEFF2] rounded-[999px] overflow-hidden relative"
+            >
+              <div
+                data-pencil-name="填充"
+                class="box-border w-[190px] h-[8px] absolute left-0 top-0 bg-[#CF121B] rounded-[999px] [z-index:0]"
+              ></div>
+            </div>
+            <div
+              data-pencil-name="说明"
+              class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              失败 · 连接超时，请重试
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="结果行状态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            结果行：未提取 / 提取中 / 已提取 / 提取失败
+          </div>
+          <div
+            data-pencil-name="状态行"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[10px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="状态-未提取"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[5px_12px] justify-start items-center bg-[#F1F2F4] rounded-[999px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                未提取
+              </div>
+            </div>
+            <div
+              data-pencil-name="状态-提取中"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[5px_12px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                提取中
+              </div>
+            </div>
+            <div
+              data-pencil-name="状态-已提取"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[5px_12px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                已提取
+              </div>
+            </div>
+            <div
+              data-pencil-name="状态-提取失败"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[5px_12px] justify-start items-center bg-[#FBECEF] rounded-[999px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                提取失败
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="空状态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            空状态：尚未抓取
+          </div>
+          <div
+            data-pencil-name="空状态内容"
+            class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[28px_24px] justify-start items-center"
+          >
+            <div
+              data-pencil-name="图标底"
+              class="box-border w-[72px] h-[72px] shrink-0 flex flex-row gap-0 justify-center items-center bg-[#F1F2F4] rounded-[999px]"
+            >
+            </div>
+            <div
+              data-pencil-name="主文案"
+              class="text-[15px]/[normal] box-border text-[#1F2329] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+            >
+              还没有抓取结果
+            </div>
+            <div
+              data-pencil-name="副文案"
+              class="text-[13px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              配置抓取参数后，点击右上角「开始抓取」获取政策原文
+            </div>
+            <div
+              data-pencil-name="开始按钮"
+              class="box-border w-fit h-fit shrink-0 flex flex-row gap-[6px] p-[8px_16px] justify-start items-center bg-[#CF121B] rounded-[8px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[13px]/[normal] box-border text-[#FFFFFF] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                开始抓取
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="三栏加载态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            三栏提取：加载中（骨架屏）
+          </div>
+          <div
+            data-pencil-name="骨架行"
+            class="box-border w-full h-fit shrink-0 flex flex-row gap-[14px] justify-start items-start"
+          >
+            <div
+              data-pencil-name="骨架-事实 Facts"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="标签"
+                class="box-border w-fit h-fit shrink-0 flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#EAF1FE] rounded-[999px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[13px]/[normal] box-border text-[#2B5AED] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  事实 Facts
+                </div>
+              </div>
+              <div
+                data-pencil-name="骨架体"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[10px] p-[14px] justify-start items-start bg-[#F5F8FE] [outline:1px_solid_#DCE6FB] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[218px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[150px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[196px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[104px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="骨架-信息 Information"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="标签"
+                class="box-border w-fit h-fit shrink-0 flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#E7F5EC] rounded-[999px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[13px]/[normal] box-border text-[#1F7A3D] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  信息 Information
+                </div>
+              </div>
+              <div
+                data-pencil-name="骨架体"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[10px] p-[14px] justify-start items-start bg-[#F3FAF5] [outline:1px_solid_#D5EBDC] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[218px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[150px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[196px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[104px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="骨架-知识 Knowledge"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[10px] justify-start items-start"
+            >
+              <div
+                data-pencil-name="标签"
+                class="box-border w-fit h-fit shrink-0 flex flex-row gap-[6px] p-[5px_10px] justify-start items-center bg-[#F2EBFB] rounded-[999px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[13px]/[normal] box-border text-[#7A3BC8] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+                >
+                  知识 Knowledge
+                </div>
+              </div>
+              <div
+                data-pencil-name="骨架体"
+                class="box-border w-full h-fit shrink-0 flex flex-col gap-[10px] p-[14px] justify-start items-start bg-[#F8F4FD] [outline:1px_solid_#E4D8F5] [outline-offset:-0.5px] rounded-[10px]"
+              >
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[218px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[150px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[196px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+                <div
+                  data-pencil-name="骨架条"
+                  class="box-border w-[104px] h-[12px] shrink-0 bg-[#E9EBEF] rounded-[6px]"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="错误状态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            错误状态：抓取失败 + Toast
+          </div>
+          <div
+            data-pencil-name="失败横幅"
+            class="box-border w-full h-fit shrink-0 flex flex-row gap-[10px] p-[12px_16px] justify-start items-center bg-[#FBECEF] rounded-[10px]"
+          >
+            <div
+              data-pencil-name="原因"
+              class="text-[13px]/[normal] box-border [flex:1_1_0] text-[#8C1F2F] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left"
+            >
+              抓取失败：连接 chuance-policy-mcp 超时（10s），请确认本地服务已启动后重试
+            </div>
+            <div
+              data-pencil-name="重试按钮"
+              class="box-border w-fit shrink-0 h-fit flex flex-row gap-[5px] p-[6px_14px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[6px]"
+            >
+              <div
+                data-pencil-name="文字"
+                class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+              >
+                重试
+              </div>
+            </div>
+          </div>
+          <div
+            data-pencil-name="Toast示例"
+            class="box-border w-fit h-fit shrink-0 flex flex-row gap-[8px] p-[10px_14px] justify-start items-center bg-[#26292E] rounded-[8px]"
+          >
+            <div
+              data-pencil-name="文字"
+              class="text-[13px]/[normal] box-border text-[#FFFFFF] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+            >
+              模型调用失败：第 6 篇提取超时，已标记为失败
+            </div>
+            <div
+              data-pencil-name="操作"
+              class="text-[13px]/[normal] box-border text-[#FF9AA8] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+            >
+              重试
+            </div>
+          </div>
+        </div>
+        <div
+          data-pencil-name="单栏状态"
+          class="box-border w-full h-fit shrink-0 flex flex-col gap-[12px] p-[16px] justify-start items-start bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+        >
+          <div
+            data-pencil-name="分区标题"
+            class="text-[13px]/[normal] box-border text-[#646A73] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+          >
+            单栏：提取失败 / 空内容
+          </div>
+          <div
+            data-pencil-name="状态行"
+            class="box-border w-full h-fit shrink-0 flex flex-row gap-[14px] justify-start items-start"
+          >
+            <div
+              data-pencil-name="提取失败栏"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] p-[16px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[10px]"
+            >
+              <div
+                data-pencil-name="标题"
+                class="text-[13px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-semibold text-left [white-space:nowrap]"
+              >
+                提取失败
+              </div>
+              <div
+                data-pencil-name="原因"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                模型返回超时（30s），请点击重试
+              </div>
+              <div
+                data-pencil-name="重试按钮"
+                class="box-border w-fit h-fit shrink-0 flex flex-row gap-[5px] p-[6px_14px] justify-start items-center bg-[#FFFFFF] [outline:1px_solid_#CF121B] [outline-offset:-0.5px] rounded-[6px]"
+              >
+                <div
+                  data-pencil-name="文字"
+                  class="text-[12px]/[normal] box-border text-[#CF121B] font-['Noto_Sans_SC',system-ui,sans-serif] font-medium text-left [white-space:nowrap]"
+                >
+                  重试
+                </div>
+              </div>
+            </div>
+            <div
+              data-pencil-name="空内容栏"
+              class="box-border [flex:1_1_0] h-fit flex flex-col gap-[8px] p-[16px] justify-center items-center bg-[#FFFFFF] [outline:1px_solid_#E4E6EA] [outline-offset:-0.5px] rounded-[10px]"
+            >
+              <div
+                data-pencil-name="标题"
+                class="text-[12px]/[normal] box-border text-[#8F959E] font-['Noto_Sans_SC',system-ui,sans-serif] font-normal text-left [white-space:nowrap]"
+              >
+                暂无提取内容
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
