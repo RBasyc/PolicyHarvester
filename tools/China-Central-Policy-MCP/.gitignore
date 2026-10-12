@@ -1,0 +1,6 @@
+# 依赖目录（npm install 生成；上游仓库曾把整个 node_modules 提交进来，这里不再跟踪）
+node_modules/
+
+# 构建/运行产物
+*.log
+.DS_Store
