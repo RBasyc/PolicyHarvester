@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     pipeline_extract_concurrency: int = 1  # 并发提取的篇数（1 = 顺序执行，日志与 stage 语义最清晰）
     pipeline_max_body_chars: int = 12000  # 送进大模型的正文上限（超出截断）
     pipeline_mcp_timeout: int = 30  # 单次 MCP 调用超时秒数（检索/取全文）
+    pipeline_max_search_calls: int = 12  # 检索扇出上限：keyword × 发布机构 × 文种 组合最多打多少次 MCP（防组合爆炸）
 
     # --- MCP: central-policy（China-Central-Policy-MCP · 国务院政策检索，node stdio 启动，无需 API Key）---
     mcp_policy_enabled: bool = True

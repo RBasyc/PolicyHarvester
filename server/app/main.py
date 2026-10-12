@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from app.agent import tools as tools_registry
 from app.agent.graph import get_graph
 from app.agent.mcp import load_mcp_tools
-from app.api.routes import agent, health, policies, tasks
+from app.api.routes import agent, filters, health, policies, tasks
 from app.config import get_settings
 from app.db import repositories as repo
 from app.db.pool import close_pool, open_pool
@@ -78,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(agent.router)
     app.include_router(tasks.router)
     app.include_router(policies.router)
+    app.include_router(filters.router)
 
     return app
 
