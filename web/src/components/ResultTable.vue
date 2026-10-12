@@ -1,17 +1,55 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { results, type ExtractStatus } from '../data'
+import { booting, policies, refreshing, retryPolicy, summary, task } from '../store'
+import type { ExtractStatus } from '../api/types'
 
-const emit = defineEmits<{ rowClick: [index: number] }>()
+const emit = defineEmits<{ rowClick: [policyId: number] }>()
 
-const statusMap: Record<
-  ExtractStatus,
-  { label: string; icon: string; class: string }
-> = {
+const statusMap: Record<ExtractStatus, { label: string; icon: string; class: string }> = {
   extracted: { label: '已提取', icon: 'circle-check', class: 'ok' },
   extracting: { label: '提取中', icon: 'loader-circle', class: 'doing' },
   pending: { label: '未提取', icon: 'timer', class: 'todo' },
   failed: { label: '提取失败', icon: 'circle-x', class: 'fail' },
+}
+
+const loading = computed(() => booting.value || (refreshing.value && !policies.value.length))
+const showEmpty = computed(() => !loading.value && !policies.value.length)
+
+/** 空状态的三种成因：无任务 / 正在抓取 / 抓完了但一条都没有。 */
+const emptyState = computed(() => {
+  const current = task.value
+  if (!current) {
+    return {
+      title: '还没有抓取结果',
+      desc: '配置抓取参数后，点击右上角「开始抓取」获取政策原文',
+    }
+  }
+  if (current.status === 'pending' || (current.status === 'running' && current.fetched_count === 0)) {
+    return {
+      title: '正在抓取政策列表…',
+      desc: current.stage ?? '已连接抓取源，正在检索匹配的政策原文',
+    }
+  }
+  return {
+    title: '本次没有抓取到政策',
+    desc: `${current.stage ?? '抓取源未返回结果'}，可调整关键词或时间范围后重新点击「开始抓取」`,
+  }
+})
+
+const summaryText = computed(() => {
+  const s = summary.value
+  return `已提取 ${s.extracted} · 提取中 ${s.extracting} · 未提取 ${s.pending} · 失败 ${s.failed}`
+})
+
+const countText = computed(() => `共 ${summary.value.total} 篇`)
+
+function onRowClick(policyId: number) {
+  emit('rowClick', policyId)
+}
+
+async function onRetry(policyId: number) {
+  await retryPolicy(policyId)
 }
 </script>
 
@@ -20,9 +58,9 @@ const statusMap: Record<
     <header class="result-head">
       <div class="head-left">
         <h2 class="head-title">抓取结果</h2>
-        <span class="count-tag">共 10 篇</span>
+        <span class="count-tag">{{ countText }}</span>
       </div>
-      <p class="summary">已提取 6 · 提取中 1 · 未提取 2 · 失败 1</p>
+      <p v-if="policies.length" class="summary">{{ summaryText }}</p>
     </header>
 
     <div class="table-wrap">
@@ -34,41 +72,82 @@ const statusMap: Record<
         <div class="col expand-col"></div>
       </div>
 
-      <div
-        v-for="(row, i) in results"
-        :key="row.title"
-        class="table-row"
-        :class="{ active: i === 0 }"
-        role="button"
-        tabindex="0"
-        @click="emit('rowClick', i)"
-        @keydown.enter="emit('rowClick', i)"
-      >
-        <div class="col title-col">
-          <span class="row-title" :class="{ strong: i === 0 }">{{ row.title }}</span>
+      <!-- 骨架屏 -->
+      <template v-if="loading">
+        <div v-for="i in 5" :key="`skeleton-${i}`" class="table-row skeleton-row">
+          <div class="col title-col"><span class="skeleton skeleton-title"></span></div>
+          <div class="col date-col"><span class="skeleton skeleton-date"></span></div>
+          <div class="col link-col"><span class="skeleton skeleton-link"></span></div>
+          <div class="col status-col"><span class="skeleton skeleton-pill"></span></div>
+          <div class="col expand-col"></div>
         </div>
-        <div class="col date-col">
-          <span class="row-date">{{ row.date }}</span>
-        </div>
-        <div class="col link-col">
-          <a class="row-link" href="#" @click.stop>
-            <AppIcon name="external-link" :size="12" />
-            原文
-          </a>
-        </div>
-        <div class="col status-col">
-          <span class="status-group">
-            <span class="status-pill" :class="statusMap[row.status].class">
-              <AppIcon :name="statusMap[row.status].icon" :size="12" />
-              {{ statusMap[row.status].label }}
-            </span>
-            <span v-if="row.status === 'failed'" class="retry">重试</span>
-          </span>
-        </div>
-        <div class="col expand-col">
-          <AppIcon name="chevron-right" :size="16" class="expand-icon" :class="{ open: i === 0 }" />
-        </div>
+      </template>
+
+      <!-- 空状态 -->
+      <div v-else-if="showEmpty" class="empty">
+        <AppIcon name="inbox" :size="28" class="empty-icon" />
+        <p class="empty-title">{{ emptyState.title }}</p>
+        <p class="empty-desc">{{ emptyState.desc }}</p>
       </div>
+
+      <!-- 结果行 -->
+      <template v-else>
+        <div
+          v-for="row in policies"
+          :key="row.id"
+          class="table-row"
+          role="button"
+          tabindex="0"
+          @click="onRowClick(row.id)"
+          @keydown.enter="onRowClick(row.id)"
+        >
+          <div class="col title-col">
+            <span class="row-title">{{ row.title }}</span>
+          </div>
+          <div class="col date-col">
+            <span class="row-date">{{ row.publish_date ?? '—' }}</span>
+          </div>
+          <div class="col link-col">
+            <a
+              v-if="row.source_url"
+              class="row-link"
+              :href="row.source_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              @click.stop
+            >
+              <AppIcon name="external-link" :size="12" />
+              原文
+            </a>
+            <span v-else class="row-link muted">—</span>
+          </div>
+          <div class="col status-col">
+            <span class="status-group">
+              <span class="status-pill" :class="statusMap[row.status].class">
+                <AppIcon
+                  :name="statusMap[row.status].icon"
+                  :size="12"
+                  :class="{ spin: row.status === 'extracting' }"
+                />
+                {{ statusMap[row.status].label }}
+              </span>
+              <span
+                v-if="row.status === 'failed'"
+                class="retry"
+                role="button"
+                tabindex="0"
+                @click.stop="onRetry(row.id)"
+                @keydown.enter.stop="onRetry(row.id)"
+              >
+                重试
+              </span>
+            </span>
+          </div>
+          <div class="col expand-col">
+            <AppIcon name="chevron-right" :size="16" class="expand-icon" />
+          </div>
+        </div>
+      </template>
     </div>
 
     <footer class="result-foot">
@@ -152,10 +231,12 @@ const statusMap: Record<
   cursor: pointer;
 }
 
-.table-row.active {
-  background: #fbf1f2;
-  border-left: 3px solid var(--accent);
-  padding-left: 17px;
+.table-row:hover {
+  background: #fafbfc;
+}
+
+.skeleton-row {
+  cursor: default;
 }
 
 .col {
@@ -197,10 +278,6 @@ const statusMap: Record<
   text-overflow: ellipsis;
 }
 
-.row-title.strong {
-  font-weight: 600;
-}
-
 .row-date {
   font-size: 13px;
   color: var(--text-secondary);
@@ -215,6 +292,10 @@ const statusMap: Record<
   color: var(--blue);
   text-decoration: none;
   white-space: nowrap;
+}
+
+.row-link.muted {
+  color: var(--text-tertiary);
 }
 
 .status-group {
@@ -255,6 +336,16 @@ const statusMap: Record<
   color: var(--accent);
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .retry {
   font-size: 12px;
   font-weight: 500;
@@ -265,11 +356,69 @@ const statusMap: Record<
 
 .expand-icon {
   color: var(--text-tertiary);
-  transition: transform 0.2s;
 }
 
-.expand-icon.open {
-  transform: rotate(90deg);
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 44px 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.empty-icon {
+  color: var(--text-tertiary);
+}
+
+.empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.empty-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+  max-width: 460px;
+  line-height: 1.6;
+}
+
+.skeleton {
+  display: inline-block;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eef0f2 25%, #f6f7f9 37%, #eef0f2 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+.skeleton-title {
+  width: 70%;
+}
+
+.skeleton-date {
+  width: 72px;
+}
+
+.skeleton-link {
+  width: 40px;
+}
+
+.skeleton-pill {
+  width: 68px;
+  height: 20px;
+  border-radius: 999px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 .result-foot {

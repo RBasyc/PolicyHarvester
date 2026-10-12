@@ -1,5 +1,29 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
+import { form, startTask, starting, task } from '../store'
+import type { TaskStatus } from '../api/types'
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  pending: '排队中',
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+}
+
+const STATUS_TONE: Record<TaskStatus, string> = {
+  pending: 'wait',
+  running: 'run',
+  completed: 'ok',
+  failed: 'fail',
+}
+
+const label = computed(() => (task.value ? STATUS_LABEL[task.value.status] : '尚未抓取'))
+const tone = computed(() => (task.value ? STATUS_TONE[task.value.status] : 'wait'))
+const spinning = computed(() => task.value?.status === 'running')
+const keywordHint = computed(() =>
+  form.keywords.length ? `关键词 ${form.keywords.length} 个` : '未设置关键词',
+)
 </script>
 
 <template>
@@ -14,13 +38,20 @@ import AppIcon from './AppIcon.vue'
       </div>
     </div>
     <div class="actions">
-      <div class="status-tag">
-        <AppIcon name="loader-circle" :size="12" />
-        <span>运行中</span>
+      <div class="status-tag" :class="tone">
+        <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
+        <span>{{ label }}</span>
       </div>
-      <button class="start-btn" type="button">
+      <span class="hint">{{ keywordHint }}</span>
+      <button
+        class="start-btn"
+        type="button"
+        :disabled="starting"
+        :title="`抓取源：${form.source}`"
+        @click="startTask()"
+      >
         <AppIcon name="play" :size="14" />
-        <span>开始抓取</span>
+        <span>{{ starting ? '提交中…' : '开始抓取' }}</span>
       </button>
     </div>
   </header>
@@ -83,11 +114,44 @@ import AppIcon from './AppIcon.vue'
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  background: var(--blue-bg);
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
+}
+
+.status-tag.wait {
+  background: #f1f2f4;
+  color: var(--text-secondary);
+}
+
+.status-tag.run {
+  background: var(--blue-bg);
   color: var(--blue);
+}
+
+.status-tag.ok {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.status-tag.fail {
+  background: var(--red-bg);
+  color: var(--accent);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .start-btn {
@@ -104,6 +168,11 @@ import AppIcon from './AppIcon.vue'
   line-height: normal;
 }
 
+.start-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 @media (max-width: 640px) {
   .topbar {
     flex-wrap: wrap;
@@ -111,7 +180,8 @@ import AppIcon from './AppIcon.vue'
     padding: 14px 16px;
   }
 
-  .subtitle {
+  .subtitle,
+  .hint {
     display: none;
   }
 }

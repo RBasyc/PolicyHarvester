@@ -1,9 +1,96 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { keywords } from '../data'
+import { form, notify } from '../store'
+import type { ContentType, ScheduleType } from '../api/types'
 
 const collapsed = ref(false)
+const draftKeyword = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const CONTENT_TYPES: { value: ContentType; label: string }[] = [
+  { value: 'policy', label: '政策文件' },
+  { value: 'notice', label: '通知公告' },
+  { value: 'all', label: '全部' },
+]
+
+const SCHEDULES: { value: ScheduleType; label: string }[] = [
+  { value: 'manual', label: '手动' },
+  { value: 'daily', label: '每天' },
+  { value: 'weekly', label: '每周' },
+]
+
+type RangePreset = 'all' | 'week' | 'month'
+
+const rangePreset = computed<RangePreset>(() => {
+  if (!form.date_from && !form.date_to) return 'all'
+  const days = daysBetween(form.date_from, new Date())
+  if (days === 6 || days === 7) return 'week'
+  if (days === 29 || days === 30) return 'month'
+  return 'all'
+})
+
+function daysBetween(from: string | null, to: Date): number {
+  if (!from) return -1
+  const start = new Date(`${from}T00:00:00`)
+  return Math.round((to.getTime() - start.getTime()) / 86_400_000)
+}
+
+function isoDate(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10)
+}
+
+function applyPreset(preset: RangePreset) {
+  if (preset === 'all') {
+    form.date_from = null
+    form.date_to = null
+    return
+  }
+  const days = preset === 'week' ? 6 : 29
+  const today = new Date()
+  const from = new Date(today.getTime() - days * 86_400_000)
+  form.date_from = isoDate(from)
+  form.date_to = isoDate(today)
+}
+
+function addKeyword() {
+  const word = draftKeyword.value.trim()
+  if (!word) return
+  if (!form.keywords.includes(word)) form.keywords.push(word)
+  draftKeyword.value = ''
+}
+
+function removeKeyword(word: string) {
+  form.keywords = form.keywords.filter((item) => item !== word)
+}
+
+function pickFile() {
+  fileInput.value?.click()
+}
+
+async function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  try {
+    const data = JSON.parse(await file.text())
+    // 只回填认识的字段，其余忽略；避免坏配置把表单写成非法状态
+    if (typeof data.source === 'string' && data.source.trim()) form.source = data.source.trim()
+    if (['policy', 'notice', 'all'].includes(data.content_type)) form.content_type = data.content_type
+    if (['manual', 'daily', 'weekly'].includes(data.schedule)) form.schedule = data.schedule
+    if (typeof data.date_from === 'string' || data.date_from === null) form.date_from = data.date_from
+    if (typeof data.date_to === 'string' || data.date_to === null) form.date_to = data.date_to
+    if (Array.isArray(data.keywords)) {
+      form.keywords = [...new Set<string>(data.keywords.filter((k: unknown) => typeof k === 'string' && k.trim()))]
+    }
+    notify(`已导入配置：${file.name}`)
+  } catch {
+    notify(`导入失败：${file.name} 不是合法的 JSON 配置文件`)
+  }
+}
 </script>
 
 <template>
@@ -25,16 +112,23 @@ const collapsed = ref(false)
         <div class="field grow">
           <p class="label">抓取源</p>
           <div class="select">
-            <span class="select-value">国务院政策文件库（gov.cn）</span>
+            <span class="select-value">{{ form.source }}</span>
             <AppIcon name="chevron-down" :size="16" class="select-arrow" />
           </div>
         </div>
         <div class="field grow">
           <p class="label">内容类型</p>
           <div class="segmented">
-            <button type="button" class="segment active">政策文件</button>
-            <button type="button" class="segment">通知公告</button>
-            <button type="button" class="segment">全部</button>
+            <button
+              v-for="item in CONTENT_TYPES"
+              :key="item.value"
+              type="button"
+              class="segment"
+              :class="{ active: form.content_type === item.value }"
+              @click="form.content_type = item.value"
+            >
+              {{ item.label }}
+            </button>
           </div>
         </div>
       </div>
@@ -45,23 +139,52 @@ const collapsed = ref(false)
           <div class="chips-row">
             <div class="date-box">
               <AppIcon name="calendar" :size="14" class="date-icon" />
-              <span>2025-06-01</span>
+              <input v-model="form.date_from" type="date" class="date-input" aria-label="开始日期" />
             </div>
             <span class="to">至</span>
             <div class="date-box">
               <AppIcon name="calendar" :size="14" class="date-icon" />
-              <span>2025-06-08</span>
+              <input v-model="form.date_to" type="date" class="date-input" aria-label="结束日期" />
             </div>
-            <button type="button" class="chip active">近 7 天</button>
-            <button type="button" class="chip">近 30 天</button>
+            <button
+              type="button"
+              class="chip"
+              :class="{ active: rangePreset === 'all' }"
+              @click="applyPreset('all')"
+            >
+              不限
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :class="{ active: rangePreset === 'week' }"
+              @click="applyPreset('week')"
+            >
+              近 7 天
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :class="{ active: rangePreset === 'month' }"
+              @click="applyPreset('month')"
+            >
+              近 30 天
+            </button>
           </div>
         </div>
         <div class="field grow">
           <p class="label">抓取周期</p>
           <div class="chips-row">
-            <button type="button" class="chip active">手动</button>
-            <button type="button" class="chip">每天</button>
-            <button type="button" class="chip">每周</button>
+            <button
+              v-for="item in SCHEDULES"
+              :key="item.value"
+              type="button"
+              class="chip"
+              :class="{ active: form.schedule === item.value }"
+              @click="form.schedule = item.value"
+            >
+              {{ item.label }}
+            </button>
             <span class="demo-hint">Demo 仅展示，不执行定时任务</span>
           </div>
         </div>
@@ -70,22 +193,35 @@ const collapsed = ref(false)
       <div class="field">
         <p class="label">关键词（可添加多个）</p>
         <div class="tag-input">
-          <span v-for="kw in keywords" :key="kw" class="tag">
+          <span v-for="kw in form.keywords" :key="kw" class="tag">
             {{ kw }}
-            <AppIcon name="x" :size="12" class="tag-close" />
+            <AppIcon name="x" :size="12" class="tag-close" @click="removeKeyword(kw)" />
           </span>
-          <span class="placeholder">输入关键词，回车添加</span>
+          <input
+            v-model="draftKeyword"
+            class="tag-field"
+            type="text"
+            placeholder="输入关键词，回车添加"
+            @keydown.enter.prevent="addKeyword"
+          />
         </div>
       </div>
 
       <div class="divider"></div>
 
       <div class="config-foot">
-        <button type="button" class="import-btn">
+        <button type="button" class="import-btn" @click="pickFile">
           <AppIcon name="upload" :size="14" />
           <span>导入配置（JSON）</span>
         </button>
         <p class="import-hint">支持 .json 文件，导入后将覆盖当前表单配置</p>
+        <input
+          ref="fileInput"
+          class="file-input"
+          type="file"
+          accept="application/json,.json"
+          @change="onFileChange"
+        />
       </div>
     </template>
   </section>
@@ -235,13 +371,21 @@ const collapsed = ref(false)
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 13px;
-  color: var(--text-primary);
   white-space: nowrap;
 }
 
 .date-icon {
   color: var(--text-tertiary);
+}
+
+.date-input {
+  width: 118px;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
 .to {
@@ -306,8 +450,18 @@ const collapsed = ref(false)
   cursor: pointer;
 }
 
-.placeholder {
+.tag-field {
+  flex: 1 1 140px;
+  min-width: 140px;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: inherit;
   font-size: 13px;
+  color: var(--text-primary);
+}
+
+.tag-field::placeholder {
   color: var(--text-tertiary);
 }
 
@@ -340,6 +494,10 @@ const collapsed = ref(false)
 .import-hint {
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+.file-input {
+  display: none;
 }
 
 @media (max-width: 1024px) {

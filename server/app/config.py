@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: list[str] = ["*"]
 
+    # --- Database: agent_demo（docker 容器 server-db-1，见 database/README.md）---
+    database_url: str = "postgresql://kos:kos@localhost:5433/agent_demo"
+    db_pool_min_size: int = 1
+    db_pool_max_size: int = 10
+
+    # --- 抓取 / 提取流水线（Phase 4）---
+    pipeline_max_policies: int = 10  # 单次任务最多处理多少篇（demo 控时长）
+    pipeline_per_keyword_limit: int = 10  # 每个关键词向 MCP 请求多少条
+    pipeline_extract_concurrency: int = 1  # 并发提取的篇数（1 = 顺序执行，日志与 stage 语义最清晰）
+    pipeline_max_body_chars: int = 12000  # 送进大模型的正文上限（超出截断）
+    pipeline_mcp_timeout: int = 30  # 单次 MCP 调用超时秒数（检索/取全文）
+
     # --- MCP: central-policy（China-Central-Policy-MCP · 国务院政策检索，node stdio 启动，无需 API Key）---
     mcp_policy_enabled: bool = True
     mcp_policy_command: str = "node"

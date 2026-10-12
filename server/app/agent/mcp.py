@@ -11,11 +11,14 @@
 服务不可用时返回空列表，由调用方降级为仅本地工具，不影响主服务启动。
 """
 
+import json
 import logging
+from typing import Any
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from app.agent.tools import all_tools
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -51,3 +54,41 @@ async def load_mcp_tools() -> list[BaseTool]:
     except Exception:
         logger.exception("central-policy MCP 加载失败，降级为仅本地工具")
         return []
+
+
+# ---------- 结果解析 ----------
+#
+# MCP 工具统一把结果放在 content 里（`[{"type": "text", "text": "<JSON 字符串>"}]`），
+# 由 langchain-mcp-adapters 转成 LangChain 工具输出。不同版本可能是 str、
+# content 块列表或 (content, artifact) 元组，这里统一收敛成一个字符串 / 解析好的对象。
+
+
+def tool_text(result: Any) -> str:
+    """把 MCP 工具返回值摊平成纯文本。"""
+    if isinstance(result, tuple):  # (content, artifact)
+        return tool_text(result[0])
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        parts = []
+        for block in result:
+            if isinstance(block, dict):
+                parts.append(block.get("text", ""))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(result)
+
+
+def tool_json(result: Any) -> Any:
+    """解析 MCP 工具返回的 JSON 文本；解析失败抛 ValueError（由调用方标记失败）。"""
+    text = tool_text(result).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"MCP 返回内容不是合法 JSON：{text[:200]}") from exc
+
+
+def find_tool(name: str) -> BaseTool | None:
+    """按名字取工具（本地 + MCP）；未加载到返回 None。"""
+    return next((t for t in all_tools() if t.name == name), None)

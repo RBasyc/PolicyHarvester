@@ -1,6 +1,6 @@
 # Database
 
-Agent Demo 的 PostgreSQL 数据库脚本与表结构设计。按前端（[web/src/data.ts](../web/src/data.ts) + 各面板组件）所需的数据形态设计。
+Agent Demo 的 PostgreSQL 数据库脚本与表结构设计。按前端各面板（[web/src](../web/src)）与后端流水线所需的数据形态设计（早期与 `web/src/data.ts` mock 同源，该文件已随前端接入后端而移除）。
 
 ## 连接信息
 
@@ -48,8 +48,17 @@ bash database/reset.sh   # 删库重建（只影响 agent_demo）
 
 ## 种子数据
 
-[seed.sql](seed.sql) 与前端 mock 完全同源（7 篇政策、1 个运行中任务、5 条日志、1 篇完整提取含 8 条事实/摘要/要点/概念），前端联调时可直接替换 `data.ts`。
+[seed.sql](seed.sql) 与最初的前端 mock 同源（7 篇政策、1 个运行中任务、5 条日志、1 篇完整提取含 8 条事实/摘要/要点/概念）。
 
-## 后端接入
+> 注意：seed 是**离线样本**，与前端 mock 同源但并非逐项自洽（例如 `crawl_task.extracted_count` 与表内实际行数不一致）。真实运行以 **Phase 4 抓取流水线**写入的 gov.cn 数据为准；届时 `crawl_task` 的计数由后端从实际行数**聚合派生**，因此进度面板与结果表格不会出现 seed 里的这种偏差。
 
-[server/.env](../server/.env) 中可加 `DATABASE_URL=postgresql://kos:kos@localhost:5433/agent_demo`，用 `psycopg` / SQLAlchemy 连接。后续可把 LangGraph 的 `InMemorySaver` 换成 `PostgresSaver`（连接同一数据库）实现对话记忆持久化。
+## 后端接入（已完成）
+
+后端已通过 `psycopg3` 异步连接池读写本库：
+
+- 连接串在 [server/.env](../server/.env)：`DATABASE_URL=postgresql://kos:kos@localhost:5433/agent_demo`
+- 连接池：`server/app/db/pool.py`（进程级单例，`dict_row` + `autocommit`；库不可用时只告警不阻断服务启动）
+- 全部 SQL 集中在 `server/app/db/repositories.py`；业务 API 与抓取流水线见 [server/README.md](../server/README.md)
+- 冒烟测试：`cd server && uv run python scripts/test_db.py`
+
+后续可把 LangGraph 的 `InMemorySaver` 换成 `PostgresSaver`（连接同一数据库）实现对话记忆持久化。
