@@ -28,6 +28,12 @@ export interface TaskDTO {
   doc_types: string[]
   status: TaskStatus
   stage: string | null
+  /** 本任务覆盖的流水线参数（高级设置）；null = 该项用服务端 .env 默认 */
+  pipeline_max_policies: number | null
+  pipeline_per_keyword_limit: number | null
+  pipeline_extract_concurrency: number | null
+  pipeline_max_body_chars: number | null
+  pipeline_mcp_timeout: number | null
   /** 0-100 */
   progress: number
   /** 预计剩余秒数；无可靠估算时为 null */
@@ -124,6 +130,12 @@ export interface TaskCreatePayload {
   agencies: string[]
   /** 文种（pcodeJiguan，可多选） */
   doc_types: string[]
+  /** 本任务覆盖的流水线参数（高级设置，预填 .env 默认值）；null = 用服务端默认 */
+  pipeline_max_policies: number | null
+  pipeline_per_keyword_limit: number | null
+  pipeline_extract_concurrency: number | null
+  pipeline_max_body_chars: number | null
+  pipeline_mcp_timeout: number | null
 }
 
 /** 单个筛选项（名字 + 当前检索条件下的条数）。 */
@@ -151,6 +163,15 @@ export interface TaskConfirmPayload {
 /** 删除 / 清空任务的响应体：实际删除的任务数。 */
 export interface TaskDeleted {
   deleted: number
+}
+
+/** 生效的抓取 / 提取流水线参数（只读，来自后端 .env 的 PIPELINE_*，改配置需重启服务）。 */
+export interface PipelineConfig {
+  pipeline_max_policies: number
+  pipeline_per_keyword_limit: number
+  pipeline_extract_concurrency: number
+  pipeline_max_body_chars: number
+  pipeline_mcp_timeout: number
 }
 
 /** SSE 事件（`type` 字段区分）。 */

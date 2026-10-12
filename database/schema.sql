@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS crawl_task (
     -- gov.cn 检索筛选项（对齐官网「发布机构分类 / 文种」；API 重复参数被静默忽略，多选由服务端扇出）
     agencies        TEXT[] NOT NULL DEFAULT '{}',             -- 发布机构分类（bmfl 参数，facetMap.bmfl 的键）
     doc_types       TEXT[] NOT NULL DEFAULT '{}',             -- 文种（pcodeJiguan 参数：国令/国发/国函/国办发/国办函）
+    -- 本任务覆盖的流水线参数（页面「高级设置」；NULL = 用服务端 .env 的全局默认）
+    pipeline_max_policies        INTEGER,
+    pipeline_per_keyword_limit   INTEGER,
+    pipeline_extract_concurrency INTEGER,
+    pipeline_max_body_chars      INTEGER,
+    pipeline_mcp_timeout         INTEGER,
     status          task_status NOT NULL DEFAULT 'pending',
     -- 进度统计（冗余计数，便于前端直接读取，日志中的「已抓取 10/10 · 已提取 6/10」）
     total_count     INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +70,12 @@ CREATE TABLE IF NOT EXISTS crawl_task (
 -- 这里幂等补上「gov.cn 检索筛选项」列。只加列、不动数据，可重复执行（重跑 init.sh 安全）。
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS agencies  TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS doc_types TEXT[] NOT NULL DEFAULT '{}';
+-- 幂等补上「本任务覆盖的流水线参数」列（页面高级设置；可重复执行）
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_max_policies        INTEGER;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_per_keyword_limit   INTEGER;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_extract_concurrency INTEGER;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_max_body_chars      INTEGER;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_mcp_timeout         INTEGER;
 
 -- 政策文件（对应「抓取结果」表格每行 + 抽屉头部元信息）
 CREATE TABLE IF NOT EXISTS policy_document (

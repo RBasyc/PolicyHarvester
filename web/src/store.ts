@@ -12,6 +12,7 @@ import { ApiError, api, subscribeTaskStream } from './api/client'
 import type {
   FacetList,
   LogLine,
+  PipelineConfig,
   PolicyExtractionResponse,
   PolicyResultItem,
   PolicySummary,
@@ -62,11 +63,20 @@ export const form = reactive<TaskCreatePayload>({
   keywords: [],
   agencies: [],
   doc_types: [],
+  // 高级设置（流水线参数）：先置 null，bootstrap 拉到 .env 默认值后回填，用户可改，随任务提交
+  pipeline_max_policies: null,
+  pipeline_per_keyword_limit: null,
+  pipeline_extract_concurrency: null,
+  pipeline_max_body_chars: null,
+  pipeline_mcp_timeout: null,
 })
 
 /** 筛选器可选值（发布机构 / 文种）；loadFacets 填充，失败时后端已回退静态名单 */
 export const facets = ref<FacetList>({ agencies: [], doc_types: [], source: 'fallback' })
 export const facetsLoading = ref(false)
+
+/** 生效的流水线参数（高级设置面板只读展示）；加载失败时保持 null，面板显示占位。 */
+export const pipelineConfig = ref<PipelineConfig | null>(null)
 
 export const phase = computed<Phase>(() => {
   if (booting.value) return 'loading'
@@ -141,6 +151,7 @@ export async function bootstrap(): Promise<void> {
   try {
     // 筛选器名单与任务无关，并行拉（失败时后端已回退静态名单，不阻塞首屏）
     void loadFacets()
+    void loadPipelineConfig()
     const current = await api.currentTask()
     task.value = current
     if (current) {
@@ -176,6 +187,36 @@ export async function loadFacets(): Promise<void> {
   } finally {
     facetsLoading.value = false
   }
+}
+
+/** 拉生效的流水线参数（.env 默认值）；拉到后回填表单里仍为空的项，用户可在此基础上改。 */
+export async function loadPipelineConfig(): Promise<void> {
+  try {
+    const config = await api.pipelineConfig()
+    pipelineConfig.value = config
+    for (const key of [
+      'pipeline_max_policies',
+      'pipeline_per_keyword_limit',
+      'pipeline_extract_concurrency',
+      'pipeline_max_body_chars',
+      'pipeline_mcp_timeout',
+    ] as const) {
+      if (form[key] == null) form[key] = config[key]
+    }
+  } catch {
+    /* 保持 null，高级设置面板显示占位 */
+  }
+}
+
+/** 「高级设置」里的恢复默认：把五项重置回 .env 当前值。 */
+export function resetPipelineOverrides(): void {
+  const config = pipelineConfig.value
+  if (!config) return
+  form.pipeline_max_policies = config.pipeline_max_policies
+  form.pipeline_per_keyword_limit = config.pipeline_per_keyword_limit
+  form.pipeline_extract_concurrency = config.pipeline_extract_concurrency
+  form.pipeline_max_body_chars = config.pipeline_max_body_chars
+  form.pipeline_mcp_timeout = config.pipeline_mcp_timeout
 }
 
 /** 订阅任务进度（SSE）。服务端会先补发全部历史日志，所以这里清空本地日志。 */
@@ -217,12 +258,17 @@ export async function startTask(): Promise<void> {
   starting.value = true
   dismissToast()
   try {
-    // 日期输入框清空后拿到的是空串，后端要的是 null
+    // 日期 / 数字输入框清空后拿到的是空串，后端要的是 null（= 用服务端默认值）
     const { task_id } = await api.createTask({
       ...form,
       date_from: form.date_from || null,
       date_to: form.date_to || null,
       keywords: [...form.keywords],
+      pipeline_max_policies: form.pipeline_max_policies || null,
+      pipeline_per_keyword_limit: form.pipeline_per_keyword_limit || null,
+      pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,
+      pipeline_max_body_chars: form.pipeline_max_body_chars || null,
+      pipeline_mcp_timeout: form.pipeline_mcp_timeout || null,
     })
     task.value = await api.task(task_id)
     policies.value = []

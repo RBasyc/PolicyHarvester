@@ -8,6 +8,7 @@
 import type {
   FacetList,
   LogLine,
+  PipelineConfig,
   PolicyActionResponse,
   PolicyExtractionResponse,
   PolicyResultsResponse,
@@ -98,6 +99,9 @@ export const api = {
     request<PolicyActionResponse>(`/policies/${policyId}/retry`, { method: 'POST' }),
   reextractPolicy: (policyId: number) =>
     request<PolicyActionResponse>(`/policies/${policyId}/reextract`, { method: 'POST' }),
+
+  /** 生效的流水线参数（只读）；改配置走根目录 .env + 重启服务。 */
+  pipelineConfig: () => request<PipelineConfig>('/config/pipeline'),
 }
 
 export interface StreamHandlers {

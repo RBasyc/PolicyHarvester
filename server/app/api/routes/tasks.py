@@ -86,6 +86,14 @@ async def create_task(payload: TaskCreate) -> TaskCreated:
         keywords=payload.keywords,
         agencies=payload.agencies,
         doc_types=payload.doc_types,
+        # 高级设置的本任务覆盖（None 的键 = 用服务端 .env 默认）
+        pipeline_overrides={
+            "pipeline_max_policies": payload.pipeline_max_policies,
+            "pipeline_per_keyword_limit": payload.pipeline_per_keyword_limit,
+            "pipeline_extract_concurrency": payload.pipeline_extract_concurrency,
+            "pipeline_max_body_chars": payload.pipeline_max_body_chars,
+            "pipeline_mcp_timeout": payload.pipeline_mcp_timeout,
+        },
     )
     keyword_hint = "、".join(payload.keywords) if payload.keywords else "未设置"
     filter_bits = []

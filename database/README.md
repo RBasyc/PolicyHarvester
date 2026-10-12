@@ -56,7 +56,7 @@ bash database/reset.sh   # 删库重建（只影响 agent_demo）
 
 后端已通过 `psycopg3` 异步连接池读写本库：
 
-- 连接串在 [server/.env](../server/.env)：`DATABASE_URL=postgresql://kos:kos@localhost:5433/agent_demo`
+- 连接串在仓库根目录的 [.env](../.env)：`DATABASE_URL=postgresql://kos:kos@localhost:5433/agent_demo`
 - 连接池：`server/app/db/pool.py`（进程级单例，`dict_row` + `autocommit`；库不可用时只告警不阻断服务启动）
 - 全部 SQL 集中在 `server/app/db/repositories.py`；业务 API 与抓取流水线见 [server/README.md](../server/README.md)
 - 冒烟测试：`cd server && uv run python scripts/test_db.py`

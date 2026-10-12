@@ -62,8 +62,20 @@ class PipelineState(TypedDict, total=False):
     date_to: date | None
     agencies: list[str]  # 发布机构分类（bmfl）
     doc_types: list[str]  # 文种（pcodeJiguan）
+    # 本任务覆盖的流水线参数（页面「高级设置」；缺失/None = 用 .env 全局默认，见 _effective）
+    pipeline_max_policies: int | None
+    pipeline_per_keyword_limit: int | None
+    pipeline_extract_concurrency: int | None
+    pipeline_max_body_chars: int | None
+    pipeline_mcp_timeout: int | None
     policies: list[dict[str, Any]]  # 待提取篇目（id / title / source_url）
     error: str | None
+
+
+def _effective(source: dict[str, Any] | None, key: str) -> int:
+    """读本任务覆盖的流水线参数；任务行 / 状态里没有（或为空）时回退 .env 全局默认。"""
+    value = (source or {}).get(key)
+    return int(value) if value else getattr(get_settings(), key)
 
 
 # ---------- prepare ----------
@@ -89,6 +101,7 @@ async def fetch_node(state: PipelineState) -> dict:
             state.get("date_to"),
             state.get("agencies") or [],
             state.get("doc_types") or [],
+            overrides=state,
         )
     except PipelineError as exc:
         return {"error": str(exc)}
@@ -99,7 +112,7 @@ async def fetch_node(state: PipelineState) -> dict:
             "error": "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试",
         }
 
-    await repo.insert_policies(task_id, rows[: get_settings().pipeline_max_policies])
+    await repo.insert_policies(task_id, rows[: _effective(state, "pipeline_max_policies")])
     await repo.refresh_task_counts(task_id)
 
     # 以落库结果为准（去重/截断后真实入库的篇目）
@@ -142,11 +155,13 @@ async def _search_policies(
     date_to: date | None,
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重。
 
     gov.cn 检索 API 会静默忽略重复的筛选参数（`bmfl=A&bmfl=B` 等于不过滤），所以多选只能
     由服务端逐值扇出；组合数由 `pipeline_max_search_calls` 封顶，防止组合爆炸。
+    每关键词条数 / 超时可用 `overrides`（任务行上的高级设置）按任务覆盖。
     """
     tool = find_tool("get_latest_policies")
     if tool is None:
@@ -156,6 +171,8 @@ async def _search_policies(
         )
 
     settings = get_settings()
+    per_keyword = _effective(overrides, "pipeline_per_keyword_limit")
+    mcp_timeout = _effective(overrides, "pipeline_mcp_timeout")
     kw_list = keywords or [None]
     agency_list = agencies or [None]
     doc_type_list = doc_types or [None]
@@ -168,7 +185,7 @@ async def _search_policies(
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for keyword, agency, doc_type in combos:
-        args: dict[str, Any] = {"limit": settings.pipeline_per_keyword_limit}
+        args: dict[str, Any] = {"limit": per_keyword}
         if date_from:
             args["startdate"] = date_from.isoformat()
         if date_to:
@@ -180,9 +197,7 @@ async def _search_policies(
         if doc_type:
             args["doc_type"] = doc_type
         try:
-            raw = await asyncio.wait_for(
-                tool.ainvoke(args), timeout=settings.pipeline_mcp_timeout
-            )
+            raw = await asyncio.wait_for(tool.ainvoke(args), timeout=mcp_timeout)
         except Exception as exc:  # noqa: BLE001 - 统一转成设计稿要求的提示文案
             raise PipelineError(
                 f"抓取失败：连接 {MCP_SOURCE_LABEL} 超时或异常（{exc}），"
@@ -201,10 +216,18 @@ async def _search_policies(
             catalog_key = str(item.get("catalog_key") or item.get("catalog") or "")
             if facet_active and catalog_key == "gongbao":
                 continue
-            # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——标题不含关键词的直接丢弃
-            #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）
+            # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——与关键词毫无交集的直接丢弃
+            #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）。
+            #    注意 gov.cn 的 title 检索是**分词**的：q=水域 会命中「…流域防洪建设…」「…水污染防治…」
+            #    这类标题（水域 → 水 + 域），若强求「标题包含完整关键词」会把接口的正常命中整批误杀，
+            #    症状是「facet 明明有机构/条数、抓取却报未检索到」。所以这里只要求标题与关键词
+            #    **至少共享一个字**：足以拦下整页无关的浏览噪声，又不会误杀分词命中。
             title = str(item.get("title") or "").strip()
-            if keyword and keyword not in title:
+            if (
+                keyword
+                and keyword not in title
+                and not any(ch in title for ch in keyword)
+            ):
                 continue
             # ③ 日期必须落在窗口内；窗口已设但日期缺失也丢弃（否则「无」不可信）。
             #    前提：MCP 报的 date 必须与接口做窗口过滤用的是同一个日期——即站点显示的发布日期
@@ -264,18 +287,22 @@ async def extract_node(state: PipelineState) -> dict:
     task_id = state["task_id"]
     policies = state.get("policies") or []
     total = len(policies)
-    semaphore = asyncio.Semaphore(max(1, get_settings().pipeline_extract_concurrency))
+    semaphore = asyncio.Semaphore(max(1, _effective(state, "pipeline_extract_concurrency")))
 
     async def run(index: int, policy: dict[str, Any]) -> None:
         async with semaphore:
-            await _extract_one(task_id, index, total, policy)
+            await _extract_one(task_id, index, total, policy, overrides=state)
 
     await asyncio.gather(*(run(i, p) for i, p in enumerate(policies, start=1)))
     return {}
 
 
 async def _extract_one(
-    task_id: int, index: int, total: int, policy: dict[str, Any]
+    task_id: int,
+    index: int,
+    total: int,
+    policy: dict[str, Any],
+    overrides: dict[str, Any] | None = None,
 ) -> None:
     policy_id = policy["id"]
     title = policy["title"]
@@ -289,13 +316,16 @@ async def _extract_one(
     await repo.add_task_log(task_id, f"正在提取第 {index} 篇 …", tone="active")
 
     try:
-        fulltext = await _fetch_fulltext(url, policy_id)
+        fulltext = await _fetch_fulltext(url, policy_id, timeout=_effective(overrides, "pipeline_mcp_timeout"))
         body = str(fulltext.get("body") or "").strip()
         if len(body) < 50:
             raise ValueError("政策正文为空或过短，无法提取")
 
         payload, model = await extract_policy(
-            title=str(fulltext.get("title") or title), body=body, url=url
+            title=str(fulltext.get("title") or title),
+            body=body,
+            url=url,
+            max_body_chars=_effective(overrides, "pipeline_max_body_chars"),
         )
         await repo.save_extraction(
             policy_id,
@@ -326,7 +356,7 @@ async def _extract_one(
         await repo.refresh_task_counts(task_id)
 
 
-async def _fetch_fulltext(url: str | None, policy_id: int) -> dict[str, Any]:
+async def _fetch_fulltext(url: str | None, policy_id: int, *, timeout: int | None = None) -> dict[str, Any]:
     """取政策全文，并用解析出的机构/文号回填 policy_document。"""
     if not url:
         raise ValueError("缺少原文链接，无法抓取全文")
@@ -337,11 +367,10 @@ async def _fetch_fulltext(url: str | None, policy_id: int) -> dict[str, Any]:
             f"无法连接 {MCP_SOURCE_LABEL}（工具未加载），请确认本地服务已启动后重试"
         )
 
-    settings = get_settings()
     try:
         raw = await asyncio.wait_for(
             tool.ainvoke({"url": url, "policy_id": str(policy_id)}),
-            timeout=settings.pipeline_mcp_timeout,
+            timeout=timeout if timeout else get_settings().pipeline_mcp_timeout,
         )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"抓取全文失败（{exc}）") from exc
@@ -510,6 +539,8 @@ async def run_single_extraction(task_id: int, policy_id: int) -> None:
             logger.warning("重新提取失败：政策 %s 不属于任务 %s", policy_id, task_id)
             return
 
+        # 覆盖参数跟着任务行走（单篇重跑也尊重创建任务时的高级设置）
+        task_row = await repo.fetch_task(task_id) or {}
         await repo.set_task_running(task_id, f"正在重新提取：《{target['title']}》")
         total = len(rows)
         done = sum(
@@ -522,6 +553,7 @@ async def run_single_extraction(task_id: int, policy_id: int) -> None:
             done + 1,
             total,
             {"id": target["id"], "title": target["title"], "source_url": target["source_url"]},
+            overrides=task_row,
         )
 
         await repo.refresh_task_counts(task_id)
@@ -556,7 +588,18 @@ async def run_extraction_phase(task_id: int) -> None:
             for p in rows
             if p["status"] in ("pending", "extracting")  # 只处理还没出结果的
         ]
-        await extract_node({"task_id": task_id, "policies": policies})
+        # 覆盖参数从任务行重读（确认与检索可能隔了很久，创建请求早已结束）
+        task_row = await repo.fetch_task(task_id) or {}
+        await extract_node({"task_id": task_id, "policies": policies, **{
+            key: task_row.get(key)
+            for key in (
+                "pipeline_max_policies",
+                "pipeline_per_keyword_limit",
+                "pipeline_extract_concurrency",
+                "pipeline_max_body_chars",
+                "pipeline_mcp_timeout",
+            )
+        }})
         await summarize_node({"task_id": task_id})
     except asyncio.CancelledError:  # 终止 / 关停
         logger.info("任务 %s 的提取阶段被取消", task_id)
@@ -585,6 +628,12 @@ async def run_pipeline(task_id: int) -> None:
         # 用 .get 防御未迁移的老库（schema 迁移是先决条件）
         "agencies": list(task_row.get("agencies") or []),
         "doc_types": list(task_row.get("doc_types") or []),
+        # 高级设置的本任务覆盖（老库没有这些列时为 None = 用 .env 默认）
+        "pipeline_max_policies": task_row.get("pipeline_max_policies"),
+        "pipeline_per_keyword_limit": task_row.get("pipeline_per_keyword_limit"),
+        "pipeline_extract_concurrency": task_row.get("pipeline_extract_concurrency"),
+        "pipeline_max_body_chars": task_row.get("pipeline_max_body_chars"),
+        "pipeline_mcp_timeout": task_row.get("pipeline_mcp_timeout"),
     }
     try:
         await get_pipeline_graph().ainvoke(state)

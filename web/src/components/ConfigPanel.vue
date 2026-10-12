@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { facets, facetsLoading, form, loadFacets, notify } from '../store'
+import {
+  facets,
+  facetsLoading,
+  form,
+  loadFacets,
+  pipelineConfig,
+  resetPipelineOverrides,
+} from '../store'
 
 const collapsed = ref(false)
 const draftKeyword = ref('')
-const fileInput = ref<HTMLInputElement | null>(null)
+
+/** 高级设置（流水线参数，预填 .env 默认、可按任务覆盖）默认收起 */
+const advancedOpen = ref(false)
 
 /** 当前展开的下拉（发布机构 / 文种）；null = 两个都收起 */
 const openMenu = ref<'agency' | 'doc_type' | null>(null)
@@ -43,24 +52,22 @@ const summary = computed(() => {
 
 /** 已选机构（order 保持 facets 顺序，避免跳动） */
 const selectedAgencies = computed(() => {
-  const order = new Map(facets.value.agencies.map((a) => [a.name, a]))
-  const known = form.agencies.filter((a) => order.has(a))
-  const extra = form.agencies.filter((a) => !order.has(a))
-  const knownSorted = [...known].sort(
-    (a, b) => (order.get(a)?.count ?? 0) - (order.get(b)?.count ?? 0),
-  )
-  return [...knownSorted, ...extra].map((name) => ({
-    name,
-    count: order.get(name)?.count ?? null,
-  }))
+  const order = new Set(facets.value.agencies.map((a) => a.name))
+  return [...form.agencies.filter((a) => order.has(a)), ...form.agencies.filter((a) => !order.has(a))]
 })
 
-const selectedDocTypes = computed(() =>
-  form.doc_types.map((name) => ({
-    name,
-    count: facets.value.doc_types.find((d) => d.name === name)?.count ?? null,
-  })),
-)
+const selectedDocTypes = computed(() => form.doc_types)
+
+/**
+ * 下拉头部的「当前口径」说明：条数显示删掉后，列表有没有随条件收窄肉眼看不出来了，
+ * 这里用一行汇总（按什么条件 · 共几项）让「实时更新」保持可见。
+ */
+const facetScope = computed(() => {
+  const bits: string[] = []
+  if (form.keywords.length) bits.push(`关键词「${form.keywords[0]}」`)
+  if (form.date_from || form.date_to) bits.push(`${form.date_from ?? '…'} ~ ${form.date_to ?? '…'}`)
+  return bits.join(' · ')
+})
 
 function daysBetween(from: string | null, to: Date): number {
   if (!from) return -1
@@ -113,36 +120,20 @@ function toggleDocType(name: string) {
   else form.doc_types.push(name)
 }
 
-function pickFile() {
-  fileInput.value?.click()
-}
+/** 高级设置的五个流水线参数（键与后端 `pipeline_*` 列一一对应）。 */
+const PIPELINE_KEYS = [
+  'pipeline_max_policies',
+  'pipeline_per_keyword_limit',
+  'pipeline_extract_concurrency',
+  'pipeline_max_body_chars',
+  'pipeline_mcp_timeout',
+] as const
 
-async function onFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-
-  try {
-    const data = JSON.parse(await file.text())
-    // 只回填认识的字段，其余忽略；避免坏配置把表单写成非法状态
-    if (typeof data.source === 'string' && data.source.trim()) form.source = data.source.trim()
-    if (typeof data.date_from === 'string' || data.date_from === null) form.date_from = data.date_from
-    if (typeof data.date_to === 'string' || data.date_to === null) form.date_to = data.date_to
-    if (Array.isArray(data.keywords)) {
-      form.keywords = [...new Set<string>(data.keywords.filter((k: unknown) => typeof k === 'string' && k.trim()))]
-    }
-    if (Array.isArray(data.agencies)) {
-      form.agencies = [...new Set<string>(data.agencies.filter((k: unknown) => typeof k === 'string' && k.trim()))]
-    }
-    if (Array.isArray(data.doc_types)) {
-      form.doc_types = [...new Set<string>(data.doc_types.filter((k: unknown) => typeof k === 'string' && k.trim()))]
-    }
-    notify(`已导入配置：${file.name}`)
-    void loadFacets()
-  } catch {
-    notify(`导入失败：${file.name} 不是合法的 JSON 配置文件`)
-  }
+/** 数字输入框 → 表单字段：清空 / 非法输入记为 null（= 该项用服务端 .env 默认）。 */
+function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
+  const raw = (event.target as HTMLInputElement).value.trim()
+  const value = Number(raw)
+  form[key] = raw !== '' && Number.isFinite(value) && value > 0 ? value : null
 }
 </script>
 
@@ -152,7 +143,7 @@ async function onFileChange(event: Event) {
       <div class="head-left">
         <AppIcon name="settings-2" :size="16" class="head-icon" />
         <h2 class="head-title">抓取配置</h2>
-        <p class="head-desc">通过表单设置，或从 JSON 配置文件导入</p>
+        <p class="head-desc">设置时间范围、关键词与筛选条件</p>
         <span v-if="summary" class="head-summary">{{ summary }}</span>
       </div>
       <button class="collapse" type="button" @click="collapsed = !collapsed">
@@ -250,6 +241,9 @@ async function onFileChange(event: Event) {
                 <p v-if="facetsLoading" class="menu-hint">加载中…</p>
                 <p v-else-if="!facets.agencies.length" class="menu-hint">没有相关内容</p>
                 <template v-else>
+                  <p class="menu-meta">
+                    {{ facetScope ? `${facetScope} · 共 ${facets.agencies.length} 项` : `全部 · 共 ${facets.agencies.length} 项` }}
+                  </p>
                   <button
                     v-for="opt in facets.agencies"
                     :key="opt.name"
@@ -259,7 +253,6 @@ async function onFileChange(event: Event) {
                     @click="toggleAgency(opt.name)"
                   >
                     <span class="menu-name">{{ opt.name }}</span>
-                    <span v-if="opt.count" class="menu-count">{{ opt.count }}</span>
                     <AppIcon
                       v-if="form.agencies.includes(opt.name)"
                       name="check"
@@ -274,9 +267,9 @@ async function onFileChange(event: Event) {
               </div>
             </div>
             <div v-if="selectedAgencies.length" class="chips-row">
-              <span v-for="a in selectedAgencies" :key="a.name" class="tag accent">
-                {{ a.name }}<template v-if="a.count"> · {{ a.count }}</template>
-                <AppIcon name="x" :size="12" class="tag-close" @click="toggleAgency(a.name)" />
+              <span v-for="a in selectedAgencies" :key="a" class="tag accent">
+                {{ a }}
+                <AppIcon name="x" :size="12" class="tag-close" @click="toggleAgency(a)" />
               </span>
             </div>
           </div>
@@ -302,6 +295,9 @@ async function onFileChange(event: Event) {
                 <p v-if="facetsLoading" class="menu-hint">加载中…</p>
                 <p v-else-if="!facets.doc_types.length" class="menu-hint">没有相关内容</p>
                 <template v-else>
+                  <p class="menu-meta">
+                    {{ facetScope ? `${facetScope} · 共 ${facets.doc_types.length} 项` : `全部 · 共 ${facets.doc_types.length} 项` }}
+                  </p>
                   <button
                     v-for="opt in facets.doc_types"
                     :key="opt.name"
@@ -311,7 +307,6 @@ async function onFileChange(event: Event) {
                     @click="toggleDocType(opt.name)"
                   >
                     <span class="menu-name">{{ opt.name }}</span>
-                    <span v-if="opt.count" class="menu-count">{{ opt.count }}</span>
                     <AppIcon
                       v-if="form.doc_types.includes(opt.name)"
                       name="check"
@@ -326,9 +321,9 @@ async function onFileChange(event: Event) {
               </div>
             </div>
             <div v-if="selectedDocTypes.length" class="chips-row">
-              <span v-for="d in selectedDocTypes" :key="d.name" class="tag accent">
-                {{ d.name }}<template v-if="d.count"> · {{ d.count }}</template>
-                <AppIcon name="x" :size="12" class="tag-close" @click="toggleDocType(d.name)" />
+              <span v-for="d in selectedDocTypes" :key="d" class="tag accent">
+                {{ d }}
+                <AppIcon name="x" :size="12" class="tag-close" @click="toggleDocType(d)" />
               </span>
             </div>
           </div>
@@ -336,26 +331,97 @@ async function onFileChange(event: Event) {
         <div class="hint-row">
           <AppIcon name="info" :size="12" class="hint-icon" />
           <p class="hint-text">
-            输入关键词后，选项将按检索结果实时更新并标注数量；无匹配时提示「没有相关内容」；留空可直接浏览全部机构与文种
+            关键词回车提交后，选项将按检索结果实时收窄（下拉顶部显示当前口径）；无匹配时提示「没有相关内容」；留空可直接浏览全部机构与文种
           </p>
         </div>
       </div>
 
       <div class="divider"></div>
 
-      <div class="config-foot">
-        <button type="button" class="import-btn" @click="pickFile">
-          <AppIcon name="upload" :size="14" />
-          <span>导入配置（JSON）</span>
+      <!-- 高级设置：流水线参数，预填 .env 默认值，可按任务覆盖，默认收起 -->
+      <div class="advanced">
+        <button
+          type="button"
+          class="advanced-toggle"
+          :aria-expanded="advancedOpen"
+          @click="advancedOpen = !advancedOpen"
+        >
+          <span class="advanced-title">高级设置</span>
+          <span class="advanced-hint">抓取 / 提取流水线参数（预填 .env 默认值，可按任务覆盖）</span>
+          <AppIcon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" :size="16" class="advanced-arrow" />
         </button>
-        <p class="import-hint">支持 .json 文件，导入后将覆盖当前表单配置</p>
-        <input
-          ref="fileInput"
-          class="file-input"
-          type="file"
-          accept="application/json,.json"
-          @change="onFileChange"
-        />
+        <div v-if="advancedOpen" class="advanced-body">
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_MAX_POLICIES</code>
+            <span class="advanced-label">单次任务最多处理篇数</span>
+            <input
+              class="advanced-input"
+              type="number"
+              min="1"
+              :value="form.pipeline_max_policies ?? ''"
+              @input="setPipelineValue('pipeline_max_policies', $event)"
+            />
+          </div>
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_PER_KEYWORD_LIMIT</code>
+            <span class="advanced-label">每个关键词向 MCP 请求条数</span>
+            <input
+              class="advanced-input"
+              type="number"
+              min="1"
+              :value="form.pipeline_per_keyword_limit ?? ''"
+              @input="setPipelineValue('pipeline_per_keyword_limit', $event)"
+            />
+          </div>
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_EXTRACT_CONCURRENCY</code>
+            <span class="advanced-label">并发提取篇数（1 = 顺序）</span>
+            <input
+              class="advanced-input"
+              type="number"
+              min="1"
+              :value="form.pipeline_extract_concurrency ?? ''"
+              @input="setPipelineValue('pipeline_extract_concurrency', $event)"
+            />
+          </div>
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_MAX_BODY_CHARS</code>
+            <span class="advanced-label">送进大模型的正文上限（字）</span>
+            <input
+              class="advanced-input"
+              type="number"
+              min="500"
+              :value="form.pipeline_max_body_chars ?? ''"
+              @input="setPipelineValue('pipeline_max_body_chars', $event)"
+            />
+          </div>
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_MCP_TIMEOUT</code>
+            <span class="advanced-label">单次 MCP 调用超时（秒）</span>
+            <input
+              class="advanced-input"
+              type="number"
+              min="1"
+              :value="form.pipeline_mcp_timeout ?? ''"
+              @input="setPipelineValue('pipeline_mcp_timeout', $event)"
+            />
+          </div>
+          <div class="advanced-foot">
+            <p class="advanced-note">
+              {{ pipelineConfig
+                  ? '仅对下一次抓取任务生效；留空或填非法值时该项用服务端默认'
+                  : '默认值暂不可用（后端未启动？），可直接手动填写' }}
+            </p>
+            <button
+              type="button"
+              class="advanced-reset"
+              :disabled="!pipelineConfig"
+              @click="resetPipelineOverrides"
+            >
+              恢复默认
+            </button>
+          </div>
+        </div>
       </div>
     </template>
   </section>
@@ -557,6 +623,19 @@ async function onFileChange(event: Event) {
   line-height: normal;
 }
 
+/* 头部口径行：按什么条件过滤 · 共几项（条数显示删掉后，用它体现「实时更新」） */
+.menu-meta {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px 5px;
+  background: var(--card);
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: normal;
+}
+
 .menu-item:hover {
   background: #f1f2f4;
 }
@@ -571,16 +650,6 @@ async function onFileChange(event: Event) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.menu-count {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
-.menu-item.active .menu-count {
-  color: var(--accent);
 }
 
 .menu-check {
@@ -723,34 +792,134 @@ async function onFileChange(event: Event) {
   background: var(--divider);
 }
 
-.config-foot {
+.advanced {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.import-btn {
+.advanced-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  line-height: normal;
+}
+
+.advanced-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--primary);
-  line-height: normal;
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
-.import-hint {
+.advanced-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--text-tertiary);
 }
 
-.file-input {
-  display: none;
+.advanced-arrow {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.advanced-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.advanced-row:last-of-type {
+  border-bottom: none;
+}
+
+.advanced-env {
+  flex: 0 0 260px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.advanced-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.advanced-input {
+  flex: 0 0 96px;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.advanced-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.advanced-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.advanced-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.advanced-reset {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.advanced-reset:hover:not(:disabled) {
+  border-color: var(--text-tertiary);
+}
+
+.advanced-reset:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 @media (max-width: 1024px) {
@@ -761,6 +930,14 @@ async function onFileChange(event: Event) {
 
   .head-desc {
     display: none;
+  }
+
+  .advanced-hint {
+    display: none;
+  }
+
+  .advanced-env {
+    flex-basis: 150px;
   }
 }
 </style>

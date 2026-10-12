@@ -8,7 +8,6 @@
 server/
 ├── main.py                 # 开发启动入口（python main.py，带热重载）
 ├── pyproject.toml          # 依赖管理（uv）
-├── .env.example            # 环境变量模板
 ├── scripts/
 │   ├── test_mcp.py         # MCP 连通性冒烟测试
 │   └── test_db.py          # 数据库读写冒烟测试
@@ -31,7 +30,9 @@ server/
     │   ├── health.py       #   GET  /health
     │   ├── agent.py        #   POST /api/chat、POST /api/chat/stream (SSE)
     │   ├── tasks.py        #   任务：创建 / 查询 / 日志 / 结果 / SSE 进度
-    │   └── policies.py     #   单篇：提取详情 / 重试 / 重新提取
+    │   ├── policies.py     #   单篇：提取详情 / 重试 / 重新提取
+    │   ├── filters.py      #   GET  /api/filters/facets（发布机构 / 文种可选值）
+    │   └── config.py       #   GET  /api/config/pipeline（流水线默认参数，只读）
     └── schemas/            # 请求 / 响应模型（task.py、policy.py）
 ```
 
@@ -41,7 +42,8 @@ server/
 # 1. 安装依赖（需要 uv）
 uv sync
 
-# 2. 配置认证：复制 .env.example 为 .env，二选一
+# 2. 配置认证：复制仓库根目录（../.env.example）的模板为 ../.env，二选一
+#    （.env 统一放在仓库根目录，server 会自动定位，与启动时的工作目录无关）
 #    - ANTHROPIC_API_KEY       官方 API Key
 #    - ANTHROPIC_AUTH_TOKEN    Bearer Token（Kimi 等兼容网关，需配合 ANTHROPIC_BASE_URL）
 #    抓取流水线还需要 DATABASE_URL（默认 postgresql://kos:kos@localhost:5433/agent_demo）
@@ -148,5 +150,5 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 - **改图结构**：在 `app/agent/graph.py` 中添加节点和边（如人工审批 `interrupt`、条件路由等）。
 - **改状态**：在 `app/agent/state.py` 的 `AgentState` 中添加字段（配合自定义 reducer）。
 - **改流水线**：在 `app/pipeline/crawl_graph.py` 加节点与边；新增落库字段需同时改 `database/schema.sql`、`app/db/repositories.py`、`app/schemas/*.py` 与 `web/src/api/types.ts`（前端类型是手工镜像，不会自动生成）。
-- **换模型 / 网关**：修改 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
-- **调流水线参数**：`.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）。
+- **换模型 / 网关**：修改根目录 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
+- **调流水线参数**：根目录 `.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）；页面「高级设置」可在创建任务时按任务覆盖（值落在 `crawl_task.pipeline_*` 列，NULL = 用全局默认）。

@@ -150,21 +150,36 @@ async def create_task(
     keywords: list[str],
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
+    pipeline_overrides: dict[str, int | None] | None = None,
 ) -> int:
     """新建抓取任务（status=pending），返回 task_id。
 
+    `pipeline_overrides` 是页面「高级设置」提交的本任务参数（键为 `pipeline_*` 列名）；
+    覆盖值必须**落库**而不是只留在请求里：第二段提取是确认后从库里重建的，
+    到那时请求早已结束，只有任务行上的值还能读到。NULL = 用服务端 .env 默认。
+
     已弃用的 content_type / schedule 列交给 schema 默认值兜底，不再写入。
     """
+    overrides = pipeline_overrides or {}
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO crawl_task
-                    (source, date_from, date_to, keywords, agencies, doc_types, status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+                    (source, date_from, date_to, keywords, agencies, doc_types, status,
+                     pipeline_max_policies, pipeline_per_keyword_limit,
+                     pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (source, date_from, date_to, keywords, agencies or [], doc_types or []),
+                (
+                    source, date_from, date_to, keywords, agencies or [], doc_types or [],
+                    overrides.get("pipeline_max_policies"),
+                    overrides.get("pipeline_per_keyword_limit"),
+                    overrides.get("pipeline_extract_concurrency"),
+                    overrides.get("pipeline_max_body_chars"),
+                    overrides.get("pipeline_mcp_timeout"),
+                ),
             )
             row = await cur.fetchone()
             return int(row["id"])

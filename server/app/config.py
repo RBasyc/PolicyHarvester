@@ -6,13 +6,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 仓库根目录（server/app/config.py -> 上三级）
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# .env 统一放在仓库根目录（与 web/、database/ 平级），与启动时的工作目录无关。
 # 先把 .env 加载进 os.environ：
 # anthropic SDK 会自动读取 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL 等变量，
 # 而 pydantic-settings 只把 .env 读进 Settings 对象，不会写回环境。
-load_dotenv()
-
-# 仓库根目录（server/app/config.py -> 上三级）
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_REPO_ROOT / ".env")
 
 # China-Central-Policy-MCP 本地构建产物（tools/ 下克隆并自带 build/）
 _DEFAULT_POLICY_MCP_ENTRY = str(
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
     """应用全局配置。"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

@@ -31,6 +31,13 @@ class TaskDTO(BaseModel):
     agencies: list[str] = Field(default_factory=list)
     doc_types: list[str] = Field(default_factory=list)
 
+    # 本任务覆盖的流水线参数（页面「高级设置」；None = 用服务端 .env 默认）
+    pipeline_max_policies: int | None = Field(None, ge=1, le=50)
+    pipeline_per_keyword_limit: int | None = Field(None, ge=1, le=50)
+    pipeline_extract_concurrency: int | None = Field(None, ge=1, le=8)
+    pipeline_max_body_chars: int | None = Field(None, ge=500, le=100_000)
+    pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600)
+
     status: TaskStatus
     stage: str | None = None
 
@@ -60,6 +67,12 @@ class TaskDTO(BaseModel):
             )},
             agencies=list(row.get("agencies") or []),
             doc_types=list(row.get("doc_types") or []),
+            # 本任务的流水线参数覆盖（老库没有这些列时为 None = 用全局默认）
+            pipeline_max_policies=row.get("pipeline_max_policies"),
+            pipeline_per_keyword_limit=row.get("pipeline_per_keyword_limit"),
+            pipeline_extract_concurrency=row.get("pipeline_extract_concurrency"),
+            pipeline_max_body_chars=row.get("pipeline_max_body_chars"),
+            pipeline_mcp_timeout=row.get("pipeline_mcp_timeout"),
             progress=_progress(row),
             eta_seconds=_eta_seconds(row),
         )
@@ -131,6 +144,13 @@ class TaskCreate(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     agencies: list[str] = Field(default_factory=list, description="发布机构分类（bmfl），可多选")
     doc_types: list[str] = Field(default_factory=list, description="文种（pcodeJiguan），可多选")
+
+    # 本任务覆盖的流水线参数（页面「高级设置」；不传 / 传 null = 用服务端 .env 默认）
+    pipeline_max_policies: int | None = Field(None, ge=1, le=50, description="单次任务最多处理多少篇")
+    pipeline_per_keyword_limit: int | None = Field(None, ge=1, le=50, description="每个关键词向 MCP 请求多少条")
+    pipeline_extract_concurrency: int | None = Field(None, ge=1, le=8, description="并发提取篇数")
+    pipeline_max_body_chars: int | None = Field(None, ge=500, le=100_000, description="送进大模型的正文上限")
+    pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600, description="单次 MCP 调用超时秒数")
 
     @field_validator("keywords")
     @classmethod

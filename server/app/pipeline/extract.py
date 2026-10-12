@@ -85,15 +85,23 @@ SYSTEM_PROMPT = """你是政策文件结构化提取助手。用户会给你一�
 """
 
 
-async def extract_policy(*, title: str, body: str, url: str | None = None) -> tuple[ExtractionPayload, str]:
+async def extract_policy(
+    *,
+    title: str,
+    body: str,
+    url: str | None = None,
+    max_body_chars: int | None = None,
+) -> tuple[ExtractionPayload, str]:
     """提取一篇政策的「事实/信息/知识」。
 
+    `max_body_chars` 为任务级覆盖（页面高级设置）；不传时用 .env 的全局默认。
     返回 `(结果, 使用的模型名)`；失败时抛异常。
     """
     settings = get_settings()
+    limit = max_body_chars if max_body_chars else settings.pipeline_max_body_chars
     truncated = body.strip()
-    if len(truncated) > settings.pipeline_max_body_chars:
-        truncated = truncated[: settings.pipeline_max_body_chars] + "\n…（正文过长已截断）"
+    if len(truncated) > limit:
+        truncated = truncated[:limit] + "\n…（正文过长已截断）"
 
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),

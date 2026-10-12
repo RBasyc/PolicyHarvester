@@ -8,11 +8,11 @@
 Agent-Demo/
 ├── design.pen            # pen.dev 设计稿（加密格式，仅通过 pen.dev MCP 读取）
 ├── PLAN.md / TODO.md     # 打通三端的实施计划与进度清单
+├── .env.example          # 环境变量模板（复制为同目录 .env；server/web 共用的配置都在这）
 ├── database/             # PostgreSQL 脚本：建库 / 建表 / 种子数据（见 database/README.md）
 ├── server/               # 后端：FastAPI + LangGraph + PostgreSQL
 │   ├── main.py           # 开发启动入口（python main.py，带热重载）
 │   ├── pyproject.toml    # 依赖管理（uv）
-│   ├── .env.example      # 环境变量模板
 │   ├── scripts/
 │   │   ├── test_mcp.py   # 单独测试 China-Central-Policy-MCP 连通性
 │   │   └── test_db.py    # 数据库读写冒烟测试
@@ -34,8 +34,10 @@ Agent-Demo/
 │       ├── api/routes/
 │       │   ├── health.py   #   GET  /health
 │       │   ├── agent.py    #   POST /api/chat、POST /api/chat/stream (SSE)
-│       │   ├── tasks.py    #   任务：创建 / 查询 / 日志 / 结果 / SSE 进度
-│       │   └── policies.py #   单篇：提取详情 / 重试 / 重新提取
+│       │   ├── tasks.py    #   任务：创建 / 新增高级设置覆盖 / 查询 / 日志 / 结果 / SSE 进度
+│       │   ├── policies.py #   单篇：提取详情 / 重试 / 重新提取
+│       │   ├── filters.py  #   GET  /api/filters/facets（发布机构 / 文种可选值）
+│       │   └── config.py   #   GET  /api/config/pipeline（流水线默认参数，只读）
 │       └── schemas/        # 请求 / 响应模型（task.py、policy.py）
 ├── tools/                # 本地 MCP 服务（China-Central-Policy-MCP，node 构建产物）
 └── web/                  # 前端：Vue 3 + TypeScript + Vite
@@ -55,7 +57,7 @@ Agent-Demo/
 cd server
 uv sync                    # 需要 uv
 
-# 配置认证：复制 .env.example 为 .env，二选一
+# 配置认证：复制仓库根目录的 .env.example 为 .env，二选一
 #   - ANTHROPIC_API_KEY       官方 API Key
 #   - ANTHROPIC_AUTH_TOKEN    Bearer Token（Kimi 等兼容网关，需配合 ANTHROPIC_BASE_URL）
 
@@ -140,5 +142,5 @@ bash database/reset.sh   # 删库重建
 - **加工具**：在 `server/app/agent/tools.py` 中用 `@tool` 定义并加入 `TOOLS`，图会自动识别执行。
 - **改图结构**：在 `server/app/agent/graph.py` 中添加节点和边（如 `interrupt` 人工审批、条件路由）。
 - **改抓取流程**：在 `server/app/pipeline/crawl_graph.py` 加节点与边；新增落库字段需同时改 `database/schema.sql`、`server/app/db/repositories.py`、`server/app/schemas/*.py` 与 `web/src/api/types.ts`（前端类型是手工镜像）。
-- **调流水线参数**：`.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）。
-- **换模型 / 网关**：修改 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
+- **调流水线参数**：根目录 `.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）；页面「高级设置」可在创建任务时按任务覆盖。
+- **换模型 / 网关**：修改根目录 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
