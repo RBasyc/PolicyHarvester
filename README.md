@@ -25,8 +25,6 @@
 
 > 大多数政策爬取工具要么乱抓一气、要么黑箱烧钱。PolicyLens 把「人类判断」放回流程中间：先检索候选、标出建议入库的、等你勾选确认，再逐篇做结构化提取。**不确认，不提取，不浪费 token。**
 
-[30 秒演示 GIF 占位：输入"2024 新能源补贴政策" → 候选列表弹出并标注建议 → 勾选 3 篇 → 表格逐行刷出]
-
 ---
 
 ## 它解决什么问题
@@ -44,23 +42,35 @@ PolicyLens 的做法是：**把最贵的提取步骤放在人工确认之后**�
 
 ## 一句话能力清单
 
-| 能力 | 一句话说明 |
-|---|---|
+| 能力             | 一句话说明                                                             |
+| ---------------- | ---------------------------------------------------------------------- |
 | **人工确认闸门** | 检索完先停住，前端标注「建议入库 / 不建议 / 已在库」，勾选后才开始提取 |
-| **检索续抓** | 在调用预算内翻页凑够新增篇数，已在库/不建议的条目不占配额 |
-| **正文预检** | 抓全文后清洗，挡下正文过短的薄壳通知与图片版红头文件 |
-| **三段式提取** | 每篇产出 事实 / 信息 / 知识 三区，失败可单篇重试 |
-| **跨任务成果库** | 按 source_url 去重沉淀，支持机构/文种/年份筛选 |
-| **定时入库** | 按分钟/小时/每日/每周自动抓取，跳过确认闸门直接入库 |
-| **成本可观测** | 可用页数、正文长度、并发数、检索预算均可按任务覆盖 |
+| **检索续抓**     | 在调用预算内翻页凑够新增篇数，已在库/不建议的条目不占配额              |
+| **正文预检**     | 抓全文后清洗，挡下正文过短的薄壳通知与图片版红头文件                   |
+| **三段式提取**   | 每篇产出 事实 / 信息 / 知识 三区，失败可单篇重试                       |
+| **跨任务成果库** | 按 source_url 去重沉淀，支持机构/文种/年份筛选                         |
+| **定时入库**     | 按分钟/小时/每日/每周自动抓取，跳过确认闸门直接入库                    |
+| **成本可观测**   | 可用页数、正文长度、并发数、检索预算均可按任务覆盖                     |
 
 ---
 
 ## 它长什么样
 
-[前端截图：确认闸门界面，左列候选带灰度标注，右侧勾选框]
+**抓取任务页** — 配置时间范围 / 关键词 / 机构 / 文种，下方是实时进度条与日志流（图中为定时任务触发：跨轮去重 → 检索候选 → 逐篇提取）
 
-[前端截图：提取结果三栏——事实 / 信息 / 知识]
+![抓取任务页](screenshot/crawl-task.png)
+
+**结果抽屉** — 点击结果表任意一行，右侧抽屉即时展开该篇的「事实 / 信息 / 知识」三段式提取
+
+![提取结果抽屉](screenshot/result-drawer.png)
+
+**成果库** — 跨任务按 source_url 去重沉淀，支持机构 / 文种 / 年份筛选与分页
+
+![政策成果库](screenshot/library.png)
+
+**政策详情页** — 归档原文 + 三栏提取详情 + 单篇重新提取
+
+![政策详情页](screenshot/policy-detail.png)
 
 ---
 
@@ -79,9 +89,9 @@ Windows 用户双击 `start.bat`。脚本会自动完成环境自检、依赖安
 
 启动后：
 
-| 服务 | 地址 |
-|---|---|
-| 前端界面 | http://localhost:5173 |
+| 服务          | 地址                       |
+| ------------- | -------------------------- |
+| 前端界面      | http://localhost:5173      |
 | 后端 API 文档 | http://localhost:8000/docs |
 
 **LLM 认证二选一，切勿同时配置：**
@@ -128,13 +138,13 @@ FastAPI（:8000）
 
 所有配置集中在仓库根目录的 `.env`。完整注释见 `.env.example`。
 
-| 分组 | 关键项 | 说明 |
-|---|---|---|
-| LLM 认证 | `ANTHROPIC_API_KEY` **或** `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` | 二选一，同时配置会被网关拒绝 |
-| 模型 | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS` | `PIPELINE_MODELS` 是高级设置下拉框的数据源，热读 |
-| 数据库 | `DATABASE_URL` | 默认 `postgresql://kos:kos@localhost:5433/agent_demo` |
-| 流水线 | `PIPELINE_*` | 最大篇数、每页条数、检索预算、提取并发、正文截断、预检阈值 |
-| 入库判别 | `JUDGE_*` | 判别服务地址与提示词；**不可达时 fail-open**，不阻断抓取 |
+| 分组     | 关键项                                                                   | 说明                                                       |
+| -------- | ------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| LLM 认证 | `ANTHROPIC_API_KEY` **或** `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` | 二选一，同时配置会被网关拒绝                               |
+| 模型     | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS`                          | `PIPELINE_MODELS` 是高级设置下拉框的数据源，热读           |
+| 数据库   | `DATABASE_URL`                                                           | 默认 `postgresql://kos:kos@localhost:5433/agent_demo`      |
+| 流水线   | `PIPELINE_*`                                                             | 最大篇数、每页条数、检索预算、提取并发、正文截断、预检阈值 |
+| 入库判别 | `JUDGE_*`                                                                | 判别服务地址与提示词；**不可达时 fail-open**，不阻断抓取   |
 
 页面的「高级设置」可在创建任务时按任务覆盖其中几项与提取模型。
 
@@ -145,10 +155,12 @@ FastAPI（:8000）
 完整字段与进度语义见 `server/README.md`，交互式文档在 http://localhost:8000/docs。
 
 **对话（ReAct Agent）**
+
 - `POST /api/chat` — 非流式；相同 `thread_id` 共享记忆（`InMemorySaver`，重启丢失）
 - `POST /api/chat/stream` — SSE：`{"type":"token"|"done"|"error", ...}`
 
 **抓取任务**
+
 - `POST /api/tasks` — 创建并后台启动，返回 `201 {"task_id": n}`
 - `POST /api/tasks/{id}/confirm` — 提交确认勾选，触发第二段提取
 - `GET /api/tasks/current` / `GET /api/tasks/{id}` / `GET /api/tasks/{id}/logs`
@@ -157,13 +169,16 @@ FastAPI（:8000）
 - `POST /api/tasks/{id}/cancel` · `DELETE /api/tasks/{id}` · `DELETE /api/tasks`
 
 **政策与成果库**
+
 - `GET /api/policies` / `/api/policies/meta` / `/api/policies/{id}`
 - `GET|POST /api/policies/{id}/extraction|retry|reextract`
 
 **定时入库**
+
 - `GET|POST /api/schedules` · `POST /api/schedules/{id}/toggle|run` · `DELETE /api/schedules/{id}`
 
 **其他**
+
 - `GET /health` · `GET /api/filters/facets` · `GET /api/config/pipeline`
 
 > 错误统一为 `{"detail": "<字符串>"}`，前端 `ApiError` 直接渲染该字段。
@@ -238,14 +253,14 @@ policylens/
 
 ## 如何扩展
 
-| 想做的事 | 改哪里 |
-|---|---|
-| 加一个对话工具 | `server/app/agent/tools.py` 用 `@tool` 定义并加入 `TOOLS`，图自动识别 |
-| 改对话图结构 | `server/app/agent/graph.py`（新增节点/边、`interrupt` 人工审批、条件路由） |
-| 加抓取流水线阶段 | `server/app/pipeline/crawl_graph.py` 加节点与边 |
+| 想做的事           | 改哪里                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| 加一个对话工具     | `server/app/agent/tools.py` 用 `@tool` 定义并加入 `TOOLS`，图自动识别                                 |
+| 改对话图结构       | `server/app/agent/graph.py`（新增节点/边、`interrupt` 人工审批、条件路由）                            |
+| 加抓取流水线阶段   | `server/app/pipeline/crawl_graph.py` 加节点与边                                                       |
 | **加一个落库字段** | 需**同时**改四处：`database/schema.sql` → `repositories.py` → `schemas/*.py` → `web/src/api/types.ts` |
-| 调流水线参数 | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖 |
-| 换模型 / 网关 | `.env` 的 `MODEL_NAME`、`ANTHROPIC_*`，或往 `PIPELINE_MODELS` 注册表加一项 |
+| 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
+| 换模型 / 网关      | `.env` 的 `MODEL_NAME`、`ANTHROPIC_*`，或往 `PIPELINE_MODELS` 注册表加一项                            |
 
 > ⚠️ 任何改变 `policy_document` / `extraction` 行的写操作，都要跟着调用 `refresh_task_counts()`，否则派生的进度计数会与结果表格漂移。
 
@@ -253,16 +268,16 @@ policylens/
 
 ## 文档
 
-| 文档 | 内容 |
-|---|---|
-| PLAN.md | 打通三端的整体实施计划 |
-| TODO.md | 逐阶段任务清单与进度日志 |
-| CLAUDE.md | 面向 AI 编码助手的深度架构说明（踩坑记录最全） |
-| server/README.md | 后端 API 字段、进度语义 |
-| database/README.md | 表结构设计 |
+| 文档               | 内容                                           |
+| ------------------ | ---------------------------------------------- |
+| PLAN.md            | 打通三端的整体实施计划                         |
+| TODO.md            | 逐阶段任务清单与进度日志                       |
+| CLAUDE.md          | 面向 AI 编码助手的深度架构说明（踩坑记录最全） |
+| server/README.md   | 后端 API 字段、进度语义                        |
+| database/README.md | 表结构设计                                     |
 
 ---
 
 ## License
 
-[待补]
+[Apache-2.0](LICENSE) — 随意使用、修改与分发（含明确的专利授权），保留版权声明、NOTICE 与许可证全文即可。
