@@ -1,10 +1,11 @@
 <div align="center">
 
-# Policy-Pipeline
+# PolicyHarvester
 
-**政策文件事实提取 Agent**
+**一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
 
-从国务院政策库检索政策原文 → 由 LangGraph + Claude 完成「**事实 / 信息 / 知识**」三段式结构化提取 → 前端实时展示抓取进度、确认闸门、结果表格与提取详情。
+> 大多数政策爬取工具要么乱抓一气、要么黑箱烧钱。PolicyHarvester 把「人类判断」放回流程中间：先检索候选、标出建议入库的、等你勾选确认，再逐篇做结构化提取。**不确认，不提取，不浪费 token。**
+
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](server/pyproject.toml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](server/app/main.py)
@@ -19,14 +20,6 @@
 
 ---
 
-# PolicyLens
-
-**一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
-
-> 大多数政策爬取工具要么乱抓一气、要么黑箱烧钱。PolicyLens 把「人类判断」放回流程中间：先检索候选、标出建议入库的、等你勾选确认，再逐篇做结构化提取。**不确认，不提取，不浪费 token。**
-
----
-
 ## 它解决什么问题
 
 政策研究者、合规团队、投资机构每周要处理几十份政策文件。现有的 AI 工具普遍有两个问题：
@@ -34,7 +27,7 @@
 - **乱抓**：一次拉回几十篇，一半是无关的薄壳通知或图片版红头文件
 - **不透明**：token 花在哪、为什么提取这几篇，全程黑箱
 
-PolicyLens 的做法是：**把最贵的提取步骤放在人工确认之后**。检索阶段只做廉价判断（标题级入库判别 + 正文预检），你确认后再进入昂贵的结构化提取。
+PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之后**。检索阶段只做廉价判断（标题级入库判别 + 正文预检），你确认后再进入昂贵的结构化提取。
 
 这也是它和一般「政策 RAG」或「爬虫 demo」的核心区别——**它把成本控制设计成了流程的一部分，而不是事后补救。**
 
@@ -79,8 +72,8 @@ PolicyLens 的做法是：**把最贵的提取步骤放在人工确认之后**�
 **前置依赖**：uv ≥ 0.4、Node.js ≥ 18、pnpm ≥ 8、Docker
 
 ```bash
-git clone https://github.com/RBasyc/policylens
-cd policylens
+git clone https://github.com/RBasyc/policyharvester
+cd policyharvester
 cp .env.example .env   # 填入 LLM 认证
 ./start.sh
 ```
@@ -233,7 +226,7 @@ cd tools/China-Central-Policy-MCP && npm install && npm run build
 ## 目录结构
 
 ```
-policylens/
+policyharvester/
 ├── start.sh / start.bat     # 一键启动 / 自检 / 停止
 ├── .env.example             # 环境变量模板
 ├── PLAN.md / TODO.md        # 实施计划 / 进度清单
