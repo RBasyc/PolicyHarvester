@@ -12,6 +12,11 @@ import type {
   PolicyActionResponse,
   PolicyExtractionResponse,
   PolicyResultsResponse,
+  ScheduleCreatePayload,
+  ScheduleDeleted,
+  ScheduleJobDTO,
+  ScheduleToggled,
+  ScheduleTriggered,
   StreamEvent,
   TaskConfirmPayload,
   TaskCreatePayload,
@@ -102,6 +107,19 @@ export const api = {
 
   /** 生效的流水线参数（只读）；改配置走根目录 .env + 重启服务。 */
   pipelineConfig: () => request<PipelineConfig>('/config/pipeline'),
+
+  // ---- 定时入库（Phase 11） ----
+  listSchedules: () => request<ScheduleJobDTO[]>('/schedules'),
+  createSchedule: (payload: ScheduleCreatePayload) =>
+    request<ScheduleJobDTO>('/schedules', { method: 'POST', body: JSON.stringify(payload) }),
+  /** 启用 / 停用切换，返回切换后的任务快照。 */
+  toggleSchedule: (jobId: number) =>
+    request<ScheduleToggled>(`/schedules/${jobId}/toggle`, { method: 'POST' }),
+  /** 立即运行一轮（后台执行）；进度到抓取进度面板看。 */
+  runSchedule: (jobId: number) =>
+    request<ScheduleTriggered>(`/schedules/${jobId}/run`, { method: 'POST' }),
+  deleteSchedule: (jobId: number) =>
+    request<ScheduleDeleted>(`/schedules/${jobId}`, { method: 'DELETE' }),
 }
 
 export interface StreamHandlers {

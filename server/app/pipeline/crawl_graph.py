@@ -156,12 +156,14 @@ async def _search_policies(
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
     overrides: dict[str, Any] | None = None,
+    exclude_urls: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重。
 
     gov.cn 检索 API 会静默忽略重复的筛选参数（`bmfl=A&bmfl=B` 等于不过滤），所以多选只能
     由服务端逐值扇出；组合数由 `pipeline_max_search_calls` 封顶，防止组合爆炸。
     每关键词条数 / 超时可用 `overrides`（任务行上的高级设置）按任务覆盖。
+    `exclude_urls` 供定时任务做跨轮去重：历史轮次已入库的链接直接跳过（见 app/scheduler.py）。
     """
     tool = find_tool("get_latest_policies")
     if tool is None:
@@ -241,6 +243,9 @@ async def _search_policies(
                 continue
             url = str(item.get("url") or "").strip()
             if not url or url in seen:
+                continue
+            # ④ 定时任务跨轮去重：本任务历史轮次已入库的链接不再重复抓取
+            if exclude_urls and url in exclude_urls:
                 continue
             seen.add(url)
             merged.append(item)

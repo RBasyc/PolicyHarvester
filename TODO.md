@@ -26,6 +26,7 @@
 | 7 | 端到端验收与文档 | 🟨 进行中（文档已对齐，端到端验收待用户执行） | — |
 | 8 | 终止 / 清空与重启收尾 | 🟨 进行中（代码完成，待实机验收） | — |
 | 9 | 检索结果人工确认环节 | 🟨 进行中（代码完成，待实机验收） | — |
+| 10 | 定时自动入库（调度器 + 弹窗管理） | 🟨 进行中（代码完成，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -403,6 +404,36 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 
 ---
 
+## Phase 10 — 定时自动入库（调度器 + 弹窗管理）
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：抓取配置可选「一次性入库 / 定时自动入库」；定时任务以弹窗卡片管理；触发时自动全流程入库
+
+- [x] 用户裁定四点：① 触发时**自动全选、直接跑完**（跳过人工确认环节）；② 周期用**预设档位**（每 N 分钟 / 每 N 小时 / 每天 / 每周）；③ **落库 + 重启自动恢复**调度；④ 「时间范围」须解决**固定窗口 + 上限 N + 最新优先 = 永远只抓到最新 N 篇**的问题
+- [x] 窗口方案：「**滑动游标 + 跨轮去重**」——`cursor_before` 为下轮窗口上界；本轮**抓满上限** → 游标推进到「本轮最旧一篇发布日期 − 1 天」向更早回填；**没抓满**（窗口掏空）→ 游标回 NULL，下轮回到 `[date_from, 今天]` 追新；每轮检索时把本任务历史轮次已入库的 `source_url` 从候选剔除，剔空记 `noop`（正常跳过，不留失败任务、不重复入库）
+- [x] `schema.sql`：`schedule_job` 表（配置快照 + 调度参数 + 游标 + 运行记录）；`crawl_task.schedule_job_id` 外键（`ON DELETE SET NULL`，删定时任务保留历史抓取）；`schedule_type` 枚举补 `minutely`/`hourly`；全部幂等（老库重跑 `init.sh` 即可，不重置数据）
+- [x] `app/scheduler.py`：进程内调度循环（15 s tick，先认领 `next_run_at` 再执行，防同 tick 重触发）；`compute_next_run`（本地时间口径，weekly 对齐 Python `weekday()` 0=周一）；`run_schedule_job`（检索 → 建任务 → 自动确认 → `run_extraction_phase` 直接提取 → 游标推进 / 结果落库）
+- [x] `app/api/routes/schedules.py`：`GET/POST /api/schedules`、`POST /{id}/toggle`、`POST /{id}/run`（立即运行）、`DELETE /{id}`；`app/schemas/schedule.py` 校验（档位必填项、文种白名单等）
+- [x] lifespan：启动时 `start_scheduler()`（补排缺失 `next_run_at` 的启用任务）→ 关停 `shutdown_scheduler()`
+- [x] `_search_policies` 增 `exclude_urls` 跨轮去重参数
+- [x] 前端：`ConfigPanel` 加「入库方式」（一次性 / 定时自动入库）；`TopBar` 加「定时任务」入口（启用数徽标），定时模式下主按钮变「定时入库」开弹窗；新增 `ScheduleModal.vue`（遮罩层 + 居中卡片：列表视图 启停/立即运行/删除/新建，新建视图 周期档位 + 条件输入 + 当前表单快照摘要）；`store` 增 `ingestMode` / 弹窗状态 / `loadSchedules` / `createSchedule` / `toggleScheduleJob` / `deleteScheduleJob` / `runScheduleNow`；`types.ts` / `client.ts` 同步
+- [x] 静态检查：Python 6 文件 `py_compile` 全通过；`compute_next_run` 8 条断言通过（分钟/小时/每天未到点/每天已过点/每周未到/每周已过/当天已过）；`ScheduleCreate` 合法 + 4 组非法档位组合校验通过；前端未跑 `vue-tsc`（按约定不主动构建）
+
+**验收**（待用户执行）：
+
+```bash
+cd database && bash init.sh     # 幂等补 schedule_job 表 / 新列 / 新枚举值（不重置数据）
+# 重启 server（8001）与 web（5174）
+```
+
+1. 抓取配置选「定时自动入库」→ 顶栏点「定时入库」→ 弹窗选「每 15 分钟」创建 → 列表出现该任务，「下次触发」≈ 15 分钟后
+2. 列表点「立即运行」→ 抓取进度面板出现新任务并全流程跑完（无人工确认环节）；日志含「定时任务触发」「自动确认全部篇目」
+3. 再次「立即运行」：若窗口内无新发文 → 任务列表该任务显示「无新增」，且不产生新任务/重复数据
+4. 上限 3 + 长窗口回填验证：连续点「立即运行」若干次，应逐轮向更早日期推进（9 月抓满 3 篇后，下轮抓 8 月的），而不是反复抓同一批
+5. 停用开关 → 「下次触发」变「已停用」，不再触发；再启用恢复排程；服务重启后调度自动恢复
+6. `GET /api/schedules` 返回列表形状与 DTO 一致
+
+---
+
 ## 进度日志
 
 > 规则：每完成一个 Phase（或发生阻塞/范围变更）追加一行，倒序不必——按时间正序追加。
@@ -444,3 +475,4 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 | 2026-10-12 | 9 | 缺陷修复（facet 有 1 条却报「未检索到匹配的政策原文」） | 用户报：「筛选完时间后单独勾选发布机构、文种默认全部，发布机构明明显示有 1 条，却提示抓取失败：未检索到匹配的政策原文」。3 个探针（`.probe/agency_mismatch.py`（facet 计数 vs 实拉条目）、`slice_probe.py`（照 MCP 原样复现 catMap 拼接 + `slice(0,limit)`）、`date_field_probe.py`（换窗口验证接口按哪个字段过滤））查明根因**在 MCP 的日期取值**：`getLatestPolicies.ts` 原先 `formatDateFromEpoch(result.ptime) \|\| formatDate(result.ptimeStr)`——**优先取 `ptime`（epoch，实测常是更早的「成文日期」）**，而 gov.cn 做时间窗过滤用的是**站点显示的那个发布日期**（`ptimeStr`/`pubtimeStr`）。实测（窗口 2026-10-05..10-12 + `bmfl=工业和信息化部`，即用户场景）：唯一真命中 `ptimeStr=2026.10.08` 在窗内、`ptime` 解码为 **2026-10-03 出窗**；同批 `bumenfile` 行 `ptimeStr=2026.10.10` / `ptime=2026-09-11` 同样出窗；12 条公报行 `ptimeStr` 全为 `2026.10.10`（该期公报出版日）而 `ptime` 散在 2026-05..09。**于是流水线规则③「日期必须落在窗口内」把接口按窗口返回的行整批误判越界 → 0 条**，而 facet 计数（1）是接口自己的口径，二者必然矛盾。第二个（潜在同类）缺陷：MCP 先按 catMap 顺序全量拼接再 `items.slice(0, ten)`（`pipeline_per_keyword_limit=10`），公报行**恒不受 `bmfl`/`pcodeJiguan` 过滤**（恒 12–56 条），一旦非公报行不足十条，`limit` 会被随后被调用方整批丢弃的公报占满。**修**：① MCP 日期优先级反转为**文本日期优先、epoch 兜底**（`formatDate(ptimeStr\|pubtimeStr\|publishtime\|time) \|\| formatDateFromEpoch(ptime\|pubtime)`，两者都覆盖：另一个探针里接口对整批记录**不返回** `ptimeStr`，此时只能落 epoch，而该批 `ptime` 8/9、20/25 在窗内）；② MCP 在 **`slice` 之前**丢弃公报（`(agency \|\| docType) && catKey === "gongbao"` → `continue`），空筛选的浏览态仍保留公报；③ 流水线侧规则①保留为兜底并注明「MCP 已先丢，防线上跑旧 `build/index.js`」、规则③补注「其前提是 MCP 报的 date 与接口窗口同源」。**未动** `_parse_date`（本就兼容 `-/.` 分隔，非根因）。静态检查：`npx tsc --noEmit` 通过（`TYPECHECK DONE`，无输出）；**⚠️ 必须 `npm run build`** 重建 `build/index.js`，否则本次 MCP 改动与上一轮一样是静默空操作。**待验收**：复现原场景（选时间窗 + 单个发布机构）应能检索到与 facet 计数一致的篇目 |
 | 2026-10-12 | 9 | 需求变更（配置面板精简 + 高级设置） | 用户四点要求：① 发布机构 / 文种**删掉条数显示**；② 删除「导入 JSON 配置」；③ `.env` 移到**仓库根目录**；④ `.env` 里的五个 `PIPELINE_*` 参数显示在页面「高级设置」（默认收起），且**用户可改了用**（后续消息确认：展示 .env 默认值、按任务覆盖）。实现：**前端** `ConfigPanel.vue` 删菜单 `.menu-count` 与已选 chip 的条数后缀、简化 `selectedAgencies/selectedDocTypes`（不再按 count 排序）；删 `pickFile/onFileChange/fileInput/config-foot` 与导入按钮；新增默认收起的「高级设置」区（五个数字输入框，预填 `GET /api/config/pipeline` 的 .env 默认值，`setPipelineValue` 把空/非法输入记为 null，附「恢复默认」）。**后端**：`app/config.py` 改为按 `__file__` 定位根目录 `.env`（`load_dotenv(_REPO_ROOT/'.env')` + `env_file` 同步，工作目录无关）；新增 `app/schemas/config.py::PipelineConfig` 与 `GET /api/config/pipeline`（只读透出生效默认值）；`crawl_task` 增 5 个可空 `pipeline_*` 列（`schema.sql` 建表 + 幂等 `ALTER TABLE ADD COLUMN IF NOT EXISTS`，老库重跑 `init.sh` 即可，不重置数据）；`create_task` 落库覆盖值；`TaskCreate`/`TaskDTO` 增字段（`from_row` 用 `.get` 防御老库）；`crawl_graph`：`PipelineState` 增 5 个覆盖键 + `_effective()`（任务值优先、空则回退 .env），`fetch_node`（max_policies）、`_search_policies`（per_keyword_limit/mcp_timeout）、`extract_node`（extract_concurrency）、`_fetch_fulltext`（mcp_timeout）、`extract_policy`（max_body_chars）全部改为「任务覆盖 → 全局默认」两段取值；`run_extraction_phase`/`run_single_extraction` **从任务行重读覆盖值**（两段式流水线第二段是确认后重建的，创建请求早已结束，只有库里的值还在）。**覆盖值必须落库的原因**：第二段提取由 `POST /{id}/confirm` 触发，`run_extraction_phase` 只拿 task_id 从库里重建，不传请求参数。前端 `types.ts`/`store.ts`（form 增 5 字段、`loadPipelineConfig` 回填空位、`resetPipelineOverrides`、`startTask` 空串转 null）、`client.ts` 加 `api.pipelineConfig`。**文档**：`.gitignore`（根，忽略 `.env`）、`.env.example` 头注、`CLAUDE.md`（config 段 + Business API 补 `/api/config/pipeline`）、根/server/database 三个 `README.md` 的 .env 位置与路由清单。静态检查：Python 9 文件 `ast.parse` 全通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：重跑 `database/init.sh`（幂等补列）+ 重启 server；页面上发布机构/文种下拉不再显示条数、无导入按钮；「高级设置」展开显示 .env 默认值，改成 5/并发 2 后发任务，日志应体现（如第 N/M 篇节奏变化）；单篇重试沿用创建任务时的覆盖值 |
 | 2026-10-12 | 9 | 缺陷修复（关键词复核误杀分词命中） | 用户报「输入『水域』，发布机构有 6 项、文种为空，抓取报未检索到匹配的政策原文」。实探（`get_latest_policies q=水域`）：接口正常返回 gongwen 17 / bumenfile 35 条候选、items 标题全是「…流域防洪建设…」「…水污染防治…」——**gov.cn `searchfield=title` 是分词检索**（水域 → 水 + 域），不是精确子串；而流水线复核规则②「标题必须包含完整关键词」把这批正常命中整批误杀。修：规则②放宽为「标题与关键词**至少共享一个字**」（`keyword not in title and not any(ch in title)` 才丢）——仍能拦住「0 命中静默退回全量浏览列表」的整页噪声（与关键词毫无交集），不再误杀分词命中。实测：`水域` 3 篇通过（= .env 的 PER_KEYWORD_LIMIT=3，全 gongwen）、`量子计算` 0 篇（真无命中，依旧如实失败）。文档：CLAUDE.md quirks 段同步。**待验收**：重启 server 后搜「水域」应能出候选篇目 |
+| 2026-10-13 | 10 | 代码完成 | 需求：定时自动运行抓取工作流。用户裁定：① 触发时**自动全选直接跑完**（跳过人工确认）；② 周期用**预设档位**（每 N 分钟/每 N 小时/每天/每周）；③ **落库 + 重启自动恢复**；④ 窗口须解决「固定窗口+上限 N+最新优先=永远只抓最新 N 篇」（用户举例：9 月 3 篇上限 3，永远抓这 3 篇、8 月永远拿不到）。窗口方案：**滑动游标 + 跨轮去重**——`cursor_before` 为下轮窗口上界（NULL=追 `[date_from, 今天]`；非 NULL=回填 `[date_from, cursor-1天]`）；本轮**抓满上限**→游标推进到「本轮最旧一篇发布日期−1 天」；**没抓满**→窗口掏空、游标回 NULL 追新；每轮把历史轮次已入库 `source_url` 从候选剔除，剔空记 `noop`（正常跳过，不留失败任务、不重复入库）。**后端**：`schema.sql` 加 `schedule_job` 表（配置快照+调度参数+游标+运行记录，幂等）+ `crawl_task.schedule_job_id`（`ON DELETE SET NULL`）+ `schedule_type` 枚举补 `minutely`/`hourly`；`app/scheduler.py`（15 s tick 调度循环、先认领 `next_run_at` 再执行、`compute_next_run` 本地时间口径 weekly 对齐 Python weekday()、`run_schedule_job` 检索→建任务→自动确认→直接 `run_extraction_phase`→游标推进）；`app/api/routes/schedules.py`（GET/POST `/api/schedules`、`/{id}/toggle`、`/{id}/run`、`DELETE /{id}`）；`app/schemas/schedule.py`（档位必填项/文种白名单校验）；`_search_policies` 加 `exclude_urls`；lifespan 启动 `start_scheduler()`（补排缺失 `next_run_at`）→关停 `shutdown_scheduler()`。**前端**：`ConfigPanel` 加「入库方式」（一次性/定时自动入库）；`TopBar` 加「定时任务」入口（启用数徽标）+ 定时模式主按钮变「定时入库」开弹窗；新增 `ScheduleModal.vue`（遮罩层+居中卡片，列表视图 启停/立即运行/两步删除/新建，新建视图 档位选择+条件输入+表单快照摘要+游标行为提示）；`store` 加 `ingestMode`/弹窗状态/CRUD 动作；`types.ts`/`client.ts` 同步。静态检查：Python 6 文件 `py_compile` 全通过；`compute_next_run` 8 条断言（分钟/小时/每天未到点/每天已过点/每周三种情形）通过；`ScheduleCreate` 合法 3 组 + 非法 4 组校验通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：见 Phase 10 验收段（重跑 `database/init.sh` → 建任务 → 立即运行 → 连续触发验证游标回填 → 停用/启停 → 重启恢复） |

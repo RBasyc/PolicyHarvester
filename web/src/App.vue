@@ -7,7 +7,8 @@ import ProgressPanel from './components/ProgressPanel.vue'
 import ConfirmPanel from './components/ConfirmPanel.vue'
 import ResultTable from './components/ResultTable.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
-import { bootstrap, dismissToast, phase, toast } from './store'
+import ScheduleModal from './components/ScheduleModal.vue'
+import { bootstrap, dismissToast, phase, scheduleModalOpen, toast } from './store'
 
 const drawerPolicyId = ref<number | null>(null)
 const drawerOpen = ref(false)
@@ -22,7 +23,14 @@ function closeDrawer() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeDrawer()
+  if (e.key === 'Escape') {
+    // 弹窗优先：开着弹窗时 Esc 关弹窗，不关抽屉
+    if (scheduleModalOpen.value) {
+      scheduleModalOpen.value = false
+      return
+    }
+    closeDrawer()
+  }
 }
 
 function runToastAction() {
@@ -50,6 +58,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     </main>
 
     <DetailDrawer :open="drawerOpen" :policy-id="drawerPolicyId" @close="closeDrawer" />
+    <ScheduleModal />
 
     <div v-if="toast" class="toast" role="status">
       <AppIcon name="circle-x" :size="15" class="toast-icon" />

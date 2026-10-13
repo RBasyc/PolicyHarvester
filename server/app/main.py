@@ -11,11 +11,12 @@ from fastapi.responses import JSONResponse
 from app.agent import tools as tools_registry
 from app.agent.graph import get_graph
 from app.agent.mcp import load_mcp_tools
-from app.api.routes import agent, config, filters, health, policies, tasks
+from app.api.routes import agent, config, filters, health, policies, schedules, tasks
 from app.config import get_settings
 from app.db import repositories as repo
 from app.db.pool import close_pool, open_pool
 from app.pipeline.crawl_graph import shutdown_pipelines
+from app.scheduler import shutdown_scheduler, start_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,12 @@ async def lifespan(app: FastAPI):
     # 保证图里的 ToolNode / bind_tools 拿到完整工具表
     tools_registry.MCP_TOOLS.extend(await load_mcp_tools())
     get_graph()
+    # 定时入库调度器：任务定义落库，这里重新武装循环（补排缺失 next_run_at 的启用任务）
+    await start_scheduler()
     yield
-    # 关停顺序：先取消在跑的抓取流水线，再关连接池（否则流水线会用到已关闭的池）
+    # 关停顺序：先停调度循环，再取消在跑的抓取流水线，最后关连接池
+    # （否则流水线 / 调度器会用到已关闭的池）
+    await shutdown_scheduler()
     await shutdown_pipelines()
     await close_pool()
 
@@ -80,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(policies.router)
     app.include_router(filters.router)
     app.include_router(config.router)
+    app.include_router(schedules.router)
 
     return app
 

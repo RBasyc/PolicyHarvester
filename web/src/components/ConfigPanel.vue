@@ -5,6 +5,7 @@ import {
   facets,
   facetsLoading,
   form,
+  ingestMode,
   loadFacets,
   pipelineConfig,
   resetPipelineOverrides,
@@ -337,6 +338,36 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
       </div>
 
       <div class="divider"></div>
+
+      <!-- 入库方式：一次性 = 顶栏「开始抓取」立即跑；定时 = 打开弹窗配置调度参数，之后自动触发 -->
+      <div class="field">
+        <p class="label">入库方式</p>
+        <div class="chips-row">
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: ingestMode === 'once' }"
+            @click="ingestMode = 'once'"
+          >
+            一次性入库
+          </button>
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: ingestMode === 'schedule' }"
+            @click="ingestMode = 'schedule'"
+          >
+            定时自动入库
+          </button>
+        </div>
+        <div v-if="ingestMode === 'schedule'" class="hint-row">
+          <AppIcon name="info" :size="12" class="hint-icon" />
+          <p class="hint-text">
+            点顶栏「定时入库」配置运行周期：到达触发时间自动检索并全流程入库（无需人工确认），
+            已入库的原文不会重复抓取
+          </p>
+        </div>
+      </div>
 
       <!-- 高级设置：流水线参数，预填 .env 默认值，可按任务覆盖，默认收起 -->
       <div class="advanced">

@@ -174,6 +174,79 @@ export interface PipelineConfig {
   pipeline_mcp_timeout: number
 }
 
+// ---------- 定时入库（Phase 11） ----------
+
+/** 调度档位：minutely/hourly 用 every 表间隔（分钟/小时），daily/weekly 用 run_time + run_weekday */
+export type ScheduleKind = 'minutely' | 'hourly' | 'daily' | 'weekly'
+/** 最近一次触发结果：noop = 本轮无新增（正常跳过，不是失败） */
+export type LastRunStatus = 'completed' | 'failed' | 'noop'
+
+/** 定时任务全量状态：管理弹窗列表直接用。 */
+export interface ScheduleJobDTO {
+  id: number
+  name: string
+  source: string
+  date_from: string | null
+  keywords: string[]
+  agencies: string[]
+  doc_types: string[]
+  pipeline_max_policies: number | null
+  pipeline_per_keyword_limit: number | null
+  pipeline_extract_concurrency: number | null
+  pipeline_max_body_chars: number | null
+  pipeline_mcp_timeout: number | null
+  schedule_kind: ScheduleKind
+  /** minutely/hourly 的间隔（小时也折算成分钟） */
+  interval_minutes: number | null
+  /** daily/weekly 的运行时刻，"HH:MM"（服务器本地时间） */
+  run_time: string | null
+  /** weekly：0=周一 … 6=周日（对齐后端 Python weekday()） */
+  run_weekday: number | null
+  enabled: boolean
+  next_run_at: string | null
+  /** 滑动游标：下轮窗口上界（exclusive）；null = 追最新发文 */
+  cursor_before: string | null
+  last_run_at: string | null
+  last_task_id: number | null
+  last_status: LastRunStatus | null
+  run_count: number
+  created_at: string
+}
+
+/** 「定时自动入库」弹窗提交体：当前抓取配置快照 + 调度参数。 */
+export interface ScheduleCreatePayload {
+  name?: string | null
+  source: string
+  date_from: string | null
+  keywords: string[]
+  agencies: string[]
+  doc_types: string[]
+  pipeline_max_policies: number | null
+  pipeline_per_keyword_limit: number | null
+  pipeline_extract_concurrency: number | null
+  pipeline_max_body_chars: number | null
+  pipeline_mcp_timeout: number | null
+  schedule_kind: ScheduleKind
+  /** minutely/hourly 的间隔数值（分钟或小时，取决于 schedule_kind） */
+  every: number | null
+  /** daily/weekly 的运行时刻，"HH:MM" */
+  run_time: string | null
+  /** weekly：0=周一 … 6=周日 */
+  run_weekday: number | null
+}
+
+export interface ScheduleToggled {
+  job: ScheduleJobDTO
+}
+
+export interface ScheduleTriggered {
+  triggered: boolean
+}
+
+export interface ScheduleDeleted {
+  deleted: number
+}
+
 /** SSE 事件（`type` 字段区分）。 */
 export type StreamEvent =
   | { type: 'task'; task: TaskDTO }
