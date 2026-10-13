@@ -31,6 +31,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- 补丁：定时入库的周期档位（与 crawl_task 无关，schedule_job.schedule_kind 使用）。
+-- minutely = 每 N 分钟；hourly = 每 N 小时（间隔统一折算成分钟存 interval_minutes）。
+ALTER TYPE schedule_type ADD VALUE IF NOT EXISTS 'minutely';
+ALTER TYPE schedule_type ADD VALUE IF NOT EXISTS 'hourly';
+
 DO $$ BEGIN
     CREATE TYPE log_tone AS ENUM ('info', 'success', 'active');
 EXCEPTION WHEN duplicate_object THEN NULL;
@@ -138,12 +143,57 @@ CREATE TABLE IF NOT EXISTS task_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 定时入库任务（Phase 11）：抓取配置快照 + 调度参数 + 滑动游标。
+-- 触发时自动全流程（跳过人工确认）：检索 → 按 URL 去重（含本任务历史轮次）→ 直接提取入库。
+-- 游标语义：`cursor_before` 是下一轮窗口的上界（exclusive）。
+--   - NULL        → 窗口 [date_from, 今天]，追最新发文；
+--   - 非 NULL     → 窗口 [date_from, cursor_before - 1 天]，向更早回填（上轮抓满了上限才推进）。
+-- 这样「窗口固定 + 上限 N + 最新优先」不会永远只抓到最新的 N 篇：抓满一轮就向更早推进一格，
+-- 窗口掏空（没抓满）则回到最新，叠加跨轮 URL 去重保证不重复入库。
+CREATE TABLE IF NOT EXISTS schedule_job (
+    id           BIGSERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    -- 抓取配置快照（创建定时任务那一刻的表单；后续改表单不影响已建任务）
+    source       TEXT NOT NULL DEFAULT '国务院政策文件库（gov.cn）',
+    date_from    DATE,
+    keywords     TEXT[] NOT NULL DEFAULT '{}',
+    agencies     TEXT[] NOT NULL DEFAULT '{}',
+    doc_types    TEXT[] NOT NULL DEFAULT '{}',
+    -- 流水线参数覆盖（同 crawl_task.pipeline_*；NULL = 用服务端 .env 默认）
+    pipeline_max_policies        INTEGER,
+    pipeline_per_keyword_limit   INTEGER,
+    pipeline_extract_concurrency INTEGER,
+    pipeline_max_body_chars      INTEGER,
+    pipeline_mcp_timeout         INTEGER,
+    -- 调度参数
+    schedule_kind    schedule_type NOT NULL DEFAULT 'daily',  -- minutely / hourly / daily / weekly
+    interval_minutes INTEGER,                                 -- minutely / hourly 的间隔（小时折算成分钟）
+    run_time         TIME,                                    -- daily / weekly 的运行时刻（服务器本地时间）
+    run_weekday      INTEGER,                                 -- weekly：0=周一 … 6=周日（对齐 Python weekday()）
+    -- 运行状态
+    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    next_run_at  TIMESTAMPTZ,                                 -- 下次触发；NULL = 停用
+    cursor_before DATE,                                       -- 滑动游标（见表头注释）
+    last_run_at  TIMESTAMPTZ,
+    last_task_id BIGINT REFERENCES crawl_task(id) ON DELETE SET NULL,
+    last_status  TEXT,                                        -- 最近一次结果：completed / failed / noop（无新增）
+    run_count    INTEGER NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 补丁：老库幂等补列/补表（可重复执行，重跑 init.sh 安全）
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS schedule_job_id BIGINT REFERENCES schedule_job(id) ON DELETE SET NULL;
+
 -- ---------- 索引 ----------
 
 CREATE INDEX IF NOT EXISTS idx_policy_document_task  ON policy_document(task_id);
 CREATE INDEX IF NOT EXISTS idx_policy_document_date   ON policy_document(publish_date);
 CREATE INDEX IF NOT EXISTS idx_fact_item_extraction  ON fact_item(extraction_id);
 CREATE INDEX IF NOT EXISTS idx_task_log_task_time    ON task_log(task_id, created_at);
+-- 定时调度：到点扫描走这个索引；跨轮 URL 去重按 (task_id, source_url) 查
+CREATE INDEX IF NOT EXISTS idx_schedule_job_due      ON schedule_job(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_policy_document_url   ON policy_document(task_id, source_url);
 
 -- ---------- updated_at 自动维护 ----------
 
@@ -162,6 +212,10 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_extraction_updated') THEN
         CREATE TRIGGER trg_extraction_updated BEFORE UPDATE ON extraction
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_schedule_job_updated') THEN
+        CREATE TRIGGER trg_schedule_job_updated BEFORE UPDATE ON schedule_job
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
     END IF;
 END $$;

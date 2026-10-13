@@ -27,6 +27,7 @@
 | 8 | 终止 / 清空与重启收尾 | 🟨 进行中（代码完成，待实机验收） | — |
 | 9 | 检索结果人工确认环节 | 🟨 进行中（代码完成，待实机验收） | — |
 | 10 | 成果库两页改版（成果库 + 政策详情页） | 🟨 进行中（代码完成，待实机验收） | — |
+| 11 | 定时自动入库（调度器 + 弹窗管理） | 🟨 进行中（代码完成，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -429,6 +430,36 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 
 ---
 
+## Phase 11 — 定时自动入库（调度器 + 弹窗管理）
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：抓取配置可选「一次性入库 / 定时自动入库」；定时任务以弹窗卡片管理；触发时自动全流程入库
+
+- [x] 用户裁定四点：① 触发时**自动全选、直接跑完**（跳过人工确认环节）；② 周期用**预设档位**（每 N 分钟 / 每 N 小时 / 每天 / 每周）；③ **落库 + 重启自动恢复**调度；④ 「时间范围」须解决**固定窗口 + 上限 N + 最新优先 = 永远只抓到最新 N 篇**的问题
+- [x] 窗口方案：「**滑动游标 + 跨轮去重**」——`cursor_before` 为下轮窗口上界；本轮**抓满上限** → 游标推进到「本轮最旧一篇发布日期 − 1 天」向更早回填；**没抓满**（窗口掏空）→ 游标回 NULL，下轮回到 `[date_from, 今天]` 追新；每轮检索时把本任务历史轮次已入库的 `source_url` 从候选剔除，剔空记 `noop`（正常跳过，不留失败任务、不重复入库）
+- [x] `schema.sql`：`schedule_job` 表（配置快照 + 调度参数 + 游标 + 运行记录）；`crawl_task.schedule_job_id` 外键（`ON DELETE SET NULL`，删定时任务保留历史抓取）；`schedule_type` 枚举补 `minutely`/`hourly`；全部幂等（老库重跑 `init.sh` 即可，不重置数据）
+- [x] `app/scheduler.py`：进程内调度循环（15 s tick，先认领 `next_run_at` 再执行，防同 tick 重触发）；`compute_next_run`（本地时间口径，weekly 对齐 Python `weekday()` 0=周一）；`run_schedule_job`（检索 → 建任务 → 自动确认 → `run_extraction_phase` 直接提取 → 游标推进 / 结果落库）
+- [x] `app/api/routes/schedules.py`：`GET/POST /api/schedules`、`POST /{id}/toggle`、`POST /{id}/run`（立即运行）、`DELETE /{id}`；`app/schemas/schedule.py` 校验（档位必填项、文种白名单等）
+- [x] lifespan：启动时 `start_scheduler()`（补排缺失 `next_run_at` 的启用任务）→ 关停 `shutdown_scheduler()`
+- [x] `_search_policies` 增 `exclude_urls` 跨轮去重参数
+- [x] 前端：`ConfigPanel` 加「入库方式」（一次性 / 定时自动入库）；`TopBar` 加「定时任务」入口（启用数徽标），定时模式下主按钮变「定时入库」开弹窗；新增 `ScheduleModal.vue`（遮罩层 + 居中卡片：列表视图 启停/立即运行/删除/新建，新建视图 周期档位 + 条件输入 + 当前表单快照摘要）；`store` 增 `ingestMode` / 弹窗状态 / `loadSchedules` / `createSchedule` / `toggleScheduleJob` / `deleteScheduleJob` / `runScheduleNow`；`types.ts` / `client.ts` 同步
+- [x] 静态检查：Python 6 文件 `py_compile` 全通过；`compute_next_run` 8 条断言通过（分钟/小时/每天未到点/每天已过点/每周未到/每周已过/当天已过）；`ScheduleCreate` 合法 + 4 组非法档位组合校验通过；前端未跑 `vue-tsc`（按约定不主动构建）
+
+**验收**（待用户执行）：
+
+```bash
+cd database && bash init.sh     # 幂等补 schedule_job 表 / 新列 / 新枚举值（不重置数据）
+# 重启 server 与 web
+```
+
+1. 抓取配置选「定时自动入库」→ 顶栏点「定时入库」→ 弹窗选「每 15 分钟」创建 → 列表出现该任务，「下次触发」≈ 15 分钟后
+2. 列表点「立即运行」→ 抓取进度面板出现新任务并全流程跑完（无人工确认环节）；日志含「定时任务触发」「自动确认全部篇目」
+3. 再次「立即运行」：若窗口内无新发文 → 任务列表该任务显示「无新增」，且不产生新任务/重复数据
+4. 上限 3 + 长窗口回填验证：连续点「立即运行」若干次，应逐轮向更早日期推进（9 月抓满 3 篇后，下轮抓 8 月的），而不是反复抓同一批
+5. 停用开关 → 「下次触发」变「已停用」，不再触发；再启用恢复排程；服务重启后调度自动恢复
+6. `GET /api/schedules` 返回列表形状与 DTO 一致
+
+---
+
 ## 进度日志
 
 > 规则：每完成一个 Phase（或发生阻塞/范围变更）追加一行，倒序不必——按时间正序追加。
@@ -473,3 +504,4 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 | 2026-10-12 | 10 | 成果库两页改版（代码完成） | 按 design.pen「成果库 展示页 / 政策详情页」画板实现：新增 `GET /api/policies[/meta][/{id}]` 三端点；库查询按 `source_url` `DISTINCT ON` 去重（重新执行任务不产生重复）；文种由文号前缀推导；`policy_document` 幂等补 `fulltext` 列、提取阶段存档正文；前端不引入路由，用 store.view 切三页（抓取页不变），新增 `LibraryPage`/`LibraryDetailPage`/`SelectMenu`，三栏抽共享组件 `ExtractionColumns` 且 `DetailDrawer` 复用。Python 侧 import/语法检查通过；**待用户实机验收**（跑一遍抓取→成果库→详情→重新提取，另跑 `pnpm build`） |
 | 2026-10-12 | 10 | 修复成果库列表 500 | 根因有二，均在 `repositories.py`：① 库查询用了 `%(name)s` pyformat 命名占位符，psycopg3 只支持 `%s/%b/%t`（`ProgrammingError: only '%s', '%b', '%t' are allowed`），全部改为位置式 `%s` + 元组；② CTE 里文号推导的 `LIKE '国办发%'` 含字面 `%`，psycopg3 客户端绑定同样不允许，改用 `starts_with()`。同文件 `refresh_task_counts` 的 `%(task_id)s` 一并改为位置式（该函数此前必然也未真正跑通）。只读诊断脚本实测：agency/doc_type/year/keyword 各过滤组合 + meta 均返回正常 |
 | 2026-10-13 | 10 | 缺陷修复（已归档正文清洗） | 用户发现详情页「政策正文（已归档全文）」混入整页杂质（CSS/JS/导航/元信息表）。根因：MCP `getPolicyFulltext.ts` 正文提取顺序 `article→.content→.article` 在 gov.cn 页面全部落空，兜底 `$("body").text()` 把整页文本存进 `fulltext` 列（实测该行 17,755 字 vs 真实正文 5,635 字），杂质还吃掉 `pipeline_max_body_chars` 截断预算。修：① **MCP**——正文改取 `div#UCAP-CONTENT`（`.pages_content` 兜底链），解析 `div.policyLibraryOverview_content` 元信息表（发文机关/发文字号/来 源/主题分类/公文种类/成文日期，标签值对含全角空格、PC/移动双份），返回新增 `source`/`category`/`doc_kind` 键；标题优先元信息表「标题」并剥 `_中国政府网` 后缀。已 `npm run build` 并用真实 URL（content_7082302.htm）实测：正文 5,635 字、八部门 issuer、日期 2026-09-25 全部正确。② **新增 `server/app/pipeline/fulltext_clean.py::split_fulltext`**——元信息按行提取（标签与值常分成两行，顺延取值），正文按行剥 CSS/JS/导航/页脚/元信息表噪声、去 PC/移动重复拷贝与首段截断重复，结果短于原文 5% 视为误伤原样返回；**归档时**（`_fetch_fulltext` 写库前清洗 + meta 择优回填 agency/doc_no/中文成文日期）与**读取时**（`GET /api/policies/{id}` 兜底洗历史脏数据）共用，旧行无需重跑即洗净。③ **详情契约**——新增 `fulltext_meta`（`schemas/policy.py` + `types.ts` 手工镜像）；`LibraryDetailPage` head-card 按「库字段优先、meta 补缺」展示发文机关/文号/来源/主题分类/公文种类/成文日期；`AppIcon` 补 `folder`。实测：17,755 字脏存档 → 5,635 字干净正文（与 MCP 新解析长度逐字一致），干净输入原样透传不变。`_parse_date` 补「2026年09月25日」中文日期。未跑 `pnpm build`（按约定不主动构建）。**待验收**：重启 server 打开那篇 17,755 字详情页，正文应只剩政策原文、head-card 出现八部门发文机关等元信息 |
+| 2026-10-13 | 11 | 代码完成 | 需求：定时自动运行抓取工作流。用户裁定：① 触发时**自动全选直接跑完**（跳过人工确认）；② 周期用**预设档位**（每 N 分钟/每 N 小时/每天/每周）；③ **落库 + 重启自动恢复**；④ 窗口须解决「固定窗口+上限 N+最新优先=永远只抓最新 N 篇」（用户举例：9 月 3 篇上限 3，永远抓这 3 篇、8 月永远拿不到）。窗口方案：**滑动游标 + 跨轮去重**——`cursor_before` 为下轮窗口上界（NULL=追 `[date_from, 今天]`；非 NULL=回填 `[date_from, cursor-1天]`）；本轮**抓满上限**→游标推进到「本轮最旧一篇发布日期−1 天」；**没抓满**→窗口掏空、游标回 NULL 追新；每轮把历史轮次已入库 `source_url` 从候选剔除，剔空记 `noop`（正常跳过，不留失败任务、不重复入库）。**后端**：`schema.sql` 加 `schedule_job` 表（配置快照+调度参数+游标+运行记录，幂等）+ `crawl_task.schedule_job_id`（`ON DELETE SET NULL`）+ `schedule_type` 枚举补 `minutely`/`hourly`；`app/scheduler.py`（15 s tick 调度循环、先认领 `next_run_at` 再执行、`compute_next_run` 本地时间口径 weekly 对齐 Python weekday()、`run_schedule_job` 检索→建任务→自动确认→直接 `run_extraction_phase`→游标推进）；`app/api/routes/schedules.py`（GET/POST `/api/schedules`、`/{id}/toggle`、`/{id}/run`、`DELETE /{id}`）；`app/schemas/schedule.py`（档位必填项/文种白名单校验）；`_search_policies` 加 `exclude_urls`；lifespan 启动 `start_scheduler()`（补排缺失 `next_run_at`）→关停 `shutdown_scheduler()`。**前端**：`ConfigPanel` 加「入库方式」（一次性/定时自动入库）；`TopBar` 加「定时任务」入口（启用数徽标）+ 定时模式主按钮变「定时入库」开弹窗；新增 `ScheduleModal.vue`（遮罩层+居中卡片，列表视图 启停/立即运行/两步删除/新建，新建视图 档位选择+条件输入+表单快照摘要+游标行为提示）；`store` 加 `ingestMode`/弹窗状态/CRUD 动作；`types.ts`/`client.ts` 同步。静态检查：Python 6 文件 `py_compile` 全通过；`compute_next_run` 8 条断言（分钟/小时/每天未到点/每天已过点/每周三种情形）通过；`ScheduleCreate` 合法 3 组 + 非法 4 组校验通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：见 Phase 11 验收段（重跑 `database/init.sh` → 建任务 → 立即运行 → 连续触发验证游标回填 → 停用/启停 → 重启恢复） |

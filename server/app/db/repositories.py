@@ -151,6 +151,7 @@ async def create_task(
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
     pipeline_overrides: dict[str, int | None] | None = None,
+    schedule_job_id: int | None = None,
 ) -> int:
     """新建抓取任务（status=pending），返回 task_id。
 
@@ -158,7 +159,7 @@ async def create_task(
     覆盖值必须**落库**而不是只留在请求里：第二段提取是确认后从库里重建的，
     到那时请求早已结束，只有任务行上的值还能读到。NULL = 用服务端 .env 默认。
 
-    已弃用的 content_type / schedule 列交给 schema 默认值兜底，不再写入。
+    `schedule_job_id` 由定时调度器传入：标记本任务由哪个定时任务触发（跨轮去重与溯源用）。
     """
     overrides = pipeline_overrides or {}
     async with get_pool().connection() as conn:
@@ -168,8 +169,9 @@ async def create_task(
                 INSERT INTO crawl_task
                     (source, date_from, date_to, keywords, agencies, doc_types, status,
                      pipeline_max_policies, pipeline_per_keyword_limit,
-                     pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
+                     pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout,
+                     schedule_job_id)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -179,6 +181,7 @@ async def create_task(
                     overrides.get("pipeline_extract_concurrency"),
                     overrides.get("pipeline_max_body_chars"),
                     overrides.get("pipeline_mcp_timeout"),
+                    schedule_job_id,
                 ),
             )
             row = await cur.fetchone()
@@ -714,3 +717,163 @@ async def fetch_logs_since(task_id: int, after_id: int) -> list[Row]:
                 (task_id, after_id),
             )
             return await cur.fetchall()
+
+
+# ---------- 定时入库任务（Phase 11） ----------
+
+_PIPELINE_OVERRIDE_KEYS = (
+    "pipeline_max_policies",
+    "pipeline_per_keyword_limit",
+    "pipeline_extract_concurrency",
+    "pipeline_max_body_chars",
+    "pipeline_mcp_timeout",
+)
+
+
+async def create_schedule_job(
+    *,
+    name: str,
+    source: str,
+    date_from: date | None,
+    keywords: list[str],
+    agencies: list[str],
+    doc_types: list[str],
+    pipeline_overrides: dict[str, int | None] | None,
+    schedule_kind: str,
+    interval_minutes: int | None,
+    run_time: Any,  # datetime.time | None（psycopg 适配）
+    run_weekday: int | None,
+    next_run_at: Any,  # datetime | None
+) -> int:
+    """新建定时任务（enabled 默认 true），返回 job_id。配置是**快照**，之后改表单不影响它。"""
+    overrides = pipeline_overrides or {}
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO schedule_job
+                    (name, source, date_from, keywords, agencies, doc_types,
+                     pipeline_max_policies, pipeline_per_keyword_limit,
+                     pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout,
+                     schedule_kind, interval_minutes, run_time, run_weekday, next_run_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    name, source, date_from, keywords, agencies or [], doc_types or [],
+                    *(overrides.get(key) for key in _PIPELINE_OVERRIDE_KEYS),
+                    schedule_kind, interval_minutes, run_time, run_weekday, next_run_at,
+                ),
+            )
+            row = await cur.fetchone()
+            return int(row["id"])
+
+
+async def fetch_schedule_jobs(enabled_only: bool = False) -> list[Row]:
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM schedule_job
+                WHERE NOT %s OR enabled
+                ORDER BY id
+                """,
+                (not enabled_only,),
+            )
+            return await cur.fetchall()
+
+
+async def fetch_schedule_job(job_id: int) -> Row | None:
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT * FROM schedule_job WHERE id = %s", (job_id,))
+            return await cur.fetchone()
+
+
+async def fetch_due_schedule_jobs(now: Any) -> list[Row]:
+    """到点的启用中任务（调度循环每 tick 扫一次）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM schedule_job
+                WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= %s
+                ORDER BY next_run_at
+                """,
+                (now,),
+            )
+            return await cur.fetchall()
+
+
+async def set_schedule_job_next_run(job_id: int, next_run_at: Any) -> None:
+    """只推进下次触发时间（调度器的「认领」动作：先占位再执行，防同 tick 重复触发）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE schedule_job SET next_run_at = %s WHERE id = %s",
+                (next_run_at, job_id),
+            )
+
+
+async def record_schedule_run(
+    job_id: int,
+    *,
+    status: str,
+    next_run_at: Any,
+    cursor_before: date | None,
+    last_task_id: int | None = None,
+) -> None:
+    """一轮触发结束后的落库：最近结果 + 游标推进 + 计数 + 下次触发时间。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE schedule_job
+                SET last_run_at = now(), last_status = %s, last_task_id = %s,
+                    cursor_before = %s, next_run_at = %s, run_count = run_count + 1
+                WHERE id = %s
+                """,
+                (status, last_task_id, cursor_before, next_run_at, job_id),
+            )
+
+
+async def toggle_schedule_job(job_id: int, enabled: bool, next_run_at: Any) -> Row | None:
+    """启停：停用时清空 next_run_at（NULL = 不排程），启用时由调用方算好下一个触发点。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE schedule_job
+                SET enabled = %s, next_run_at = %s
+                WHERE id = %s
+                RETURNING *
+                """,
+                (enabled, next_run_at if enabled else None, job_id),
+            )
+            return await cur.fetchone()
+
+
+async def delete_schedule_job(job_id: int) -> bool:
+    """删除定时任务；它触发的 crawl_task 保留（schedule_job_id 置 NULL，历史可追溯）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM schedule_job WHERE id = %s RETURNING id", (job_id,)
+            )
+            return await cur.fetchone() is not None
+
+
+async def fetch_schedule_job_urls(job_id: int) -> set[str]:
+    """本定时任务**历史所有轮次**已入库的原文链接（跨轮去重用）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT DISTINCT p.source_url
+                FROM policy_document p
+                JOIN crawl_task t ON t.id = p.task_id
+                WHERE t.schedule_job_id = %s AND p.source_url IS NOT NULL
+                """,
+                (job_id,),
+            )
+            return {row["source_url"] for row in await cur.fetchall()}

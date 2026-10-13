@@ -19,6 +19,8 @@ import type {
   PolicyExtractionResponse,
   PolicyResultItem,
   PolicySummary,
+  ScheduleCreatePayload,
+  ScheduleJobDTO,
   TaskCreatePayload,
   TaskDTO,
   TaskStatus,
@@ -80,6 +82,25 @@ export const facetsLoading = ref(false)
 
 /** 生效的流水线参数（高级设置面板只读展示）；加载失败时保持 null，面板显示占位。 */
 export const pipelineConfig = ref<PipelineConfig | null>(null)
+
+// ---------- 定时入库（Phase 11） ----------
+
+/** 入库方式：一次性 = 点「开始抓取」立刻跑；定时 = 弹窗配置调度参数，由调度器自动触发 */
+export type IngestMode = 'once' | 'schedule'
+export const ingestMode = ref<IngestMode>('once')
+
+/** 定时任务弹窗：开关 + 当前视图（列表 / 新建） */
+export const scheduleModalOpen = ref(false)
+export type ScheduleModalView = 'list' | 'create'
+export const scheduleModalView = ref<ScheduleModalView>('list')
+
+export const schedules = ref<ScheduleJobDTO[]>([])
+export const schedulesLoading = ref(false)
+
+/** 启用的定时任务数（TopBar 入口旁的小徽标） */
+export const enabledScheduleCount = computed(
+  () => schedules.value.filter((job) => job.enabled).length,
+)
 
 export const phase = computed<Phase>(() => {
   if (booting.value) return 'loading'
@@ -157,6 +178,8 @@ export async function bootstrap(): Promise<void> {
     void loadPipelineConfig()
     // 「已入库 N 篇」与抓取任务无关，一并预热
     void loadLibraryMeta()
+    // 定时任务列表（TopBar 徽标用）；失败静默，弹窗打开时会再拉一次
+    void loadSchedules()
     const current = await api.currentTask()
     task.value = current
     if (current) {
@@ -373,6 +396,98 @@ export async function reextractPolicy(policyId: number): Promise<void> {
 /** 拉单篇详情（抽屉用）。 */
 export async function loadExtraction(policyId: number): Promise<PolicyExtractionResponse> {
   return api.policyExtraction(policyId)
+}
+
+// ---------- 定时入库动作（Phase 11） ----------
+
+export function openScheduleModal(view: ScheduleModalView): void {
+  scheduleModalView.value = view
+  scheduleModalOpen.value = true
+  void loadSchedules()
+}
+
+export function closeScheduleModal(): void {
+  scheduleModalOpen.value = false
+}
+
+/** 拉定时任务列表（弹窗打开时调用，保证看到最新排程）。 */
+export async function loadSchedules(): Promise<void> {
+  schedulesLoading.value = true
+  try {
+    schedules.value = await api.listSchedules()
+  } catch (error) {
+    showToast(`定时任务列表加载失败：${errorText(error)}`)
+  } finally {
+    schedulesLoading.value = false
+  }
+}
+
+/** 把当前抓取配置表单快照成定时任务提交体（创建后改表单不影响已建任务）。 */
+export function buildSchedulePayload(): Omit<ScheduleCreatePayload, 'schedule_kind' | 'every' | 'run_time' | 'run_weekday'> {
+  return {
+    source: form.source,
+    date_from: form.date_from || null,
+    keywords: [...form.keywords],
+    agencies: [...form.agencies],
+    doc_types: [...form.doc_types],
+    pipeline_max_policies: form.pipeline_max_policies || null,
+    pipeline_per_keyword_limit: form.pipeline_per_keyword_limit || null,
+    pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,
+    pipeline_max_body_chars: form.pipeline_max_body_chars || null,
+    pipeline_mcp_timeout: form.pipeline_mcp_timeout || null,
+  }
+}
+
+export async function createSchedule(payload: ScheduleCreatePayload): Promise<boolean> {
+  try {
+    const job = await api.createSchedule(payload)
+    showToast(`已创建定时任务「${job.name}」，下次触发：${formatRunAt(job.next_run_at)}`)
+    await loadSchedules()
+    return true
+  } catch (error) {
+    showToast(`创建定时任务失败：${errorText(error)}`)
+    return false
+  }
+}
+
+export async function toggleScheduleJob(job: ScheduleJobDTO): Promise<void> {
+  try {
+    const { job: next } = await api.toggleSchedule(job.id)
+    schedules.value = schedules.value.map((item) => (item.id === next.id ? next : item))
+    showToast(next.enabled ? `「${next.name}」已启用` : `「${next.name}」已停用`)
+  } catch (error) {
+    showToast(`切换失败：${errorText(error)}`)
+  }
+}
+
+export async function deleteScheduleJob(job: ScheduleJobDTO): Promise<void> {
+  try {
+    await api.deleteSchedule(job.id)
+    schedules.value = schedules.value.filter((item) => item.id !== job.id)
+    showToast(`已删除定时任务「${job.name}」`)
+  } catch (error) {
+    showToast(`删除失败：${errorText(error)}`)
+  }
+}
+
+/** 立即运行一轮：进度不在弹窗里展示，刷新当前任务视图到抓取进度面板看。 */
+export async function runScheduleNow(job: ScheduleJobDTO): Promise<void> {
+  try {
+    await api.runSchedule(job.id)
+    showToast(`「${job.name}」已触发，进度见抓取进度面板`)
+    void bootstrap()
+  } catch (error) {
+    showToast(`触发失败：${errorText(error)}`)
+  }
+}
+
+/** next_run_at / last_run_at 的短格式展示（MM-DD HH:mm，本地时区）。 */
+export function formatRunAt(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 export async function refreshLogs(): Promise<void> {

@@ -6,10 +6,13 @@ import {
   cancelTask,
   clearAll,
   clearing,
+  enabledScheduleCount,
   form,
   goCrawl,
   goLibrary,
+  ingestMode,
   libraryMeta,
+  openScheduleModal,
   startTask,
   starting,
   stopping,
@@ -55,6 +58,11 @@ const keywordHint = computed(() =>
  * 所以这里不再拦截——用户「不输关键词、只看某机构近期发文」是合法用法。
  */
 function onStart() {
+  if (ingestMode.value === 'schedule') {
+    // 定时模式：不直接提交，打开弹窗配置调度参数（抓取配置取当前表单快照）
+    openScheduleModal('create')
+    return
+  }
   void startTask()
 }
 
@@ -112,6 +120,17 @@ async function onConfirmClear() {
         <span class="hint">{{ keywordHint }}</span>
 
         <button
+          class="ghost-btn schedule-entry"
+          type="button"
+          title="查看与管理定时入库任务"
+          @click="openScheduleModal('list')"
+        >
+          <AppIcon name="timer" :size="13" />
+          <span>定时任务</span>
+          <span v-if="enabledScheduleCount" class="schedule-badge">{{ enabledScheduleCount }}</span>
+        </button>
+
+        <button
           v-if="canCancel"
           class="ghost-btn"
           type="button"
@@ -151,11 +170,11 @@ async function onConfirmClear() {
           class="start-btn"
           type="button"
           :disabled="starting"
-          :title="`抓取源：${form.source}`"
+          :title="ingestMode === 'schedule' ? '用当前配置创建定时任务' : `抓取源：${form.source}`"
           @click="onStart"
         >
-          <AppIcon name="play" :size="14" />
-          <span>{{ starting ? '提交中…' : '开始抓取' }}</span>
+          <AppIcon :name="ingestMode === 'schedule' ? 'timer' : 'play'" :size="14" />
+          <span>{{ ingestMode === 'schedule' ? '定时入库' : starting ? '提交中…' : '开始抓取' }}</span>
         </button>
       </template>
 
@@ -352,6 +371,19 @@ async function onConfirmClear() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 定时任务入口徽标：启用中的任务数 */
+.schedule-badge {
+  min-width: 16px;
+  padding: 1px 5px;
+  background: var(--accent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  text-align: center;
+  line-height: normal;
 }
 
 .confirm-text {
