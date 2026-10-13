@@ -37,6 +37,7 @@ class TaskDTO(BaseModel):
     pipeline_extract_concurrency: int | None = Field(None, ge=1, le=8)
     pipeline_max_body_chars: int | None = Field(None, ge=500, le=100_000)
     pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600)
+    pipeline_model: str | None = Field(None, description="提取模型（PIPELINE_MODELS 注册表 id；None = 默认模型）")
 
     status: TaskStatus
     stage: str | None = None
@@ -73,6 +74,7 @@ class TaskDTO(BaseModel):
             pipeline_extract_concurrency=row.get("pipeline_extract_concurrency"),
             pipeline_max_body_chars=row.get("pipeline_max_body_chars"),
             pipeline_mcp_timeout=row.get("pipeline_mcp_timeout"),
+            pipeline_model=row.get("pipeline_model"),
             progress=_progress(row),
             eta_seconds=_eta_seconds(row),
         )
@@ -151,6 +153,7 @@ class TaskCreate(BaseModel):
     pipeline_extract_concurrency: int | None = Field(None, ge=1, le=8, description="并发提取篇数")
     pipeline_max_body_chars: int | None = Field(None, ge=500, le=100_000, description="送进大模型的正文上限")
     pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600, description="单次 MCP 调用超时秒数")
+    pipeline_model: str | None = Field(None, max_length=100, description="提取模型（.env PIPELINE_MODELS 的 id）")
 
     @field_validator("keywords")
     @classmethod
@@ -180,6 +183,19 @@ class TaskCreate(BaseModel):
         if invalid:
             raise ValueError(f"未知文种：{'、'.join(invalid)}（可选：{'、'.join(DOC_TYPES)}）")
         return cleaned
+
+    @field_validator("pipeline_model")
+    @classmethod
+    def _check_pipeline_model(cls, value: str | None) -> str | None:
+        """模型 id 必须在 .env 的 PIPELINE_MODELS 注册表里（与 doc_types 白名单同一模式）。"""
+        if value is None:
+            return None
+        from app.config import get_model_registry  # 局部导入避免循环
+
+        ids = [entry.id for entry in get_model_registry()]
+        if value not in ids:
+            raise ValueError(f"未知提取模型：{value}（可选：{'、'.join(ids)}）")
+        return value
 
     @model_validator(mode="after")
     def _check_date_range(self) -> "TaskCreate":

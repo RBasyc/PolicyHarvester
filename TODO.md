@@ -28,6 +28,8 @@
 | 9 | 检索结果人工确认环节 | 🟨 进行中（代码完成，待实机验收） | — |
 | 10 | 成果库两页改版（成果库 + 政策详情页） | 🟨 进行中（代码完成，待实机验收） | — |
 | 11 | 定时自动入库（调度器 + 弹窗管理） | 🟨 进行中（代码完成，待实机验收） | — |
+| 12 | 提取模型可选（高级设置下拉 + DeepSeek 接入） | 🟨 进行中（代码完成，待实机验收） | — |
+| 13 | 检索全库去重/续抓 + 入库判别（judge）+ 定时防重入 | 🟨 进行中（代码完成，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -460,6 +462,68 @@ cd database && bash init.sh     # 幂等补 schedule_job 表 / 新列 / 新枚�
 
 ---
 
+## Phase 12 — 提取模型可选（高级设置下拉 + DeepSeek 接入）
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：抓取配置「高级设置」里按任务选择提取用大模型；模型在根目录 `.env` 注册（Kimi 网关 + DeepSeek），第一项为默认
+
+- [x] 模型注册表：`.env` 新增 `PIPELINE_MODELS`（JSON 数组：`id`/`label`/`model`，可选 `base_url`/`api_key_env`/`max_tokens`/`thinking`）+ `DEEPSEEK_API_KEY`；`config.py` 解析为 `ModelRegistryEntry` 列表（`get_model_registry()`，解析失败/为空回退单模型并告警，不让服务起不来）
+- [x] 统一 Anthropic 兼容协议（用户裁定，2026-10-13）：注册表全部走 `ChatAnthropic` 一条路径——不填 `base_url`/`api_key_env` 的项复用 `ANTHROPIC_*` 网关（Kimi Bearer，只换模型名，chat agent 不受影响）；DeepSeek 项填 `base_url=https://api.deepseek.com/anthropic` + `api_key_env=DEEPSEEK_API_KEY`（标准 x-api-key 认证）。**不再需要 `langchain-openai`**（已从 `pyproject.toml` 移除，无新依赖要装）
+- [x] 思考默认关闭（用户要求「把思考默认都关上」）：注册表项 `thinking` 默认 `false` → `_build_llm(thinking=False)` 发 `thinking={"type": "disabled"}`（Anthropic 协议统一参数）；项里写 `"thinking": true` 才交给服务端默认。已知风险（Phase 4 探针记录）：kimi 网关在 thinking 关闭 + **强制** tool_choice 时返回 0 次工具调用——提取路径本就不强制 tool_choice，若仍遇 0 调用会自动落 JSON 文本回退，最坏是每篇多一次请求，不会失败
+- [x] 热加载（用户要求「改 .env 无需重启」）：`config.py` 在 `load_dotenv` **之前**快照 `_REAL_ENV`，`_live_env()` 按「真实 shell 环境变量 > 当前 .env 文件 > 启动时灌入 os.environ 的旧值」解析——`get_model_registry()`（去掉 `@lru_cache`，每次调用热读）与 `resolve_model_api_key()`（换 key 也即时生效）都走它；前端「高级设置」**展开时重拉** `/api/config/pipeline`，选中项已被 .env 删掉时自动吸回默认
+- [x] 落库与透传：`crawl_task` / `schedule_job` 各加 `pipeline_model TEXT`（幂等 ALTER，重跑 `init.sh` 补列）；TaskCreate/TaskDTO/ScheduleCreate/ScheduleJobDTO/两条 create 路由/`scheduler.run_schedule_job`/`run_extraction_phase`/`run_pipeline` 全链路透传；提取段从任务行重读（与其它 `pipeline_*` 同一套路）；单篇重试/重新提取也尊重任务行的模型
+- [x] 校验：`pipeline_model` 必须在注册表 id 里（与文种白名单同一模式）；运行时 id 失效（.env 后来改过）→ 告警回退默认模型，不失败
+- [x] `extraction.model` 现在记**实际使用**的模型名（如 `deepseek-flash`），任务级溯源真实可用
+- [x] 配置接口：`GET /api/config/pipeline` 追加 `models: [{id,label}]` + `default_model`（不含密钥）
+- [x] 前端：`PipelineConfig`/`TaskCreatePayload`/`TaskDTO`/`ScheduleCreatePayload`/`ScheduleJobDTO` 同步加字段；`store` 表单加 `pipeline_model`（bootstrap 回填默认、恢复默认重置、随任务/定时快照提交）；`ConfigPanel` 高级设置第一行加下拉框（选项来自 `/api/config/pipeline`）
+- [x] 静态检查：Python 改动文件 `py_compile` 通过；`.venv` 实测 `get_model_registry()` 热读 `.env` 解析出三条目、`resolve_model_entry` 未知 id 回退默认、`thinking` 默认 False、`DEEPSEEK_API_KEY` 可热读；前端未跑 `vue-tsc`（按约定不主动构建）
+
+**验收**（待用户执行）：
+
+```bash
+cd ../database && bash init.sh    # 幂等补 pipeline_model 列（不重置数据）；无新 Python 依赖，不用 uv sync
+# 重启 server 与 web（首次部署 Phase 12 才需要重启；之后改 .env 注册表无需重启）
+```
+
+1. 高级设置展开 → 「提取用大模型」下拉显示「Kimi 网关（默认）/ DeepSeek Flash / DeepSeek V4 Pro」，默认选中第一项
+2. 选 DeepSeek Flash 建任务跑完 → 结果抽屉里「模型」显示 `deepseek-flash`，提取内容正常
+3. 选 Kimi（或不改）建任务 → 行为与改动前一致（`extraction.model` = `kimi-for-coding`）
+4. **热加载**：服务运行中改 `.env` 的 `PIPELINE_MODELS`（如临时删掉一个条目）→ 重新展开高级设置，下拉即时反映（被删的选中项吸回默认），建任务直接可用，全程不重启
+5. 定时任务弹窗创建时快照当前表单的模型选择，触发轮次用它提取
+6. `GET /api/config/pipeline` 返回 `models` + `default_model`；故意把 `pipeline_model` 提交成不存在的 id → 422 `未知提取模型：…`
+
+---
+
+## Phase 13 — 检索全库去重/续抓 + 入库判别（judge）+ 定时防重入
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：① 抓取先查成果库——新增篇目正常展示，已在库的置灰沉底、默认不勾选，**续抓到 N 篇新增**为止；② 接入外部判别服务（/v1/systemone），批复等无用件打「不建议入库」标签（手动仅提示 / 定时自动剔除 / 服务不可达 fail-open）；③ 堵上「立即运行」与定时轮次并发的缺口
+
+- [ ] MCP `get_latest_policies` 加 `page` 参数（透传 gov.cn `p`，此前固定第一页）；**需在 `tools/China-Central-Policy-MCP` 下 `npm run build`**（未构建 = 静默无效）；（2026-10-13 补修：请求 `n` 由固定 100 改为 = limit——gov.cn 的 `p` 按 `n` 步长翻页，固定 100 + 事后截前 limit 条会让 limit=10 时第 11–100 行整段跳过）
+- [ ] `_search_policies` 翻页续查：`pipeline_max_search_calls` 改为**总调用预算**（旧版是对组合数截断，预算语义等价）；停止条件 = 凑够 `target_new` 篇**建议入库的新增**（判别在循环内逐页做，被标注的不占名额，见 2026-10-13 判别修正）/ 预算耗尽 / 全组合翻空 / **整轮零收获**（连 merged 都没进新链接=翻页失效或翻空；已在库的行算收获——重跑时第 1 页全在库**不会**停，继续翻页凑新增，见 2026-10-13 缺陷修复）；`target_new=None` 时只跑一轮，与历史行为逐字节一致；①~④复核过滤与 `exclude_urls` 语义原样保留
+- [ ] 全库去重：`fetch_library_urls()`（全部任务提取成功的 DISTINCT source_url）；手动任务三分区各自封顶（建议入库凑满 cap / 判别不建议仍落库供面板提示 / 已在库**也落库**置灰展示默认不勾、不参与判别）；定时任务把全库 URL 并入跨轮去重集（修复「换任务重复提取同一篇」）
+- [ ] 入库判别：`app/pipeline/judge.py`（httpx 移入主依赖、信号量并发 4、超时 5s、`trust_env=False` 防内网地址被代理劫持、**fail-open 不抛异常**）；契约 `questions.q1(choice) + state(仅标题 中文文本做语言路由，双轴矩阵实测机关/文号会带偏)`，取 `answers.q1.choice/probabilities/answer_confidence`；判别在 `_search_policies` 检索循环内**逐页**执行（结果写回 item → `_to_policy_row` 落库），被标注的不占 `target_new` 名额；`policy_document.judge_tagged/judge_prob` 列（幂等 ALTER）+ `v_policy_results` 追加判别列与 `in_library`（EXISTS 排除本任务自己的行，防提取中途全表变「已在库」）+ 单列索引 `idx_policy_document_url_only`；DTO/types.ts 镜像；手动=仅提示不影响勾选，定时=自动剔除（直接用带回的标注）并留日志、游标按「抓满 cap 篇**建议入库**」推进
+- [ ] 定时防重入：`_running_jobs` 进程内闸（`run_schedule_job` 拆出 `_run_schedule_job_locked`，外层 try/finally 保证闸必释放——提前 return 路径不泄漏）；「立即运行」运行中 → 409「已有一轮在执行中」；慢轮次 + 短间隔 = 跑完立刻补一轮（`next_run_at` 锚定轮次开始时刻，连续追赶不堆积）已在 scheduler docstring 记录
+- [ ] 前端 `ConfirmPanel`：已在库与判别「不建议入库」的行统一置灰（`.dim`）沉底（三档稳定排序：建议入库 → 不建议入库 → 已在库）默认不勾（`watch(policies)` 补种 `deselected`，`userToggled` 集合保证不覆盖用户手动切换，**新行默认选中的原约定不破坏**）；「已在库」「不建议入库」标记；头部计数「建议入库 X · 不建议入库 Y · 已在库 Z」（2026-10-13 需求调整：「不建议入库」从仅提示改为与已在库同款沉底置灰默认不勾）
+- [ ] 配置：`JUDGE_*` Settings 字段（启动时读取，改 .env 需重启）+ `.env.example` 小节 + `PIPELINE_MAX_SEARCH_CALLS` 文档（续抓建议调大至 24-36）；`scripts/test_judge.py` 冒烟（**实测 state 契约**：若服务要求对象而非字符串会表现为全部失败，改 `_judge_one` 一行即可）
+- [x] 静态检查：Python 改动 8 文件 `py_compile` 全通过；前端未跑 `vue-tsc`（按约定不主动构建）
+
+**验收**（待用户执行）：
+
+```bash
+cd server && uv sync                                # httpx 移入主依赖（uv.lock 已含，只重新分组）
+cd ../database && bash init.sh                      # 幂等补 judge 列 + 换视图，不重置数据
+cd ../tools/China-Central-Policy-MCP && npm run build   # 必须！page 参数不构建 = 静默无效
+cd ../../web && pnpm build                          # vue-tsc 校验新字段
+cd ../server && uv run python scripts/test_judge.py     # 判别契约实测（含 fail-open：把 JUDGE_URL 指向不存在的端口重跑 → WARN + 全 tagged=False）
+# 重启 python main.py（JUDGE_* 启动时读取）
+```
+
+1. **手动混合**：用已完成任务的同一关键词重跑 → 确认表格建议入库在上（默认勾选）、判别「不建议入库」与已在库置灰沉底（默认不勾，可手动勾选）；头部「共 N 篇（建议入库 X · 不建议入库 Y · 已在库 Z）· 已选 M 篇」；默认确认 → 只提取建议入库的新增篇目；勾选灰行 → 强制重提取
+2. **续抓**：`.env` 设 `PIPELINE_PER_KEYWORD_LIMIT=3`、`PIPELINE_MAX_SEARCH_CALLS=30`、`PIPELINE_MAX_POLICIES=10`，宽关键词 → 日志显示多轮直到凑够 10 篇新增（或预算耗尽/整轮零新增停）
+3. **定时**：分钟级任务运行中点「立即运行」→ toast 409；轮次耗时 > 间隔 → 跑完立刻补一轮（单轮串行）；其它任务已入库的不再重复提取（「跨轮/全库去重」日志）；批复类被剔除（「判别剔除 N 篇」日志）
+4. **判别宕机**：错误 `JUDGE_URL` 重启 → 全部保留 + 告警日志 + 任务日志「按建议入库处理（fail-open）」
+
+---
+
 ## 进度日志
 
 > 规则：每完成一个 Phase（或发生阻塞/范围变更）追加一行，倒序不必——按时间正序追加。
@@ -505,3 +569,14 @@ cd database && bash init.sh     # 幂等补 schedule_job 表 / 新列 / 新枚�
 | 2026-10-12 | 10 | 修复成果库列表 500 | 根因有二，均在 `repositories.py`：① 库查询用了 `%(name)s` pyformat 命名占位符，psycopg3 只支持 `%s/%b/%t`（`ProgrammingError: only '%s', '%b', '%t' are allowed`），全部改为位置式 `%s` + 元组；② CTE 里文号推导的 `LIKE '国办发%'` 含字面 `%`，psycopg3 客户端绑定同样不允许，改用 `starts_with()`。同文件 `refresh_task_counts` 的 `%(task_id)s` 一并改为位置式（该函数此前必然也未真正跑通）。只读诊断脚本实测：agency/doc_type/year/keyword 各过滤组合 + meta 均返回正常 |
 | 2026-10-13 | 10 | 缺陷修复（已归档正文清洗） | 用户发现详情页「政策正文（已归档全文）」混入整页杂质（CSS/JS/导航/元信息表）。根因：MCP `getPolicyFulltext.ts` 正文提取顺序 `article→.content→.article` 在 gov.cn 页面全部落空，兜底 `$("body").text()` 把整页文本存进 `fulltext` 列（实测该行 17,755 字 vs 真实正文 5,635 字），杂质还吃掉 `pipeline_max_body_chars` 截断预算。修：① **MCP**——正文改取 `div#UCAP-CONTENT`（`.pages_content` 兜底链），解析 `div.policyLibraryOverview_content` 元信息表（发文机关/发文字号/来 源/主题分类/公文种类/成文日期，标签值对含全角空格、PC/移动双份），返回新增 `source`/`category`/`doc_kind` 键；标题优先元信息表「标题」并剥 `_中国政府网` 后缀。已 `npm run build` 并用真实 URL（content_7082302.htm）实测：正文 5,635 字、八部门 issuer、日期 2026-09-25 全部正确。② **新增 `server/app/pipeline/fulltext_clean.py::split_fulltext`**——元信息按行提取（标签与值常分成两行，顺延取值），正文按行剥 CSS/JS/导航/页脚/元信息表噪声、去 PC/移动重复拷贝与首段截断重复，结果短于原文 5% 视为误伤原样返回；**归档时**（`_fetch_fulltext` 写库前清洗 + meta 择优回填 agency/doc_no/中文成文日期）与**读取时**（`GET /api/policies/{id}` 兜底洗历史脏数据）共用，旧行无需重跑即洗净。③ **详情契约**——新增 `fulltext_meta`（`schemas/policy.py` + `types.ts` 手工镜像）；`LibraryDetailPage` head-card 按「库字段优先、meta 补缺」展示发文机关/文号/来源/主题分类/公文种类/成文日期；`AppIcon` 补 `folder`。实测：17,755 字脏存档 → 5,635 字干净正文（与 MCP 新解析长度逐字一致），干净输入原样透传不变。`_parse_date` 补「2026年09月25日」中文日期。未跑 `pnpm build`（按约定不主动构建）。**待验收**：重启 server 打开那篇 17,755 字详情页，正文应只剩政策原文、head-card 出现八部门发文机关等元信息 |
 | 2026-10-13 | 11 | 代码完成 | 需求：定时自动运行抓取工作流。用户裁定：① 触发时**自动全选直接跑完**（跳过人工确认）；② 周期用**预设档位**（每 N 分钟/每 N 小时/每天/每周）；③ **落库 + 重启自动恢复**；④ 窗口须解决「固定窗口+上限 N+最新优先=永远只抓最新 N 篇」（用户举例：9 月 3 篇上限 3，永远抓这 3 篇、8 月永远拿不到）。窗口方案：**滑动游标 + 跨轮去重**——`cursor_before` 为下轮窗口上界（NULL=追 `[date_from, 今天]`；非 NULL=回填 `[date_from, cursor-1天]`）；本轮**抓满上限**→游标推进到「本轮最旧一篇发布日期−1 天」；**没抓满**→窗口掏空、游标回 NULL 追新；每轮把历史轮次已入库 `source_url` 从候选剔除，剔空记 `noop`（正常跳过，不留失败任务、不重复入库）。**后端**：`schema.sql` 加 `schedule_job` 表（配置快照+调度参数+游标+运行记录，幂等）+ `crawl_task.schedule_job_id`（`ON DELETE SET NULL`）+ `schedule_type` 枚举补 `minutely`/`hourly`；`app/scheduler.py`（15 s tick 调度循环、先认领 `next_run_at` 再执行、`compute_next_run` 本地时间口径 weekly 对齐 Python weekday()、`run_schedule_job` 检索→建任务→自动确认→直接 `run_extraction_phase`→游标推进）；`app/api/routes/schedules.py`（GET/POST `/api/schedules`、`/{id}/toggle`、`/{id}/run`、`DELETE /{id}`）；`app/schemas/schedule.py`（档位必填项/文种白名单校验）；`_search_policies` 加 `exclude_urls`；lifespan 启动 `start_scheduler()`（补排缺失 `next_run_at`）→关停 `shutdown_scheduler()`。**前端**：`ConfigPanel` 加「入库方式」（一次性/定时自动入库）；`TopBar` 加「定时任务」入口（启用数徽标）+ 定时模式主按钮变「定时入库」开弹窗；新增 `ScheduleModal.vue`（遮罩层+居中卡片，列表视图 启停/立即运行/两步删除/新建，新建视图 档位选择+条件输入+表单快照摘要+游标行为提示）；`store` 加 `ingestMode`/弹窗状态/CRUD 动作；`types.ts`/`client.ts` 同步。静态检查：Python 6 文件 `py_compile` 全通过；`compute_next_run` 8 条断言（分钟/小时/每天未到点/每天已过点/每周三种情形）通过；`ScheduleCreate` 合法 3 组 + 非法 4 组校验通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：见 Phase 11 验收段（重跑 `database/init.sh` → 建任务 → 立即运行 → 连续触发验证游标回填 → 停用/启停 → 重启恢复） |
+| 2026-10-13 | — | 界面调整（用户指示） | ① 定时任务弹窗列表视图删除底部「新建定时任务」按钮，弹窗改为纯展示（启停/立即运行/删除保留）；新建唯一入口仍是抓取配置「定时自动入库」→ 顶栏「定时入库」（`openScheduleModal('create')` 链路不变），空状态文案同步改为指路。② 顶栏「清空」（含两步确认）从抓取任务页移到成果库/详情页，替换原「新建抓取任务」按钮（`goCrawl` 仅剩页签在用）；`clearAll()` 随之补库侧刷新：成功后 `loadLibraryMeta()`，库页回第 1 页，详情页 `backToLibrary()`（所看条目已级联删除）。未运行 `pnpm build`（按约定不主动构建）→ **待验收**：弹窗无新建入口、库页右上角为清空、清空后库列表与计数即时归零 |
+| 2026-10-13 | 12 | 代码完成 | 需求：高级设置里按任务选提取模型，接入 DeepSeek（用户提供了 Key）。实现：`.env` 加 `PIPELINE_MODELS` JSON 注册表 + `DEEPSEEK_API_KEY`；`config.py` 解析（失败回退单模型）；`extract.py` 按 `provider` 分流（anthropic 复用网关 `_build_llm`，openai 用 `ChatOpenAI`，key 缺失/依赖未装给出直达文案）；`pipeline_model` 列 + 全链路透传（任务/定时/单篇重试）；`/api/config/pipeline` 吐 `models`+`default_model`；前端高级设置第一行加下拉框。**待验收**：`uv sync` + 重跑 `init.sh` 后按 Phase 12 清单验证 |
+| 2026-10-13 | 12 | 修订（统一 Anthropic 协议 + 热加载 + 关思考） | 用户三点新要求：① **DeepSeek 用 Anthropic 格式**（端点 `https://api.deepseek.com/anthropic`）→ 注册表删 `provider` 字段，全部走 `ChatAnthropic` 一条路径（`_build_llm` 增 `thinking`/`base_url`/`api_key` 覆盖参数；DeepSeek 项 x-api-key 认证，kimi 项照旧 Bearer），**`langchain-openai` 依赖移除**（无新依赖，不用 `uv sync`）；② **思考默认关**：注册表项 `thinking` 默认 false → `thinking={"type": "disabled"}`（`.env` 三条目 kimi/deepseek-flash/deepseek-v4-pro 全部生效；模型名按用户提供的现行官方文档改为 `deepseek-flash`/`deepseek-v4-pro`）；③ **改 .env 免重启**：`load_dotenv` 前快照 `_REAL_ENV`，`_live_env()` 按 真实 shell > 当前 .env > 启动旧值 解析，`get_model_registry()` 去掉 `@lru_cache` 每次热读、`resolve_model_api_key()` 同样热读；前端高级设置**展开即重拉**配置，选中项被 .env 删掉时吸回默认。静态检查：`py_compile` 通过；`.venv` 实测注册表三条目解析 / 未知 id 回退 / thinking 默认 False / key 热读全部断言通过。**待验收**：见 Phase 12 验收段（重跑 `init.sh` 即可，无新依赖） |
+| 2026-10-13 | 11 | 缺陷修复（弹窗误关） | 用户报：定时任务弹窗内按住鼠标拖到遮罩上松开 → 弹窗被误关。根因：遮罩层 `@click.self` 拦不住这种手势——按 DOM 规范 click 派发在 mousedown/mouseup 两目标的**公共祖先**上，卡内按下 + 遮罩松开时公共祖先恰是 overlay 自身，`.self` 判定反而通过（而单纯点遮罩时 target 是 `.mask`，`.self` 本就不通过，即「点遮罩关窗」此前从未生效，唯一触发关闭的恰是误拖）。修：`ScheduleModal` 与同款写法的 `DetailDrawer` 都改为**起点判定**——`mousedown` 记录起点是否在面板外（`closest('.card')` / `closest('.drawer')`），`click` 时按下与抬起都在面板外才关窗；两种手势都正确（拖动不关、点遮罩即关）。未跑 `pnpm build`（按约定不主动构建）。**待验收**：弹窗/抽屉内选中文本拖到遮罩松开不再关闭；直接点遮罩可关闭 |
+| 2026-10-13 | 13 | 代码完成 | 需求：① 定时任务边界（1 分钟间隔撞上慢轮次）——核实**调度触发不会重叠**（循环先认领再串行执行，慢轮次跑完立刻补一轮、不堆积），真缺口是「立即运行」绕过串行循环可与定时轮次并发；② 入库流程优化（用户原话意图）——抓取后**先查成果库**，新增正常显示、已在库**置灰沉底默认不勾**、**续抓到 N 篇新增**为止；③ 接入外部判别服务 `POST /v1/systemone`（questions.q1 choice + state=标题+机关+文号中文文本做语言路由）给批复等无用件打「不建议入库」：手动仅提示 / 定时自动剔除 / 不可达 **fail-open**（用户已确认）。实现：MCP `getLatestPolicies.ts` 加 `page` 参数（透传 gov.cn `p`，**需 npm run build**）；`_search_policies` 翻页续查（`pipeline_max_search_calls` 变总调用预算；凑够新增/预算尽/全翻空/整轮零新增即停；`target_new=None` 行为与旧版逐字节一致）+ `library_urls`/`target_new` 参数；`fetch_node` 分区新增/已在库 + 判别写回；`judge.py`（httpx 主依赖、并发 4、超时 5s、fail-open）；`schema.sql` `judge_tagged/judge_prob` 列（幂等）+ `v_policy_results` 追加判别列与 `in_library`（EXISTS 排除本任务行）+ `idx_policy_document_url_only`；`fetch_library_urls()`（定时任务全库去重，修复跨任务重复提取）；scheduler `_running_jobs` 防重入闸（拆 `_run_schedule_job_locked`，外层 try/finally 防闸泄漏）+ 判别剔除 + 「跨轮/全库去重」日志；schedules 路由「立即运行」运行中 409；`ConfirmPanel` 置灰沉底/标记/计数（`userToggled` 保用户选择、新行默认选中约定不变）；`PolicyResultItem` DTO + types.ts 镜像；`JUDGE_*` 配置 + `.env.example` + `scripts/test_judge.py`。静态检查：Python 8 文件 `py_compile` 通过；前端未跑 `vue-tsc`。**风险**：gov.cn 第 2 页起行为未实测（`seen` 去重 + 整轮零新增停 + 预算封顶兜底，最坏浪费预算不会错结果）；state 契约待 `test_judge.py` 实测（若要对象改 `_judge_one` 一行）。**待验收**：见 Phase 13 验收段（uv sync → init.sh → **npm run build** → pnpm build → test_judge.py → 重启） |
+| 2026-10-13 | 13 | 判别调优（提示词实测） | 用户实跑 `test_judge.py`：**契约通过**（state=中文字符串被接受、probabilities 可解析、0 失败），但初版叙述式提示词把批复判成「入库」。把脚本升级为**提示词变体矩阵**（5 写法 × 5 样例：批复/函/任免→期望不入库，办法/条例→期望入库；`judge_rows` 加 `instructions=` 覆盖参数，仅测试用）。实测结论：**「文种直判」5/5**（批复 0.88/函 0.72/任免 0.85 → 不入库；办法 0.46/条例 0.32 → 入库，区分度最好）、英文指令 4/5、疑问句+枚举与简短二分 3/5、旧叙述式长指令 2/5——**该 RL 模型（laya-rl-agent）只认「文种→选项」的直判映射，叙述式定义无效**。已把「文种直判」固化为 `config.py` 默认 `judge_instructions`（附「改措辞先跑矩阵」注释），`.env.example` 同步；脚本基线变体改为「默认=文种直判」、旧长指令留作对照变体。**待验收**：重启后真实抓取中批复类应带「不建议入库」标记、定时轮次日志出现「判别剔除」 |
+| 2026-10-13 | 13 | 缺陷修复（续抓在第 1 页全在库时提前停） | 用户问「抓到 3 条已在库的还能继续抓吗」——暴露停止条件④写错：原为「**整轮零新增**（round_new==0）即停」，重跑场景第 1 页（时间倒序）恰是上次已提取的那批 → 全在 `library_urls` → 第 1 轮就停，**永远翻不过第 1 页**，续抓恰在其目标场景（重跑同关键词）失效。该条件本意是防「gov.cn 忽略 `p` 参数、翻页失效」白烧预算，但该风险已被 `seen` 去重兜住（翻页失效=每页同 URL=全被 `url in seen` 拦下）。修：判据改为「**整轮零收获**」（`round_added==0`，连 merged 都没进任何新链接；已在库的行**算收获**——进 merged 供置灰展示，所以第 1 页全在库会继续翻页凑新增），`round_new` 变量删除。翻页失效的最坏代价 = 每组合多 1 次调用后即停（重复页零收获）。定时任务路径不受影响（其 `exclude_urls` 把库内 URL 硬跳过，两种判据等价）。`CLAUDE.md` 检索要点同步。**待验收**：重跑已完成任务的同一关键词 → 应翻页找出第 2 页起的新增篇目，而不是只有灰行 + 「本轮未检索到新篇目」 |
+| 2026-10-13 | 13 | 缺陷修复（判别误杀好文件 + 名额被「不建议」篇目挤占） | 用户报：五篇意见/通知（县域消费/汽车后市场/不动产登记/服务贸易标准化/反不正当竞争法）全被标「不建议入库」，且占满 `PIPELINE_MAX_POLICIES=5`，没有继续翻页补齐。**判别侧**：`test_judge.py` 升级为双轴矩阵（提示词 × state 组成，样例补 5 篇线上误判真实标题 + 同标题带/不带函字文号对照组）实测两轮 16 组合——①文号污染实锤：同标题仅文号含「函」即被判不入库（state 拼接文号在末尾，直判规则 函→不入库）；②长多机关连排标题全灭；③冠军「疑问句+枚举」× **state=仅标题** = 8/9 且唯一误判方向安全（函被判入库→面板多一行，而非好文件被丢），服务确定性（冠军复跑逐字一致）。修：`judge.py` state 只发标题、`config.py` 默认提示词换疑问句+枚举、`.env.example` 同步（用户 .env 的 JUDGE_INSTRUCTIONS 是注释态，重启即生效）。**名额侧**：判别从 fetch_node/scheduler 的**事后**调用移入 `_search_policies` 检索循环**逐页**执行（结果写回 item、`_to_policy_row` 落库、`judge_stats` 出参汇报 fail-open 失败数）——`target_new` 只数「建议入库」的新增，被标注的不占名额、翻页继续补齐；`fetch_node` 三分区各自封顶落库（建议入库/判别不建议仍在面板带徽标/已在库置灰），stage 文案改「建议入库 A · 判别不建议 B · 已在库 C」；scheduler 直接用带回的标注剔除（删事后判别），游标按「抓满 cap 篇**建议入库**」推进。前端零改动（ConfirmPanel 已渲染 judge_tagged）。另答疑：`PIPELINE_MAX_SEARCH_CALLS` 是检索**总调用预算**（组合×翻页各计 1 次），改后「跳过不建议继续搜」能翻多远由它封顶。静态检查：`py_compile` 通过。**待验收**：重启后跑能命中这批文件的任务 → 确认面板凑足 5 篇无「不建议入库」标记的新增、stage 三分计数、被判篇目仍带徽标展示 |
+| 2026-10-13 | 13 | 需求调整（不建议入库沉底） | 用户需求：「不建议入库」的内容统一排在列表下方、置灰、默认非选中。改 `ConfirmPanel.vue`：沉底排序由两档变三档（`sinkRank`：建议入库 0 → 判别不建议 1 → 已在库 2，与后端 stage 三分计数同序，sort 稳定组内保持日期倒序）；`watch(policies)` 补种 `deselected` 时 `judge_tagged` 行与 `in_library` 同等处理（`userToggled` 仍保用户手动切换）；`.in-lib` 灰样式泛化为 `.dim`（两类沉底行共用；未勾选行另有 `.off` 压暗 + 删除线）；头部计数改「建议入库 X · 不建议入库 Y · 已在库 Z」；提示文案、徽标 tooltip、`types.ts` 注释同步（不再是「仅提示，不影响勾选」）。纯前端展示逻辑——后端三分区/判别/定时剔除零改动。未跑 `pnpm build`（按约定不主动构建）。**待验收**：真实抓取中批复类应置灰沉底默认不勾；手动勾选后仍可正常提取 |
+| 2026-10-13 | 13 | 缺陷修复（翻页跳行） | 用户问翻页语义时发现：MCP 请求固定 `n=100`、返回前才截前 `limit` 条，而 gov.cn 的 `p` 按 `n` 步长翻页 → 每关键词条数=10 时 p=1 拿第 1–10 行、p=2 拿第 101–110 行，**第 11–100 行整段跳过**（此前日志记的「第 2 页起行为未实测」风险即此）。修：`getLatestPolicies.ts` 的 `pageSize` 由固定 100 改为 `= limit`（一处改动，请求 `n` 与合并循环截断、debug 的 page_size 一并对齐），`p` 连续递增时消费行号连续；残余缺口只剩 catMap 多目录合并 + 截断在**目录切换处**最多漏 `limit−1` 条/目录（自「每页漏 ~90 行」大幅收窄；单目录/筛选生效场景完全连续）。`page` 参数 description 补充 n=limit 语义。静态检查 `npx tsc --noEmit` 通过；**⚠️ 必须 `npm run build`**（不构建 = 静默无效）。**待验收**：重建后设小 `PIPELINE_PER_KEYWORD_LIMIT`（如 3）跑宽关键词，日志翻到 p=2 时拿到的应是第 4–6 行而非第 101+ 行（用任务日志里的检索 URL 或 debug.page_size 核对） |
+| 2026-10-13 | 13 | 需求新增（正文预检第二道筛） | 用户反馈两类漏网入库：① 医保发〔2026〕19号 图片版文件——原文全是 <img>，MCP `get_policy_fulltext` 容器为空时兜底整页 body，页面壳（CSS/JS 残渣，6237 字符仅 555 CJK、0 句末）成了正文，清洗 5% 安全网反保住垃圾；② 工信部信发〔2026〕209号 薄壳转发通知（134 字符 1 句）。laya 只看标题拦不住，用户要求筛在判别层、不在提取时判断。实现：`scripts/test_ingest_filter.py` 新增——MCP 真实链接 + 指标（清洗后 CJK/句末标点）+ 组合矩阵校准，**已实跑**：好例 cjk≥1062/句末≥29，坏例（含另 5 篇同类薄壳）句末≤1，空档巨大；`getPolicyFulltext.ts` 改容器命中即用（仅未知布局才兜底整页）+ 上报 `image_count`（**待用户 `npm run build`**）；`crawl_graph._search_policies` 循环内加 `_preflight_bodies`（laya 通过的抓全文，`split_fulltext`+`body_metrics` 算指标，不达标标 judge_tagged，judge_reason 记原因；抓取失败按不达标计）；`config.py`/`.env.example` 加 `PIPELINE_MIN_BODY_CHARS=200`/`PIPELINE_MIN_SENT_ENDERS=5`/`PIPELINE_PREFLIGHT_CONCURRENCY=4`（≤0 关闭，重启生效）；fetch_node 日志拆「laya 标题判别 X · 正文预检 Y · 预检抓取失败 Z」；scheduler 零改动（走既有 judge_tagged 剔除）。**待验收**：用户重建 MCP + 重启后重跑两坏例关键词 → 确认面板置灰、库中不再出现；已入库两条脏数据需删对应任务清掉 |

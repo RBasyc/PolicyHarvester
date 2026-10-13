@@ -31,12 +31,17 @@ export const getLatestPolicies = {
       doc_type: {
         type: "string",
         description: "Document type filter (pcodeJiguan), one of 国令/国发/国函/国办发/国办函. Only affects the gongwen catalog."
+      },
+      page: {
+        type: "number",
+        description: "Result page number (default: 1), passed through as gov.cn search API param p. The request's n equals limit, so consecutive pages advance exactly limit rows. Used by the pipeline to keep fetching past page 1 when dedup leaves too few new items.",
+        default: 1
       }
     },
     required: []
   },
 
-  async run(args: { startdate?: string; enddate?: string; limit?: number; keyword?: string; agency?: string; doc_type?: string }) {
+  async run(args: { startdate?: string; enddate?: string; limit?: number; keyword?: string; agency?: string; doc_type?: string; page?: number }) {
     try {
       const limit = Math.max(1, Math.min(args.limit ?? 100, 100));
       // 规范化关键词：去除首尾空白与重复空白
@@ -47,7 +52,7 @@ export const getLatestPolicies = {
       // fully-empty queries are all valid there (empty q = the library's browse list).
       // The old no-keyword branch scraped www.gov.cn/zhengce/zuixin/ (最新政策 HTML 列表) —
       // a different, smaller feed that silently ignores every filter. Wrong content: never use it.
-      const { items, debug } = await searchPolicyAPI(normalizedKeyword || "", limit, args.startdate, args.enddate, agency, docType);
+      const { items, debug } = await searchPolicyAPI(normalizedKeyword || "", limit, args.startdate, args.enddate, agency, docType, args.page);
       return {
         content: [{
           type: "text",
@@ -60,7 +65,8 @@ export const getLatestPolicies = {
               enddate: args.enddate,
               keyword: normalizedKeyword,
               agency,
-              doc_type: docType
+              doc_type: docType,
+              page: Math.max(1, Math.floor(args.page ?? 1))
             },
             items,
             debug
@@ -77,14 +83,20 @@ export const getLatestPolicies = {
 };
 
 // Use official gov.cn search API
-async function searchPolicyAPI(keyword: string, limit: number, startdate?: string, enddate?: string, agency?: string, docType?: string) {
+async function searchPolicyAPI(keyword: string, limit: number, startdate?: string, enddate?: string, agency?: string, docType?: string, pageArg?: number) {
   const items: any[] = [];
   const requestedUrls: string[] = [];
-  const page = 1;
-  const pageSize = 100; // 固定为100，只请求第一页
+  // 翻页续抓（Phase 13）：page 透传 gov.cn 的 p 参数（此前固定第一页）。越界页由 gov.cn
+  // 以非 200 code / 空列表表达，调用方（pipeline）据「该组合返回 0 条」判定翻空。
+  const page = Math.max(1, Math.floor(pageArg ?? 1));
+  // n 必须跟随 limit：gov.cn 的 p 按 n 为步长翻页（p=1&n=100 → 第 1–100 行，p=2 → 第 101–200 行）。
+  // 旧版 n 固定 100、返回前才截前 limit 条 → limit=10 时 p=1 取第 1–10 行、p=2 取第 101–110 行，
+  // 第 11–100 行整段跳过（续抓中间漏一大块）。n = limit 后 p 连续递增时消费的行号连续；
+  // catMap 多目录合并 + 截断仅在目录切换处最多漏 limit−1 条/目录（从「每页漏 ~90 行」收窄至此）。
+  const pageSize = limit;
 
   try {
-    // Build search API URL (only first page with n=100)
+    // Build search API URL (n = limit, so consecutive p pages are contiguous)
     const searchUrl = "https://sousuo.www.gov.cn/search-gov/data";
     const params = new URLSearchParams({
       't': 'zhengcelibrary_gw_bm_gb',

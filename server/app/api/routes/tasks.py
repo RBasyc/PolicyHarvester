@@ -93,6 +93,7 @@ async def create_task(payload: TaskCreate) -> TaskCreated:
             "pipeline_extract_concurrency": payload.pipeline_extract_concurrency,
             "pipeline_max_body_chars": payload.pipeline_max_body_chars,
             "pipeline_mcp_timeout": payload.pipeline_mcp_timeout,
+            "pipeline_model": payload.pipeline_model,
         },
     )
     keyword_hint = "、".join(payload.keywords) if payload.keywords else "未设置"

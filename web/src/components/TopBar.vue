@@ -111,7 +111,7 @@ async function onConfirmClear() {
       </button>
     </div>
     <div class="actions">
-      <!-- 抓取任务页：原有操作（布局与行为不变） -->
+      <!-- 抓取任务页：状态 + 定时任务入口 / 终止 / 开始抓取（清空按钮在成果库页） -->
       <template v-if="view === 'crawl'">
         <div class="status-tag" :class="tone">
           <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
@@ -143,6 +143,25 @@ async function onConfirmClear() {
         </button>
 
         <button
+          class="start-btn"
+          type="button"
+          :disabled="starting"
+          :title="ingestMode === 'schedule' ? '用当前配置创建定时任务' : `抓取源：${form.source}`"
+          @click="onStart"
+        >
+          <AppIcon :name="ingestMode === 'schedule' ? 'timer' : 'play'" :size="14" />
+          <span>{{ ingestMode === 'schedule' ? '定时入库' : starting ? '提交中…' : '开始抓取' }}</span>
+        </button>
+      </template>
+
+      <!-- 成果库 / 详情页：入库计数 + 清空（从抓取页移来，两步确认交互不变） -->
+      <template v-else>
+        <div class="status-tag">
+          <AppIcon name="database" :size="12" />
+          <span>已入库 {{ libraryMeta?.total ?? 0 }} 篇</span>
+        </div>
+
+        <button
           v-if="!confirmingClear"
           class="ghost-btn danger"
           type="button"
@@ -165,29 +184,6 @@ async function onConfirmClear() {
           </button>
           <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
         </div>
-
-        <button
-          class="start-btn"
-          type="button"
-          :disabled="starting"
-          :title="ingestMode === 'schedule' ? '用当前配置创建定时任务' : `抓取源：${form.source}`"
-          @click="onStart"
-        >
-          <AppIcon :name="ingestMode === 'schedule' ? 'timer' : 'play'" :size="14" />
-          <span>{{ ingestMode === 'schedule' ? '定时入库' : starting ? '提交中…' : '开始抓取' }}</span>
-        </button>
-      </template>
-
-      <!-- 成果库 / 详情页：入库计数 + 新建任务入口 -->
-      <template v-else>
-        <div class="status-tag">
-          <AppIcon name="database" :size="12" />
-          <span>已入库 {{ libraryMeta?.total ?? 0 }} 篇</span>
-        </div>
-        <button class="start-btn" type="button" title="回到抓取任务页新建抓取" @click="goCrawl()">
-          <AppIcon name="plus" :size="14" />
-          <span>新建抓取任务</span>
-        </button>
       </template>
     </div>
   </header>
@@ -332,7 +328,7 @@ async function onConfirmClear() {
   color: var(--text-tertiary);
 }
 
-/* 次要操作（终止 / 清空）：描边按钮，与主按钮「开始抓取」拉开层级 */
+/* 次要操作（终止 / 清空）：描边按钮，与主按钮拉开层级 */
 .ghost-btn {
   display: flex;
   align-items: center;

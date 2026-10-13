@@ -117,6 +117,8 @@ function reload() {
     <template v-else-if="libraryDetail">
       <!-- 政策头部 -->
       <section class="head-card">
+        <h1 class="head-title">{{ policy?.title }}</h1>
+
         <div class="tag-row">
           <span v-if="headAgency" class="head-tag">{{ headAgency }}</span>
           <span v-if="docType" class="head-tag">{{ docType }}</span>
@@ -126,8 +128,6 @@ function reload() {
             发布于 {{ policy.publish_date }}
           </span>
         </div>
-
-        <h1 class="head-title">{{ policy?.title }}</h1>
 
         <div class="meta-row">
           <span v-if="headDocNo" class="meta-item">
@@ -274,6 +274,10 @@ function reload() {
   color: var(--text-secondary);
   line-height: normal;
   white-space: nowrap;
+  /* 多部门联合发文的机关串很长：允许收缩 + 省略号截断（窄屏下不撑破 head-card） */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tag-spacer {
@@ -287,6 +291,7 @@ function reload() {
   font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .head-title {

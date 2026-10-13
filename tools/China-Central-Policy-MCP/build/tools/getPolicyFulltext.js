@@ -68,17 +68,29 @@ function parseGovCnPolicyHtml(html, url) {
     // Body extraction —— 真正的正文容器是 div#UCAP-CONTENT（.pages_content）。
     // 旧顺序 article→.content→.article 在 gov.cn 页面全部落空，会兜底到整页 body 文本，
     // 把 CSS/JS/导航噪声存进正文。
-    let body = $("div#UCAP-CONTENT").text().trim();
-    if (!body)
-        body = $(".pages_content").first().text().trim();
-    if (!body)
-        body = $("article").text().trim();
-    if (!body)
-        body = $(".content").text().trim();
-    if (!body)
-        body = $(".article").text().trim();
-    if (!body)
+    // **容器命中即用其文本；只有整页没有任何已知容器（未知布局站点）才兜底整页 body**——
+    // 图片版文件（红头文件扫描页）容器存在但 .text() 为空，若再兜底整页，导航/脚本/元信息
+    // 组成的页面壳就成了「正文」，下游清洗的 5% 安全网反而会保住这份垃圾（2026-10-13
+    // 医保发〔2026〕19号 漏网案例）。image_count 一并上报，供服务端把这类页面明确标为图片版。
+    const containerSelectors = ["div#UCAP-CONTENT", ".pages_content", "article", ".content", ".article"];
+    let body = "";
+    let imageCount = 0;
+    for (const sel of containerSelectors) {
+        const $el = $(sel).first();
+        if (!$el.length)
+            continue;
+        const text = $el.text().trim();
+        if (text) {
+            body = text;
+            imageCount = $el.find("img").length;
+            break;
+        }
+        // 容器存在但无文本：记下其中的图片数（图片版文件），继续找下一个容器
+        imageCount = Math.max(imageCount, $el.find("img").length);
+    }
+    if (!body && !imageCount) {
         body = $("body").text().trim();
+    }
     return {
         policy_id: url,
         title,
@@ -87,6 +99,9 @@ function parseGovCnPolicyHtml(html, url) {
         issuer,
         url,
         body,
+        // 命中的正文容器内 <img> 数量（图片版文件 >0 且 body 为空；整页兜底时恒 0），
+        // 供服务端把「抓不到文本」的页面明确标为图片版
+        image_count: imageCount,
         // 元信息表里的补充字段（服务端按名取用，缺省时为 ""）
         source: headMeta["来源"] || "",
         category: headMeta["主题分类"] || "",

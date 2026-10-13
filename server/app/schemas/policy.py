@@ -21,6 +21,9 @@ class PolicyResultItem(BaseModel):
     source_url: str | None = None
     status: ExtractStatus
     extracted_at: datetime | None = None
+    in_library: bool = False  # 已在成果库（其它任务提取成功的同一 URL）→ 确认面板置灰沉底
+    judge_tagged: bool | None = None  # 入库判别标注：True=不建议入库（仅提示）；None=未判别
+    judge_prob: float | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "PolicyResultItem":
@@ -31,6 +34,9 @@ class PolicyResultItem(BaseModel):
             source_url=row["source_url"],
             status=row["status"],
             extracted_at=row.get("extracted_at"),
+            in_library=bool(row.get("in_library")),
+            judge_tagged=row.get("judge_tagged"),
+            judge_prob=row.get("judge_prob"),
         )
 
 

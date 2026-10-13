@@ -5,14 +5,22 @@
 
 触发语义（与手动抓取的区别）：
 - **跳过人工确认**：检索结果**全部保留**，直接接提取段跑完全流程（用户已确认的选择）；
-- **跨轮 URL 去重**：历史轮次已入库的 `source_url` 直接跳过，本轮剔完为空记 `noop`
-  （正常跳过，不是失败，也不会在页面上留下一条「未检索到」的失败任务）；
+- **跨轮 / 全库 URL 去重**：本任务历史轮次 ∪ 成果库（其它任务已提取成功）的 `source_url`
+  直接跳过，本轮剔完为空记 `noop`（正常跳过，不是失败，也不会在页面上留下一条「未检索到」的失败任务）；
+- **入库判别**（Phase 13）：检索循环内逐页判别（见 `_search_policies`），被标注「不建议入库」
+  的篇目（批复/函等事务性文件）直接剔除、且不占抓取上限——抓满 cap 篇指**建议入库**的；
+  判别服务不可达 / 超时 fail-open 全部保留，只告警；
 - **滑动游标**（解决「固定窗口 + 上限 N + 最新优先 = 永远只抓到最新的 N 篇」）：
   `cursor_before` 是下一轮窗口的上界（exclusive）。
     - NULL    → 窗口 [date_from, 今天]，追最新发文；
     - 非 NULL → 窗口 [date_from, cursor_before - 1 天]，向更早回填。
   本轮**抓满上限**才把游标推进到「本轮最旧一篇的发布日期 − 1 天」；**没抓满**说明窗口
   已掏空，游标回 NULL，下一轮回到最新追新发文。配合跨轮去重，重复运行不会重复入库。
+
+防重入（Phase 13）：同一任务**同一时刻只允许一轮在跑**（`_running_jobs` 闸）。调度循环本身
+「先认领再串行执行」不会自我重叠；闸主要拦「立即运行」与正在跑的定时轮次并发（会导致
+重复建任务、重复提取、游标双写）。轮次耗时超过间隔属正常场景：`next_run_at` 锚定在轮次
+**开始**时刻，慢轮次跑完后下一个 tick 立刻补一轮——连续追赶但**不堆积**，同一时刻仍只有一轮。
 
 时间口径：daily/weekly 的 `run_time` 按**服务器本地时间**解释；`next_run_at` 存 timestamptz。
 """
@@ -44,6 +52,15 @@ _RUN_NOOP = "noop"
 _WEEKDAY_LABEL = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 _loop_task: asyncio.Task | None = None
+
+# 在跑的定时任务轮次（进程内防重入闸）：同一任务同一时刻只允许一轮（见模块 docstring）。
+# 单进程语义，与 crawl_graph._running 登记簿同类假设。
+_running_jobs: set[int] = set()
+
+
+def is_schedule_job_running(job_id: int) -> bool:
+    """该定时任务当前是否有一轮在执行（供「立即运行」接口提前 409）。"""
+    return job_id in _running_jobs
 
 
 def describe_schedule(
@@ -96,17 +113,30 @@ def next_run_of(job: dict[str, Any], *, after: datetime) -> datetime:
     )
 
 
-async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
+async def run_schedule_job(job_id: int, *, manual: bool = False) -> bool:
     """执行一轮定时任务。任何异常都会落成 `last_status=failed` 并保留原游标（下轮重试）。
 
     `manual`（立即运行按钮）允许触发已停用的任务，但不改变其停用状态。
+    返回是否真正执行了本轮（False = 该任务已有一轮在跑，被防重入闸拦下）。
     """
+    if job_id in _running_jobs:
+        logger.warning("定时任务 %s 已有一轮在执行，跳过本次触发（manual=%s）", job_id, manual)
+        return False
+    _running_jobs.add(job_id)
+    try:
+        return await _run_schedule_job_locked(job_id, manual=manual)
+    finally:
+        _running_jobs.discard(job_id)
+
+
+async def _run_schedule_job_locked(job_id: int, *, manual: bool) -> bool:
+    """`run_schedule_job` 的实际执行体（调用方已持有防重入闸）。"""
     job = await repo.fetch_schedule_job(job_id)
     if job is None:
         logger.warning("定时任务 %s 不存在，跳过", job_id)
-        return
+        return True
     if not job["enabled"] and not manual:
-        return
+        return True
 
     now = datetime.now().astimezone()
     name = job["name"]
@@ -123,7 +153,9 @@ async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
             # 游标已推进到回溯起点之前：回填完毕，回到追新
             new_cursor = None
         else:
-            exclude = await repo.fetch_schedule_job_urls(job_id)
+            cap = _effective(job, "pipeline_max_policies")
+            # 全库去重：本任务历史轮次 ∪ 成果库（其它任务已提取成功的），跨任务不重复提取
+            exclude = await repo.fetch_schedule_job_urls(job_id) | await repo.fetch_library_urls()
             items = await _search_policies(
                 list(job["keywords"] or []),
                 date_from,
@@ -132,13 +164,22 @@ async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
                 list(job["doc_types"] or []),
                 overrides=job,
                 exclude_urls=exclude,
+                target_new=cap,
             )
             rows = [row for item in items if (row := _to_policy_row(item, job["source"]))]
-            cap = _effective(job, "pipeline_max_policies")
-            rows = rows[:cap]
+
+            # 入库判别（Phase 13）：检索循环内已逐页判别并把标注写回行上（见 _search_policies），
+            # 这里直接剔除「不建议入库」的篇目（批复/函等事务性文件）。判别服务不可达时
+            # fail-open（检索侧就按建议入库计数、不会少抓），只告警。
+            judge_dropped = sum(1 for row in rows if row.get("judge_tagged"))
+            rows = [row for row in rows if not row.get("judge_tagged")][:cap]
+            if judge_dropped:
+                logger.info(
+                    "定时任务 %s（%s）判别剔除 %d 篇不建议入库的篇目", job_id, name, judge_dropped
+                )
 
             if not rows:
-                # 无新增：窗口掏空（或真的没有新发文），游标回 NULL，下一轮从最新追起
+                # 无新增（或全被判别剔除）：窗口掏空，游标回 NULL，下一轮从最新追起
                 new_cursor = None
             else:
                 task_id = await repo.create_task(
@@ -156,6 +197,7 @@ async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
                             "pipeline_extract_concurrency",
                             "pipeline_max_body_chars",
                             "pipeline_mcp_timeout",
+                            "pipeline_model",
                         )
                     },
                     schedule_job_id=job_id,
@@ -166,15 +208,19 @@ async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
                 )
                 if exclude:
                     await repo.add_task_log(
-                        task_id, f"跨轮去重：跳过已入库的 {len(exclude)} 个链接", tone="info"
+                        task_id, f"跨轮/全库去重：跳过已入库的 {len(exclude)} 个链接", tone="info"
                     )
                 await repo.insert_policies(task_id, rows)
                 await repo.refresh_task_counts(task_id)
                 await repo.add_task_log(
-                    task_id, f"检索完成：共获取 {len(rows)} 篇候选原文", tone="info"
+                    task_id,
+                    f"检索完成：获取 {len(rows)} 篇候选原文"
+                    + (f"（判别剔除 {judge_dropped} 篇不建议入库）" if judge_dropped else ""),
+                    tone="info",
                 )
 
-                # 游标推进：抓满上限 → 向更早回填一格；没抓满 → 窗口掏空，回到追新
+                # 游标推进：抓满上限（= cap 篇**建议入库**，rows 已剔除被判别的）→ 向更早回填一格；
+                # 没抓满 → 窗口掏空，回到追新
                 dates = [row["publish_date"] for row in rows if row.get("publish_date")]
                 if len(rows) >= cap and dates:
                     new_cursor = min(dates) - timedelta(days=1)
@@ -217,6 +263,7 @@ async def run_schedule_job(job_id: int, *, manual: bool = False) -> None:
             "定时任务 %s（%s）本轮结束：%s，下次触发 %s，游标 %s",
             job_id, name, status, next_run, new_cursor,
         )
+    return True
 
 
 # ---------- 调度循环 ----------

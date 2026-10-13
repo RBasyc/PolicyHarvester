@@ -60,10 +60,37 @@ _BREADCRUMB_RE = re.compile(r"^首页\s*[>＞·]")
 
 _MIN_KEEP_RATIO = 0.05
 
+# 零宽/格式字符（U+200B 零宽空格、BOM 等）：gov.cn 页面模板会塞在元信息值开头
+# （如「​商务部 …」）。str.strip() 与正则 \s 都不把它们当空白（Unicode 分类是 Cf），
+# 不专门剥掉就会带着进库、再原样显示到页面上。
+# 显式 \u 转义而非字面零宽字符：源码里放不可见字符易被编辑器/工具悄悄剥掉
+_ZWSP_RE = re.compile(r"[​‌‍⁠﻿]")
+
+
+def strip_zero_width(text: str) -> str:
+    """剥掉零宽/格式字符；归档清洗与检索元数据落库（`_to_policy_row`）共用。"""
+    return _ZWSP_RE.sub("", text)
+
+
+# 句末标点（陈述/疑问/感叹 + 分号）：真政策条文的密度信号，页面壳与薄壳通知几乎为零
+_SENT_ENDER_RE = re.compile(r"[。！？；]")
+
+
+def body_metrics(clean_body: str) -> tuple[int, int]:
+    """正文预检指标：`(CJK 字数, 句末标点数)`。输入用 `split_fulltext` 清洗后的正文。
+
+    「值得入库」的第二道筛（laya 判别只看标题，2026-10-13 漏网两类：图片版文件抓回来
+    的是页面壳——CJK 可达 555 但句末为 0；「现将《方案》印发给你们」式薄壳通知百余字
+    1 句）。实测好例 cjk≥1062 / 句末≥29，坏例 cjk≤642 / 句末≤1，见
+    scripts/test_ingest_filter.py 的校准矩阵。
+    """
+    body = clean_body or ""
+    return len(_CJK_RE.findall(body)), len(_SENT_ENDER_RE.findall(body))
+
 
 def split_fulltext(text: str) -> tuple[FulltextMeta, str]:
     """把已归档全文拆成 (元信息, 干净正文)。元信息取不到的字段为 None。"""
-    raw = (text or "").strip()
+    raw = strip_zero_width(text or "").strip()
     if not raw:
         return FulltextMeta(), ""
 

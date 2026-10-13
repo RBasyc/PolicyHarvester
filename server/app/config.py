@@ -1,13 +1,26 @@
 """配置管理：从环境变量 / .env 文件读取配置。"""
 
+from __future__ import annotations
+
+import json
+import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 # 仓库根目录（server/app/config.py -> 上三级）
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# 真实 shell 环境的快照（**必须**在 load_dotenv 之前拍）：load_dotenv 不覆盖已有变量，
+# 启动后 os.environ 里已分不清「用户在 shell 里设的」和「从 .env 灌进来的」；
+# 提取模型注册表要热读 .env（改完不重启），优先级需要还原成：真实环境变量 > 当前 .env。
+_REAL_ENV = dict(os.environ)
 
 # .env 统一放在仓库根目录（与 web/、database/ 平级），与启动时的工作目录无关。
 # 先把 .env 加载进 os.environ：
@@ -36,6 +49,8 @@ class Settings(BaseSettings):
     anthropic_base_url: str | None = None  # 可选：自定义 API 网关
     model_name: str = "claude-opus-5-5"
     max_tokens: int = 16000
+    # 提取模型注册表（PIPELINE_MODELS）不走 Settings：它要**热读** .env（改完不重启），
+    # 见 get_model_registry() / _live_env()。
 
     # --- Server ---
     host: str = "0.0.0.0"
@@ -54,13 +69,125 @@ class Settings(BaseSettings):
     pipeline_max_body_chars: int = 12000  # 送进大模型的正文上限（超出截断）
     pipeline_mcp_timeout: int = 30  # 单次 MCP 调用超时秒数（检索/取全文）
     pipeline_max_search_calls: int = 12  # 检索扇出上限：keyword × 发布机构 × 文种 组合最多打多少次 MCP（防组合爆炸）
+    # 正文预检（laya 判别之后的第二道筛，≤0 = 关闭对应信号；改 .env 需重启，与 JUDGE_* 同）：
+    # 图片版文件抓回来的是页面壳（CSS/JS 残渣，CJK 可达 555 但句末标点 0）、薄壳转发通知
+    # 只有百余字——laya 只看标题拦不住。阈值由 scripts/test_ingest_filter.py 用真实链接校准
+    # （2026-10-13：好例 cjk≥1062 / 句末≥29，坏例 cjk≤642 / 句末≤1，空档巨大）。
+    pipeline_min_body_chars: int = 200  # 清洗后正文 CJK 字数下限
+    pipeline_min_sent_enders: int = 5  # 清洗后正文句末标点（。！？；）数下限
+    pipeline_preflight_concurrency: int = 4  # 正文预检并发抓全文的篇数（信号量封顶）
 
     # --- MCP: central-policy（China-Central-Policy-MCP · 国务院政策检索，node stdio 启动，无需 API Key）---
     mcp_policy_enabled: bool = True
     mcp_policy_command: str = "node"
     mcp_policy_args: list[str] = [_DEFAULT_POLICY_MCP_ENTRY]
 
+    # --- 入库判别服务（judge · Phase 13）：检索阶段对候选篇目（仅标题）做「建议/不建议入库」标注 ---
+    # 注意：这组走 Settings（进程启动时读取），改 .env 需重启服务（与 PIPELINE_MODELS 的热读不同）。
+    # 服务不可达 / 超时 → fail-open：全部按「建议入库」处理，只在服务端日志告警，绝不阻断抓取主流程。
+    judge_enabled: bool = True
+    judge_url: str = "http://192.168.16.201:8084/v1/systemone"
+    judge_timeout_seconds: int = 5  # 单篇判别请求超时秒数
+    judge_concurrency: int = 4  # 并发判别篇数（信号量封顶）
+    # 提示词写法与 state 组成是双轴矩阵实测出来的（scripts/test_judge.py，2026-10-13 两轮
+    # 共 16 组合）：「疑问句+枚举」× state=仅标题 8/9，且唯一误判方向安全（函被判入库，
+    # 只是在确认面板多一行）；旧的「文种直判」对长标题/含函文号只有 4/9——文号里的
+    # 「函」会把模型带偏。该 RL 模型对措辞极敏感，改前先跑一遍矩阵，别凭语感改。
+    judge_instructions: str = (
+        "这篇文件属于哪一类？批复、函、人事任免、公告、会议纪要等事务性或礼节性文件"
+        "选「不入库」；条例、办法、规定、规划、意见等具有长期执行效力的政策文件选「入库」。"
+    )
+    judge_keep_choice: str = "入库"  # criteria[0]：判到它 → 正常入库
+    judge_drop_choice: str = "不入库"  # criteria[1]：判到它 → 打「不建议入库」标记
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# ---------- 提取模型注册表（「高级设置 → 提取模型」下拉框数据源） ----------
+
+
+class ModelRegistryEntry(BaseModel):
+    """`PIPELINE_MODELS` JSON 数组里的一项（全部走 **Anthropic 兼容协议**，统一 ChatAnthropic）。
+
+    - `id`         稳定标识，落库到 `crawl_task.pipeline_model` / `schedule_job.pipeline_model`；
+    - `model`      发往 API 的模型名（也会写进 extraction.model 做溯源）；
+    - `base_url`   Anthropic 兼容端点；**不填 = 复用 ANTHROPIC_BASE_URL 网关**（如 Kimi）。
+                   DeepSeek 填 https://api.deepseek.com/anthropic；
+    - `api_key_env` 从哪个环境变量取 key 做 x-api-key 认证；**不填 = 复用 ANTHROPIC_*
+                   网关认证**（AUTH_TOKEN Bearer / ANTHROPIC_API_KEY）；
+    - `max_tokens` 不填用 .env 的 MAX_TOKENS；
+    - `thinking`   是否保留思考模式，**默认 False（关）**——提取只要结构化结果，思考又慢
+                   又烧 token；需要时在项里写 "thinking": true 交给服务端默认。
+    """
+
+    id: str
+    label: str
+    model: str
+    base_url: str | None = None  # 不填 = 复用 ANTHROPIC_BASE_URL 网关
+    api_key_env: str | None = None  # 不填 = 复用 ANTHROPIC_* 网关认证；DeepSeek 用 DEEPSEEK_API_KEY
+    max_tokens: int | None = None  # 不填用 .env 的 MAX_TOKENS
+    thinking: bool = False  # 默认关思考：thinking={"type": "disabled"}（Anthropic 协议统一参数）
+
+
+def _live_env(name: str) -> str:
+    """热读一个配置项：真实 shell 环境变量 > **当前** .env 文件 > 启动时灌进 os.environ 的旧值。
+
+    供 `PIPELINE_MODELS` 注册表及其 key 使用——改完 .env **无需重启**，下一次读取即生效。
+    （直接读 os.environ 不行：它混着启动时从旧 .env 灌入的值，改文件后不会跟着变。）
+    """
+    fresh = dotenv_values(_REPO_ROOT / ".env")
+    value = _REAL_ENV.get(name) or fresh.get(name) or os.environ.get(name) or ""
+    return value.strip()
+
+
+def _default_registry() -> list[ModelRegistryEntry]:
+    """未配置 PIPELINE_MODELS 时的兜底：单模型，行为与历史版本完全一致。"""
+    s = get_settings()
+    return [
+        ModelRegistryEntry(
+            id="default", label=f"默认（{s.model_name}）", model=s.model_name
+        )
+    ]
+
+
+def get_model_registry() -> list[ModelRegistryEntry]:
+    """解析 `PIPELINE_MODELS`（**每次调用都热读 .env**，改完无需重启服务）。
+
+    解析失败 / 为空时告警并回退单模型，不让整个服务起不来。故意不加缓存——
+    调用频率是「每次建任务/每篇提取」量级，读一个小文件的开销可以忽略。
+    """
+    raw = _live_env("PIPELINE_MODELS")
+    if not raw:
+        return _default_registry()
+    try:
+        entries = [ModelRegistryEntry.model_validate(item) for item in json.loads(raw)]
+        # 按 id 保序去重（同一个 id 出现两次时下拉框会两个都选中）
+        seen: set[str] = set()
+        unique = [e for e in entries if not (e.id in seen or seen.add(e.id))]
+        if unique:
+            return unique
+        logger.warning("PIPELINE_MODELS 是空数组，回退默认模型注册表")
+    except Exception as exc:  # noqa: BLE001 - 配置写错不该让服务起不来
+        logger.warning("PIPELINE_MODELS 解析失败（%s），回退默认模型注册表", exc)
+    return _default_registry()
+
+
+def resolve_model_entry(model_id: str | None) -> ModelRegistryEntry:
+    """按 id 取注册表项；None / 找不到（.env 后来改过）时回退第一项（= 默认模型）。"""
+    registry = get_model_registry()
+    if model_id:
+        for entry in registry:
+            if entry.id == model_id:
+                return entry
+        logger.warning(
+            "未知的提取模型 id：%s（PIPELINE_MODELS 改过？），回退默认 %s", model_id, registry[0].id
+        )
+    return registry[0]
+
+
+def resolve_model_api_key(entry: ModelRegistryEntry) -> str:
+    """注册表项自带 key 时从 `api_key_env` 取（同样热读：换 key 改 .env 即生效，不用重启）。"""
+    return _live_env(entry.api_key_env or "DEEPSEEK_API_KEY")

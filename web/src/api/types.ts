@@ -34,6 +34,8 @@ export interface TaskDTO {
   pipeline_extract_concurrency: number | null
   pipeline_max_body_chars: number | null
   pipeline_mcp_timeout: number | null
+  /** 提取模型（.env PIPELINE_MODELS 注册表 id）；null = 默认模型（列表第一项） */
+  pipeline_model: string | null
   /** 0-100 */
   progress: number
   /** 预计剩余秒数；无可靠估算时为 null */
@@ -63,6 +65,11 @@ export interface PolicyResultItem {
   catalog: string | null
   status: ExtractStatus
   extracted_at: string | null
+  /** 已在成果库（其它任务提取成功的同一 URL）：确认面板置灰沉底、默认不勾选 */
+  in_library: boolean
+  /** 入库判别服务标注：true=不建议入库（确认面板置灰沉底、默认不勾选，可手动勾选）；null=未判别 */
+  judge_tagged: boolean | null
+  judge_prob: number | null
 }
 
 export interface PolicySummary {
@@ -193,6 +200,8 @@ export interface TaskCreatePayload {
   pipeline_extract_concurrency: number | null
   pipeline_max_body_chars: number | null
   pipeline_mcp_timeout: number | null
+  /** 提取模型（.env PIPELINE_MODELS 注册表 id）；null = 默认模型（列表第一项） */
+  pipeline_model: string | null
 }
 
 /** 单个筛选项（名字 + 当前检索条件下的条数）。 */
@@ -222,6 +231,12 @@ export interface TaskDeleted {
   deleted: number
 }
 
+/** 「高级设置 → 提取模型」下拉框的一项（后端 .env PIPELINE_MODELS 注册表，不含密钥）。 */
+export interface ModelOption {
+  id: string
+  label: string
+}
+
 /** 生效的抓取 / 提取流水线参数（只读，来自后端 .env 的 PIPELINE_*，改配置需重启服务）。 */
 export interface PipelineConfig {
   pipeline_max_policies: number
@@ -229,6 +244,10 @@ export interface PipelineConfig {
   pipeline_extract_concurrency: number
   pipeline_max_body_chars: number
   pipeline_mcp_timeout: number
+  /** 可选提取模型列表（第一项 = 默认模型） */
+  models: ModelOption[]
+  /** 默认提取模型 id（models[0].id；表单里的 null 会回填成它） */
+  default_model: string
 }
 
 // ---------- 定时入库（Phase 11） ----------
@@ -252,6 +271,8 @@ export interface ScheduleJobDTO {
   pipeline_extract_concurrency: number | null
   pipeline_max_body_chars: number | null
   pipeline_mcp_timeout: number | null
+  /** 提取模型（.env PIPELINE_MODELS 注册表 id）；null = 默认模型（列表第一项） */
+  pipeline_model: string | null
   schedule_kind: ScheduleKind
   /** minutely/hourly 的间隔（小时也折算成分钟） */
   interval_minutes: number | null
@@ -283,6 +304,8 @@ export interface ScheduleCreatePayload {
   pipeline_extract_concurrency: number | null
   pipeline_max_body_chars: number | null
   pipeline_mcp_timeout: number | null
+  /** 提取模型（.env PIPELINE_MODELS 注册表 id）；null = 默认模型（列表第一项） */
+  pipeline_model: string | null
   schedule_kind: ScheduleKind
   /** minutely/hourly 的间隔数值（分钟或小时，取决于 schedule_kind） */
   every: number | null

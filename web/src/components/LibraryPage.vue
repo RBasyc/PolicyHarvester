@@ -424,6 +424,10 @@ function hasFilter(): boolean {
   color: var(--text-secondary);
   line-height: normal;
   white-space: nowrap;
+  /* 多部门联合发文的机关串很长：允许收缩 + 省略号截断，不能撑爆卡片 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-tag-spacer {
@@ -434,6 +438,7 @@ function hasFilter(): boolean {
   font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .card-summary {

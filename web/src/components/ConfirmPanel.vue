@@ -7,14 +7,19 @@
  *
  * 选择状态用「取消勾选的集合」（`deselected`）表示而不是「已勾选集合」：
  * 这样新出现的行默认就是选中的，也不需要在 `policies` 刷新时做额外的同步。
+ * 例外（Phase 13）：**已在成果库**（`in_library`）与**判别标注不建议入库**（`judge_tagged`）的行
+ * 默认取消勾选、置灰沉底——由 `watch(policies)` 补种进 `deselected`，且只补种用户没手动切换过的行。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { cancelTask, confirming, confirmSelection, policies, stopping, task } from '../store'
 import type { PolicyResultItem } from '../api/types'
 
 /** 用户**取消**勾选的篇目 id；不在这里的（含刚刷出来的新行）视为选中。 */
 const deselected = ref<Set<number>>(new Set())
+
+/** 用户主动切换过勾选的篇目：SSE 刷新重新补种「已在库默认不勾」时不再覆盖用户的选择。 */
+const userToggled = new Set<number>()
 
 const total = computed(() => policies.value.length)
 const selectedIds = computed(() =>
@@ -23,6 +28,39 @@ const selectedIds = computed(() =>
 const selectedCount = computed(() => selectedIds.value.length)
 const allSelected = computed(() => selectedCount.value === total.value)
 const noneSelected = computed(() => selectedCount.value === 0)
+
+/** 沉底权重：建议入库 0 → 判别不建议 1 → 已在库 2（与后端三分区、stage 文案的顺序一致）。 */
+function sinkRank(row: PolicyResultItem): number {
+  if (row.in_library) return 2
+  if (row.judge_tagged) return 1
+  return 0
+}
+
+/** 展示顺序：建议入库在前（后端已按发布日期倒序），不建议入库与已在库的置灰沉底（sort 稳定，组内保持原序）。 */
+const displayedPolicies = computed(() =>
+  [...policies.value].sort((a, b) => sinkRank(a) - sinkRank(b)),
+)
+const keepCount = computed(
+  () => policies.value.filter((row) => !row.in_library && !row.judge_tagged).length,
+)
+const taggedCount = computed(
+  () => policies.value.filter((row) => !row.in_library && row.judge_tagged).length,
+)
+const libCount = computed(() => policies.value.filter((row) => row.in_library).length)
+
+// 已在库 / 判别不建议的行默认不勾选：只在 policies 变化时补种，且不碰用户切换过的行；
+// 其余新增行永远不进 deselected —— 「新行默认选中」的原有约定保持不变。
+watch(
+  policies,
+  (rows) => {
+    const next = new Set(deselected.value)
+    for (const row of rows) {
+      if ((row.in_library || row.judge_tagged) && !userToggled.has(row.id)) next.add(row.id)
+    }
+    deselected.value = next
+  },
+  { immediate: true },
+)
 
 const rangeText = computed(() => {
   const current = task.value
@@ -52,6 +90,7 @@ function toggle(id: number): void {
   if (next.has(id)) next.delete(id)
   else next.add(id)
   deselected.value = next
+  userToggled.add(id)
 }
 
 function selectAll(): void {
@@ -85,7 +124,7 @@ async function onConfirm(): Promise<void> {
     <header class="confirm-head">
       <div class="head-left">
         <h2 class="head-title">检索结果确认</h2>
-        <span class="count-tag">共 {{ total }} 篇 · 已选 {{ selectedCount }} 篇</span>
+        <span class="count-tag">共 {{ total }} 篇（建议入库 {{ keepCount }} · 不建议入库 {{ taggedCount }} · 已在库 {{ libCount }}）· 已选 {{ selectedCount }} 篇</span>
       </div>
       <div class="head-right">
         <button class="text-btn" type="button" :disabled="allSelected" @click="selectAll">
@@ -100,6 +139,7 @@ async function onConfirm(): Promise<void> {
     <p class="hint">
       检索结果按关键词返回，<strong>相关度与发布日期都不保证准确</strong>（{{ rangeText }}）。
       请只勾选真正要抓取的政策——未勾选的会被丢弃，勾中的才会调用大模型逐篇提取。
+      已入成果库、判别标注「不建议入库」的篇目统一置灰沉底、默认不勾选——仍可手动勾选。
     </p>
 
     <div class="table-wrap">
@@ -112,10 +152,10 @@ async function onConfirm(): Promise<void> {
       </div>
 
       <div
-        v-for="row in policies"
+        v-for="row in displayedPolicies"
         :key="row.id"
         class="table-row"
-        :class="{ off: !isSelected(row.id) }"
+        :class="{ off: !isSelected(row.id), dim: row.in_library || !!row.judge_tagged }"
         role="checkbox"
         :aria-checked="isSelected(row.id)"
         tabindex="0"
@@ -135,9 +175,11 @@ async function onConfirm(): Promise<void> {
         </div>
         <div class="col title-col">
           <span class="row-title">{{ row.title }}</span>
+          <span v-if="row.judge_tagged" class="flag judge" title="判别服务标注：不建议入库（默认不勾选，可手动勾选）">不建议入库</span>
         </div>
         <div class="col date-col">
           <span class="row-date">{{ row.publish_date ?? '—' }}</span>
+          <span v-if="row.in_library" class="flag lib">已在库</span>
           <span v-if="dateFlag(row) === 'out'" class="flag out">超出范围</span>
           <span v-else-if="dateFlag(row) === 'none'" class="flag none">无日期</span>
         </div>
@@ -313,6 +355,13 @@ async function onConfirm(): Promise<void> {
   text-decoration: line-through;
 }
 
+/* 置灰沉底的行（已在库 / 判别不建议）：整行压灰（勾选状态仍可手动改变） */
+.table-row.dim .row-title,
+.table-row.dim .row-date,
+.table-row.dim .row-catalog {
+  color: var(--text-tertiary);
+}
+
 .col {
   display: flex;
   align-items: center;
@@ -389,6 +438,18 @@ async function onConfirm(): Promise<void> {
 .flag.none {
   background: #f1f2f4;
   color: var(--text-tertiary);
+}
+
+/* 已在成果库：中性灰标 */
+.flag.lib {
+  background: #eef1f4;
+  color: var(--text-tertiary);
+}
+
+/* 判别服务「不建议入库」：橙标提示（该行已置灰沉底、默认不勾选） */
+.flag.judge {
+  background: #fff4e5;
+  color: #b45309;
 }
 
 .row-link {

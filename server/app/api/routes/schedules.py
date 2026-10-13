@@ -16,7 +16,12 @@ from datetime import datetime, time
 from fastapi import APIRouter, HTTPException
 
 from app.db import repositories as repo
-from app.scheduler import describe_schedule, next_run_of, trigger_schedule_job
+from app.scheduler import (
+    describe_schedule,
+    is_schedule_job_running,
+    next_run_of,
+    trigger_schedule_job,
+)
 from app.schemas.schedule import (
     ScheduleCreate,
     ScheduleDeleted,
@@ -61,6 +66,7 @@ async def create_schedule(payload: ScheduleCreate) -> ScheduleJobDTO:
             "pipeline_extract_concurrency": payload.pipeline_extract_concurrency,
             "pipeline_max_body_chars": payload.pipeline_max_body_chars,
             "pipeline_mcp_timeout": payload.pipeline_mcp_timeout,
+            "pipeline_model": payload.pipeline_model,
         },
         schedule_kind=payload.schedule_kind,
         interval_minutes=payload.interval_minutes,
@@ -86,7 +92,14 @@ async def toggle_schedule(job_id: int) -> ScheduleToggled:
 @router.post("/{job_id}/run", response_model=ScheduleTriggered)
 async def run_schedule(job_id: int) -> ScheduleTriggered:
     """立即触发一轮（后台执行，不等下一个触发点）。进度到「抓取进度」面板看。"""
-    await _get_job_or_404(job_id)
+    job = await _get_job_or_404(job_id)
+    if is_schedule_job_running(job_id):
+        # 防重入（Phase 13）：同一任务同一时刻只允许一轮——调度轮次正在跑时拒绝手动触发，
+        # 否则会并发两轮（重复建任务、重复提取、游标双写）。
+        raise HTTPException(
+            status_code=409,
+            detail=f"定时任务「{job['name']}」已有一轮在执行中，请等本轮结束后再试",
+        )
     trigger_schedule_job(job_id)
     return ScheduleTriggered()
 

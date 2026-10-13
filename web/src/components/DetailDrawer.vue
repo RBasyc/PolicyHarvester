@@ -8,6 +8,23 @@ import type { ExtractStatus, PolicyExtractionResponse } from '../api/types'
 const props = defineProps<{ open: boolean; policyId: number | null }>()
 const emit = defineEmits<{ close: [] }>()
 
+/**
+ * 遮罩点击关窗：记录 mousedown 起点，click 时也要求不在抽屉面板内才关。
+ * 原先的 @click.self 拦不住「面板内按住拖到遮罩上松开」（选中文本）的手势——按 DOM
+ * 规范 click 派发在 md/mu 两目标的公共祖先上，此时恰好是 overlay 自身，.self 判定反而
+ * 通过导致误关；而单纯点击遮罩时 target 是 .mask，.self 本就不通过（点遮罩从未生效）。
+ * 改为「按下与抬起都不在抽屉内」判定后两种手势都正确。
+ */
+let downOutsideDrawer = false
+
+function onOverlayDown(event: MouseEvent) {
+  downOutsideDrawer = !(event.target as Element).closest('.drawer')
+}
+
+function onOverlayClick(event: MouseEvent) {
+  if (downOutsideDrawer && !(event.target as Element).closest('.drawer')) emit('close')
+}
+
 const detail = ref<PolicyExtractionResponse | null>(null)
 const loading = ref(false)
 const failed = ref(false)
@@ -99,7 +116,7 @@ function formatDateTime(value: string | null): string {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="overlay" @click.self="emit('close')">
+    <div v-if="open" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
       <div class="mask"></div>
       <aside class="drawer" role="dialog" aria-modal="true">
         <header class="drawer-head">

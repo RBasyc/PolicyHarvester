@@ -84,6 +84,7 @@ class ScheduleCreate(ScheduleParams):
     pipeline_extract_concurrency: int | None = Field(None, ge=1, le=8)
     pipeline_max_body_chars: int | None = Field(None, ge=500, le=100_000)
     pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600)
+    pipeline_model: str | None = Field(None, max_length=100, description="提取模型（.env PIPELINE_MODELS 的 id）")
 
     @field_validator("name")
     @classmethod
@@ -117,6 +118,19 @@ class ScheduleCreate(ScheduleParams):
                 cleaned.append(word)
         return cleaned
 
+    @field_validator("pipeline_model")
+    @classmethod
+    def _check_pipeline_model(cls, value: str | None) -> str | None:
+        """与 TaskCreate 同一白名单：模型 id 必须在 .env 的 PIPELINE_MODELS 注册表里。"""
+        if value is None:
+            return None
+        from app.config import get_model_registry  # 局部导入避免循环
+
+        ids = [entry.id for entry in get_model_registry()]
+        if value not in ids:
+            raise ValueError(f"未知提取模型：{value}（可选：{'、'.join(ids)}）")
+        return value
+
 
 class ScheduleJobDTO(BaseModel):
     """定时任务全量状态：列表页与表单回显共用同一形状。"""
@@ -133,6 +147,7 @@ class ScheduleJobDTO(BaseModel):
     pipeline_extract_concurrency: int | None = None
     pipeline_max_body_chars: int | None = None
     pipeline_mcp_timeout: int | None = None
+    pipeline_model: str | None = None
 
     schedule_kind: ScheduleKind
     interval_minutes: int | None = None
@@ -163,6 +178,7 @@ class ScheduleJobDTO(BaseModel):
             pipeline_extract_concurrency=row.get("pipeline_extract_concurrency"),
             pipeline_max_body_chars=row.get("pipeline_max_body_chars"),
             pipeline_mcp_timeout=row.get("pipeline_mcp_timeout"),
+            pipeline_model=row.get("pipeline_model"),
         )
 
     @property

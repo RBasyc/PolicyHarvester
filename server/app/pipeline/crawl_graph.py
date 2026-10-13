@@ -10,7 +10,7 @@
     （丢弃未勾选篇目）→ extract → summarize → END
 
 - `prepare`       任务置 running、写首条日志
-- `fetch`         调用 MCP `get_latest_policies`（多关键词逐个检索后按 URL 去重）→ 落库 → 重算计数
+- `fetch`         调用 MCP `get_latest_policies`（多关键词逐个检索后按 URL 去重，逐页入库判别）→ 落库 → 重算计数
 - `await_confirm` 任务置 `awaiting_confirmation` 并停住——**图到此结束**，等用户确认
 - `extract`       逐篇：`get_policy_fulltext` 取正文 → 大模型结构化提取 → 写 extraction + fact_item
 - `summarize`     任务置 completed、汇总日志
@@ -43,8 +43,9 @@ from app.agent.mcp import find_tool, tool_json
 from app.config import get_settings
 from app.db import repositories as repo
 from app.db.repositories import PolicyRow
+from app.pipeline import judge
 from app.pipeline.extract import extract_policy
-from app.pipeline.fulltext_clean import split_fulltext
+from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class PipelineState(TypedDict, total=False):
     pipeline_extract_concurrency: int | None
     pipeline_max_body_chars: int | None
     pipeline_mcp_timeout: int | None
+    pipeline_model: str | None  # 提取模型（PIPELINE_MODELS 注册表 id；None = 默认模型，即第一项）
     policies: list[dict[str, Any]]  # 待提取篇目（id / title / source_url）
     error: str | None
 
@@ -95,6 +97,12 @@ async def prepare_node(state: PipelineState) -> dict:
 
 async def fetch_node(state: PipelineState) -> dict:
     task_id = state["task_id"]
+    cap = _effective(state, "pipeline_max_policies")
+    # 先查成果库（Phase 13）：检索阶段就区分「新增 / 已在库」，并续抓直到凑够 cap 篇
+    # **建议入库的新增**——判别在检索循环内逐页完成（见 _search_policies），被判「不建议」
+    # 的不占名额，结果已写回 item 上的 judge_tagged / judge_prob。
+    library_urls = await repo.fetch_library_urls()
+    judge_stats: dict[str, int] = {}
     try:
         items = await _search_policies(
             state.get("keywords") or [],
@@ -103,23 +111,73 @@ async def fetch_node(state: PipelineState) -> dict:
             state.get("agencies") or [],
             state.get("doc_types") or [],
             overrides=state,
+            library_urls=library_urls,
+            target_new=cap,
+            judge_stats=judge_stats,
         )
     except PipelineError as exc:
         return {"error": str(exc)}
 
     rows = [row for item in items if (row := _to_policy_row(item, state.get("source")))]
-    if not rows:
+    fresh = [r for r in rows if r["source_url"] not in library_urls]
+    # 三分区各自封顶：建议入库的新增凑满 cap（检索循环已按此口径停）；被判「不建议」的
+    # 仍落库供确认面板提示（同样封顶，防病态关键词刷几十行批复淹没面板）；已在库的置灰展示
+    keep_rows = [r for r in fresh if not r.get("judge_tagged")][:cap]
+    tagged_rows = [r for r in fresh if r.get("judge_tagged")][:cap]
+    lib_rows = [r for r in rows if r["source_url"] in library_urls][:cap]
+
+    if not keep_rows and not tagged_rows and not lib_rows:
         return {
             "error": "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试",
         }
 
-    await repo.insert_policies(task_id, rows[: _effective(state, "pipeline_max_policies")])
+    await repo.insert_policies(task_id, keep_rows + tagged_rows + lib_rows)
     await repo.refresh_task_counts(task_id)
 
-    # 以落库结果为准（去重/截断后真实入库的篇目）
+    # 以落库结果为准（去重/截断后真实入库的篇目），三分计数也从库里读（单一事实来源）
     stored = await repo.fetch_task_policies(task_id)
-    await repo.set_task_stage(task_id, f"已检索到 {len(stored)} 篇，等待确认抓取")
-    await repo.add_task_log(task_id, f"检索完成：共获取 {len(stored)} 篇候选原文", tone="info")
+    n_keep = sum(1 for p in stored if not p["in_library"] and not p["judge_tagged"])
+    n_tagged = sum(1 for p in stored if not p["in_library"] and p["judge_tagged"])
+    n_lib = sum(1 for p in stored if p["in_library"])
+    await repo.set_task_stage(
+        task_id,
+        f"已检索到 {len(stored)} 篇（建议入库 {n_keep} · 判别不建议 {n_tagged} · 已在库 {n_lib}），等待确认抓取",
+    )
+    await repo.add_task_log(
+        task_id,
+        f"检索完成：建议入库 {n_keep} 篇，另有 {n_tagged} 篇被判别标注不建议入库、"
+        f"{n_lib} 篇已在成果库（置灰展示、默认不勾选）",
+        tone="info",
+    )
+    if not n_keep:
+        await repo.add_task_log(
+            task_id,
+            "本轮未凑够建议入库的新篇目；可勾选带标记/已在库的行强制提取，或放弃本次抓取",
+            tone="info",
+        )
+    if n_tagged:
+        # 拆开计数让来源可读：laya 标题判别 / 正文预检剔除 / 预检抓取失败（都落 judge_tagged 一列）
+        n_body = judge_stats.get("body_rejected", 0)
+        n_preflight_fail = min(judge_stats.get("preflight_failed", 0), n_tagged)
+        n_laya = max(n_tagged - n_body - n_preflight_fail, 0)
+        breakdown = f"laya 标题判别 {n_laya} · 正文预检 {n_body} · 预检抓取失败 {n_preflight_fail}"
+        await repo.add_task_log(
+            task_id,
+            f"标注 {n_tagged} 篇不建议入库（{breakdown}；仅提示，是否抓取由你决定）",
+            tone="info",
+        )
+    if judge_stats.get("preflight_failed"):
+        await repo.add_task_log(
+            task_id,
+            f"正文预检 {judge_stats['preflight_failed']} 篇抓取失败，按不建议入库处理",
+            tone="info",
+        )
+    if judge_stats.get("failures"):
+        await repo.add_task_log(
+            task_id,
+            f"判别服务本轮 {judge_stats['failures']} 篇调用失败，按建议入库处理（fail-open）",
+            tone="info",
+        )
     return {
         "policies": [
             {"id": p["id"], "title": p["title"], "source_url": p["source_url"]}
@@ -158,13 +216,31 @@ async def _search_policies(
     doc_types: list[str] | None = None,
     overrides: dict[str, Any] | None = None,
     exclude_urls: set[str] | None = None,
+    library_urls: set[str] | None = None,
+    target_new: int | None = None,
+    judge_stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重。
+    """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重；可**翻页续抓**直到凑够新增篇数。
 
     gov.cn 检索 API 会静默忽略重复的筛选参数（`bmfl=A&bmfl=B` 等于不过滤），所以多选只能
-    由服务端逐值扇出；组合数由 `pipeline_max_search_calls` 封顶，防止组合爆炸。
+    由服务端逐值扇出；`pipeline_max_search_calls` 是**总调用数**预算（翻页续抓也计入），防组合爆炸。
     每关键词条数 / 超时可用 `overrides`（任务行上的高级设置）按任务覆盖。
+
+    Phase 13 续抓语义：一轮（round）= 对每个未翻空的组合各取「下一页」；某组合返回 0 条
+    即视为翻空（gov.cn 越界页回空列表 / 非 200 code）。停止条件（任一满足）：
+    ① 凑够 `target_new` 篇**建议入库的新增**（不在 `library_urls` 里、且未被「laya 标题
+    判别 + 正文预检」两级筛选标注；两级都在循环内**逐页**执行——被标「不建议」的仍进
+    `merged` 供确认面板提示，但不占名额，翻页继续补齐；`exclude_urls` 命中的根本不进结果）；
+    ② 总调用预算耗尽；③ 全部组合翻空；④ 续抓模式下**整轮零收获**——一轮下来连 `merged`
+    都没进任何新链接（全是 `seen` 里的重复 = 翻页失效，或组合翻空）。注意④故意**不看**
+    新增数：重跑场景第 1 页常整页都是已在库的篇目（它们进 `merged` 供置灰展示），这正是
+    要继续翻页凑新增的时候，不能停。`target_new=None` 时只跑一轮（判别照做，标签供
+    fetch_node / scheduler 展示与剔除用）。
+
     `exclude_urls` 供定时任务做跨轮去重：历史轮次已入库的链接直接跳过（见 app/scheduler.py）。
+    `library_urls` 是成果库已有链接：**不剔除**（手动任务要置灰展示），不计入新增数、也不判别。
+    `judge_stats` 是出参：`failures` 累计 laya 判别调用失败篇数（fail-open 按建议入库计数）、
+    `body_rejected` / `preflight_failed` 累计正文预检剔除 / 抓取失败篇数，调用方据此写任务日志。
     """
     tool = find_tool("get_latest_policies")
     if tool is None:
@@ -180,78 +256,225 @@ async def _search_policies(
     agency_list = agencies or [None]
     doc_type_list = doc_types or [None]
 
-    combos = list(
-        itertools.product(kw_list, agency_list, doc_type_list)
-    )[: settings.pipeline_max_search_calls]
+    combos = list(itertools.product(kw_list, agency_list, doc_type_list))
+    budget = settings.pipeline_max_search_calls
 
     facet_active = bool(agencies or doc_types)
+    library = library_urls or set()
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for keyword, agency, doc_type in combos:
-        args: dict[str, Any] = {"limit": per_keyword}
-        if date_from:
-            args["startdate"] = date_from.isoformat()
-        if date_to:
-            args["enddate"] = date_to.isoformat()
-        if keyword:
-            args["keyword"] = keyword
-        if agency:
-            args["agency"] = agency
-        if doc_type:
-            args["doc_type"] = doc_type
-        try:
-            raw = await asyncio.wait_for(tool.ainvoke(args), timeout=mcp_timeout)
-        except Exception as exc:  # noqa: BLE001 - 统一转成设计稿要求的提示文案
-            raise PipelineError(
-                f"抓取失败：连接 {MCP_SOURCE_LABEL} 超时或异常（{exc}），"
-                "请确认本地服务已启动后重试"
-            ) from exc
+    calls = 0  # 已消耗的总调用预算（等价于旧版对 combos 的 [:max_search_calls] 截断）
+    new_count = 0  # **建议入库**的新增篇数（不在成果库且未被判别标注；判别按页在循环内做）
+    page_of: dict[tuple[str | None, str | None, str | None], int] = {c: 1 for c in combos}
+    exhausted: set[tuple[str | None, str | None, str | None]] = set()
+    rounds_done = 0
 
-        try:
-            data = tool_json(raw)
-        except ValueError as exc:
-            raise PipelineError(f"抓取失败：{exc}") from exc
+    def _enough() -> bool:
+        return target_new is not None and new_count >= target_new
 
-        for item in (data or {}).get("items") or []:
-            # ① 公报不参与 bmfl/pcodeJiguan 等筛选（实测恒 56 条纹丝不动）——筛选生效时整批丢弃。
-            #    MCP 侧现在也会在「截断成 limit 条」之前先丢掉公报，这里保留作为兜底：万一线上
-            #    跑的是未重建的旧 build/index.js，公报仍会混进来。
-            catalog_key = str(item.get("catalog_key") or item.get("catalog") or "")
-            if facet_active and catalog_key == "gongbao":
+    while True:
+        if calls >= budget or _enough() or len(exhausted) >= len(combos):
+            break
+        # 只跑一轮（target_new=None，未启用续抓）时不进入第二轮
+        if rounds_done and target_new is None:
+            break
+        round_added = 0  # 本轮进入 merged 的行数（含已在库）；为 0 = 翻页失效或翻空
+        for combo in combos:
+            if calls >= budget or _enough():
+                break
+            if combo in exhausted:
                 continue
-            # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——与关键词毫无交集的直接丢弃
-            #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）。
-            #    注意 gov.cn 的 title 检索是**分词**的：q=水域 会命中「…流域防洪建设…」「…水污染防治…」
-            #    这类标题（水域 → 水 + 域），若强求「标题包含完整关键词」会把接口的正常命中整批误杀，
-            #    症状是「facet 明明有机构/条数、抓取却报未检索到」。所以这里只要求标题与关键词
-            #    **至少共享一个字**：足以拦下整页无关的浏览噪声，又不会误杀分词命中。
-            title = str(item.get("title") or "").strip()
-            if (
-                keyword
-                and keyword not in title
-                and not any(ch in title for ch in keyword)
-            ):
-                continue
-            # ③ 日期必须落在窗口内；窗口已设但日期缺失也丢弃（否则「无」不可信）。
-            #    前提：MCP 报的 date 必须与接口做窗口过滤用的是同一个日期——即站点显示的发布日期
-            #    （取 ptimeStr/pubtimeStr，文本缺失才落到 ptime 这个常为成文日期的 epoch）。若 MCP
-            #    又改回优先取 epoch，这里会把接口按窗口返回的行整批误判成越界，出现「facet 有 1 条、
-            #    实际 0 条」。
-            item_date = _parse_date(item.get("date"))
-            if date_from and (item_date is None or item_date < date_from):
-                continue
-            if date_to and (item_date is None or item_date > date_to):
-                continue
-            url = str(item.get("url") or "").strip()
-            if not url or url in seen:
-                continue
-            # ④ 定时任务跨轮去重：本任务历史轮次已入库的链接不再重复抓取
-            if exclude_urls and url in exclude_urls:
-                continue
-            seen.add(url)
-            merged.append(item)
+            keyword, agency, doc_type = combo
+            args: dict[str, Any] = {"limit": per_keyword, "page": page_of[combo]}
+            if date_from:
+                args["startdate"] = date_from.isoformat()
+            if date_to:
+                args["enddate"] = date_to.isoformat()
+            if keyword:
+                args["keyword"] = keyword
+            if agency:
+                args["agency"] = agency
+            if doc_type:
+                args["doc_type"] = doc_type
+            try:
+                raw = await asyncio.wait_for(tool.ainvoke(args), timeout=mcp_timeout)
+            except Exception as exc:  # noqa: BLE001 - 统一转成设计稿要求的提示文案
+                raise PipelineError(
+                    f"抓取失败：连接 {MCP_SOURCE_LABEL} 超时或异常（{exc}），"
+                    "请确认本地服务已启动后重试"
+                ) from exc
+            calls += 1
+
+            try:
+                data = tool_json(raw)
+            except ValueError as exc:
+                raise PipelineError(f"抓取失败：{exc}") from exc
+
+            raw_items = (data or {}).get("items") or []
+            if not raw_items:
+                # 该组合翻到底（越界页 gov.cn 回空列表 / 非 200 code 也表现为 items=[]）
+                exhausted.add(combo)
+
+            page_fresh: list[dict[str, Any]] = []  # 本页的新增篇目（判别后再定是否占名额）
+            for item in raw_items:
+                # ① 公报不参与 bmfl/pcodeJiguan 等筛选（实测恒 56 条纹丝不动）——筛选生效时整批丢弃。
+                #    MCP 侧现在也会在「截断成 limit 条」之前先丢掉公报，这里保留作为兜底：万一线上
+                #    跑的是未重建的旧 build/index.js，公报仍会混进来。
+                catalog_key = str(item.get("catalog_key") or item.get("catalog") or "")
+                if facet_active and catalog_key == "gongbao":
+                    continue
+                # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——与关键词毫无交集的直接丢弃
+                #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）。
+                #    注意 gov.cn 的 title 检索是**分词**的：q=水域 会命中「…流域防洪建设…」「…水污染防治…」
+                #    这类标题（水域 → 水 + 域），若强求「标题包含完整关键词」会把接口的正常命中整批误杀，
+                #    症状是「facet 明明有机构/条数、抓取却报未检索到」。所以这里只要求标题与关键词
+                #    **至少共享一个字**：足以拦下整页无关的浏览噪声，又不会误杀分词命中。
+                title = str(item.get("title") or "").strip()
+                if (
+                    keyword
+                    and keyword not in title
+                    and not any(ch in title for ch in keyword)
+                ):
+                    continue
+                # ③ 日期必须落在窗口内；窗口已设但日期缺失也丢弃（否则「无」不可信）。
+                #    前提：MCP 报的 date 必须与接口做窗口过滤用的是同一个日期——即站点显示的发布日期
+                #    （取 ptimeStr/pubtimeStr，文本缺失才落到 ptime 这个常为成文日期的 epoch）。若 MCP
+                #    又改回优先取 epoch，这里会把接口按窗口返回的行整批误判成越界，出现「facet 有 1 条、
+                #    实际 0 条」。
+                item_date = _parse_date(item.get("date"))
+                if date_from and (item_date is None or item_date < date_from):
+                    continue
+                if date_to and (item_date is None or item_date > date_to):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url or url in seen:
+                    continue
+                # ④ 定时任务跨轮去重：历史轮次已入库的链接不再重复抓取
+                if exclude_urls and url in exclude_urls:
+                    continue
+                seen.add(url)
+                merged.append(item)
+                round_added += 1
+                # 「新增」= 不在成果库（占不占名额等本页判别后定）；已在库的保留在结果里置灰展示
+                if url not in library:
+                    page_fresh.append(item)
+
+            # 入库判别（Phase 13）+ 正文预检（第二道筛）：本页新增逐篇「laya 标题判别 →
+            # 正文预检」两级筛选、结果写回 item——被标注「不建议入库」的不占 target_new
+            # 名额，翻页会继续补齐「建议入库」的。未启用 / fail-open（判别失败按建议
+            # 入库）照常计数，与 fail-open 语义一致。
+            if page_fresh:
+                batch = await judge.judge_rows(
+                    [
+                        {
+                            "source_url": it.get("url"),
+                            "title": it.get("title"),
+                            "agency": it.get("issuing_agency"),
+                            "doc_no": it.get("document_number"),
+                        }
+                        for it in page_fresh
+                    ]
+                )
+                for it in page_fresh:
+                    verdict = batch.verdicts.get(it.get("url"))
+                    if verdict:
+                        it["judge_tagged"] = verdict.tagged
+                        it["judge_prob"] = verdict.prob
+                # laya 通过（含 fail-open）的再抓全文预检——图片版页面壳与薄壳转发通知
+                # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）
+                await _preflight_bodies(
+                    [it for it in page_fresh if not it.get("judge_tagged")],
+                    mcp_timeout,
+                    judge_stats,
+                )
+                for it in page_fresh:
+                    if not it.get("judge_tagged"):
+                        new_count += 1
+                if judge_stats is not None and batch.failures:
+                    judge_stats["failures"] = judge_stats.get("failures", 0) + batch.failures
+            page_of[combo] += 1
+
+        rounds_done += 1
+        if target_new is not None and round_added == 0:
+            # 整轮零收获（连 merged 都没进新链接）：要么 gov.cn 忽略 p 参数（翻页失效，
+            # 重复页全被 seen 去重拦下，每组合最多多花 1 次调用），要么全部翻空——停，省预算。
+            # 故意不看新增数：重跑场景第 1 页常整页都是已在库的篇目（merged 有进账），
+            # 这正是要继续翻页凑新增的时候，停了就永远翻不过第 1 页。
+            break
 
     return merged
+
+
+async def _preflight_bodies(
+    items: list[dict[str, Any]],
+    mcp_timeout: int,
+    judge_stats: dict[str, int] | None,
+) -> None:
+    """正文预检：laya 通过的候选抓全文，清洗后正文「不达标」的同样标「不建议入库」。
+
+    laya 判别只看标题，拦不住两类漏网（2026-10-13 用户反馈，均已进过成果库）：
+    ① 图片版文件——原文全是 <img>，抓回来的「正文」是页面壳（CSS/JS 残渣，CJK 可达
+    555 但句末标点为 0，清洗的 5% 安全网反而会保住这份垃圾）；
+    ② 薄壳转发通知——只有「现将《方案》印发给你们」百余字，实质内容不在抓取结果里。
+    阈值 `PIPELINE_MIN_BODY_CHARS` / `PIPELINE_MIN_SENT_ENDERS` 由
+    scripts/test_ingest_filter.py 用真实链接校准（好例 cjk≥1062 / 句末≥29，坏例
+    句末≤1，空档巨大）。两阈值都 ≤0 = 预检整体关闭。
+
+    结果只写回 item 的 `judge_tagged` / `judge_reason`（内存标注，落库与确认面板置灰走
+    既有判别通道）；此时 `policy_document` 行还没插，全文不落盘，提取阶段照旧重抓。
+    抓取失败按不达标处理并单独计数——抓不到正文 = 不该入库，但日志里要说清。
+    """
+    settings = get_settings()
+    min_cjk = settings.pipeline_min_body_chars
+    min_enders = settings.pipeline_min_sent_enders
+    if (min_cjk <= 0 and min_enders <= 0) or not items:
+        return
+
+    tool = find_tool("get_policy_fulltext")
+    if tool is None:
+        # fail-open：MCP 都没起来的话检索早就失败了，这里只是兜底不阻断
+        logger.warning("正文预检跳过：未加载 get_policy_fulltext 工具")
+        return
+
+    semaphore = asyncio.Semaphore(max(1, settings.pipeline_preflight_concurrency))
+
+    async def one(it: dict[str, Any]) -> None:
+        async with semaphore:
+            cjk = enders = imgs = 0
+            try:
+                url = str(it.get("url") or "").strip()
+                if not url:
+                    raise ValueError("缺少原文链接")
+                raw = await asyncio.wait_for(tool.ainvoke({"url": url}), timeout=mcp_timeout)
+                data = tool_json(raw)
+                if not isinstance(data, dict):
+                    raise ValueError("全文接口返回了非预期内容")
+                _, clean = split_fulltext(str(data.get("body") or ""))
+                cjk, enders = body_metrics(clean)
+                # 未重建的旧 build 没有 image_count 字段，按 0 处理（句末信号照样拦得住壳）
+                imgs = int(data.get("image_count") or 0)
+            except Exception as exc:  # noqa: BLE001 - 单篇预检故障不能拖垮检索
+                logger.warning(
+                    "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
+                )
+                if judge_stats is not None:
+                    judge_stats["preflight_failed"] = judge_stats.get("preflight_failed", 0) + 1
+                it["judge_tagged"] = True
+                it["judge_prob"] = None
+                it["judge_reason"] = "预检抓取失败"
+                return
+            if (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders):
+                it["judge_tagged"] = True
+                it["judge_prob"] = None
+                it["judge_reason"] = "图片版（正文为页面壳）" if imgs else "正文过短（薄壳/附件版）"
+                if judge_stats is not None:
+                    judge_stats["body_rejected"] = judge_stats.get("body_rejected", 0) + 1
+                logger.info(
+                    "正文预检剔除《%s》：cjk=%d enders=%d imgs=%d（阈值 %d/%d）",
+                    it.get("title"), cjk, enders, imgs, min_cjk, min_enders,
+                )
+
+    await asyncio.gather(*(one(it) for it in items))
 
 
 def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None:
@@ -265,10 +488,14 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
         "source_url": url,
         "publish_date": _parse_date(item.get("date")),
         "source_name": source,
-        "agency": (str(item.get("issuing_agency") or "").strip() or None),
-        "doc_no": (str(item.get("document_number") or "").strip() or None),
+        # 机关/文号先剥零宽字符再 strip：gov.cn 的值首常带 U+200B（见 fulltext_clean._ZWSP_RE）
+        "agency": (strip_zero_width(str(item.get("issuing_agency") or "")).strip() or None),
+        "doc_no": (strip_zero_width(str(item.get("document_number") or "")).strip() or None),
         "catalog": (str(item.get("catalog_key") or item.get("catalog") or "").strip() or None),
         "fetched_by": MCP_SOURCE_LABEL,
+        # 检索循环内判别写回的标注（见 _search_policies）；未判别（服务停用）时为 None
+        "judge_tagged": item.get("judge_tagged"),
+        "judge_prob": item.get("judge_prob"),
     }
 
 
@@ -334,6 +561,7 @@ async def _extract_one(
             body=body,
             url=url,
             max_body_chars=_effective(overrides, "pipeline_max_body_chars"),
+            model_id=(overrides or {}).get("pipeline_model"),
         )
         await repo.save_extraction(
             policy_id,
@@ -613,6 +841,7 @@ async def run_extraction_phase(task_id: int) -> None:
                 "pipeline_extract_concurrency",
                 "pipeline_max_body_chars",
                 "pipeline_mcp_timeout",
+                "pipeline_model",
             )
         }})
         await summarize_node({"task_id": task_id})
@@ -649,6 +878,7 @@ async def run_pipeline(task_id: int) -> None:
         "pipeline_extract_concurrency": task_row.get("pipeline_extract_concurrency"),
         "pipeline_max_body_chars": task_row.get("pipeline_max_body_chars"),
         "pipeline_mcp_timeout": task_row.get("pipeline_mcp_timeout"),
+        "pipeline_model": task_row.get("pipeline_model"),
     }
     try:
         await get_pipeline_graph().ainvoke(state)

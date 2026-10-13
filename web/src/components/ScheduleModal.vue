@@ -3,8 +3,8 @@
  * 定时入库弹窗（Phase 11）：遮罩层 + 居中卡片。
  *
  * 两个视图：
- * - list   现有定时任务列表（TopBar「定时任务」入口打开）：启停 / 立即运行 / 删除 / 新建
- * - create 用当前抓取配置快照新建定时任务（抓取配置选「定时自动入库」后打开）
+ * - list   现有定时任务列表（TopBar「定时任务」入口打开）：仅展示与启停 / 立即运行 / 删除，不提供新建入口
+ * - create 用当前抓取配置快照新建定时任务（抓取配置选「定时自动入库」后打开，唯一的新建入口）
  *
  * 列表数据在 store.schedules；弹窗打开与视图切换由 store.openScheduleModal 驱动。
  */
@@ -39,6 +39,26 @@ const STATUS_LABEL: Record<LastRunStatus, string> = {
   completed: '成功',
   failed: '失败',
   noop: '无新增',
+}
+
+// ---------- 遮罩点击关窗 ----------
+
+/**
+ * 记录 mousedown 起点，click 时也要求不在卡片内才关窗。
+ * 原先的 @click.self 拦不住「卡片内按住拖到遮罩上松开」（选中文本 / 拖动滚动）这种手势：
+ * 按 DOM 规范 click 派发在 mousedown/mouseup 两目标的公共祖先上——此时公共祖先恰好是
+ * overlay 自身，.self 判定反而通过，弹窗被误关；而在遮罩上单纯点击时 target 是 .mask，
+ * .self 本就不通过（点遮罩关窗其实从未生效）。用「按下与抬起都不在卡片内」判定后，
+ * 两种手势都得到正确结果。
+ */
+let downOutsideCard = false
+
+function onOverlayDown(event: MouseEvent) {
+  downOutsideCard = !(event.target as Element).closest('.card')
+}
+
+function onOverlayClick(event: MouseEvent) {
+  if (downOutsideCard && !(event.target as Element).closest('.card')) closeScheduleModal()
 }
 
 // ---------- 列表视图 ----------
@@ -113,7 +133,7 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div v-if="scheduleModalOpen" class="overlay" @click.self="closeScheduleModal()">
+  <div v-if="scheduleModalOpen" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
     <div class="mask"></div>
     <div class="card" role="dialog" aria-modal="true" aria-label="定时任务">
       <!-- ================= 列表视图 ================= -->
@@ -134,7 +154,7 @@ async function onSubmit() {
           <div v-else-if="!schedules.length" class="empty">
             <AppIcon name="inbox" :size="28" class="empty-icon" />
             <p class="empty-text">还没有定时任务</p>
-            <p class="empty-hint">新建一个后，调度器会按周期自动检索并入库，无需人工确认</p>
+            <p class="empty-hint">在抓取任务页把入库方式选为「定时自动入库」并提交，即可创建定时任务</p>
           </div>
 
           <ul v-else class="job-list">
@@ -202,10 +222,6 @@ async function onSubmit() {
 
         <footer class="foot">
           <p class="foot-hint">触发时自动检索、去重并全流程入库；服务重启后调度自动恢复</p>
-          <button class="primary" type="button" @click="scheduleModalView = 'create'">
-            <AppIcon name="play" :size="14" />
-            新建定时任务
-          </button>
         </footer>
       </template>
 

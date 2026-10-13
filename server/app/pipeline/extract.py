@@ -1,8 +1,13 @@
 """单篇政策的结构化提取：正文 → 「事实 / 信息 / 知识」三区。
 
-复用 `app/agent/nodes.py` 的 `_build_llm()`（沿用同一份模型配置，不引入新模型/依赖）。
+模型由「高级设置 → 提取模型」按任务选择（`crawl_task.pipeline_model` 存注册表 id，
+`app/config.py::get_model_registry()` **热读** `.env` 的 `PIPELINE_MODELS`——改完无需重启）。
+注册表统一走 Anthropic 兼容协议（一条 ChatAnthropic 代码路径）：不填 `base_url`/`api_key_env`
+的项沿用 ANTHROPIC_* 网关（Kimi Bearer）；自带端点的项（DeepSeek 的
+`https://api.deepseek.com/anthropic`）用 `api_key_env` 指向的 key 做 x-api-key 认证。
+注册表项默认 `thinking=false`——提取只要结构化结果，把思考显式关掉（又快又省）。
 
-两条路径：
+两条提取路径：
 1. 工具调用拿严格 schema —— 但**不强制** `tool_choice`（见 `_extract_via_tool`）；
 2. 模型没调工具时回退到「要求输出 JSON」的纯文本提示 + 宽松解析。
 
@@ -20,7 +25,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.agent.nodes import _build_llm
-from app.config import get_settings
+from app.config import ModelRegistryEntry, get_settings, resolve_model_api_key, resolve_model_entry
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +90,38 @@ SYSTEM_PROMPT = """你是政策文件结构化提取助手。用户会给你一�
 """
 
 
+def _build_extract_llm(entry: ModelRegistryEntry) -> Any:
+    """按注册表项构建提取用 LLM（统一 Anthropic 兼容协议，认证分流见 `_build_llm`）。
+
+    项里配了 `api_key_env` 但取不到值时抛 RuntimeError（单篇记 failed，文案直达用户）。
+    `thinking` 默认关（False → 显式 `thinking={"type": "disabled"}`）；项里写 true 才交给服务端默认。
+    """
+    api_key = resolve_model_api_key(entry) if entry.api_key_env else None
+    if entry.api_key_env and not api_key:
+        raise RuntimeError(
+            f"模型「{entry.label}」缺少 API Key：环境变量 {entry.api_key_env} 未配置（根目录 .env）"
+        )
+    return _build_llm(
+        model=entry.model,
+        max_tokens=entry.max_tokens,
+        thinking=None if entry.thinking else False,
+        base_url=entry.base_url,
+        api_key=api_key,
+    )
+
+
 async def extract_policy(
     *,
     title: str,
     body: str,
     url: str | None = None,
     max_body_chars: int | None = None,
+    model_id: str | None = None,
 ) -> tuple[ExtractionPayload, str]:
     """提取一篇政策的「事实/信息/知识」。
 
-    `max_body_chars` 为任务级覆盖（页面高级设置）；不传时用 .env 的全局默认。
-    返回 `(结果, 使用的模型名)`；失败时抛异常。
+    `max_body_chars` / `model_id` 均为任务级覆盖（页面高级设置）；不传时用 .env 的全局默认
+    （`model_id=None` → 注册表第一项）。返回 `(结果, 使用的模型名)`；失败时抛异常。
     """
     settings = get_settings()
     limit = max_body_chars if max_body_chars else settings.pipeline_max_body_chars
@@ -114,15 +140,16 @@ async def extract_policy(
         ),
     ]
 
-    llm = _build_llm()
+    entry = resolve_model_entry(model_id)
+    llm = _build_extract_llm(entry)
     try:
         result = await _extract_via_tool(llm, messages)
-        return result, settings.model_name
+        return result, entry.model
     except Exception as exc:  # noqa: BLE001 - 回退到纯文本 JSON 路径
         logger.warning("工具调用结构化输出失败（%s），回退到 JSON 文本解析", exc)
 
     payload = await _extract_via_json(llm, messages)
-    return payload, settings.model_name
+    return payload, entry.model
 
 
 async def _extract_via_tool(llm: Any, messages: list) -> ExtractionPayload:

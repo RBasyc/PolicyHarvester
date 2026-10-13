@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS crawl_task (
     pipeline_extract_concurrency INTEGER,
     pipeline_max_body_chars      INTEGER,
     pipeline_mcp_timeout         INTEGER,
+    pipeline_model               TEXT,                             -- 提取模型（.env PIPELINE_MODELS 注册表 id；NULL = 默认模型）
     status          task_status NOT NULL DEFAULT 'pending',
     -- 进度统计（冗余计数，便于前端直接读取，日志中的「已抓取 10/10 · 已提取 6/10」）
     total_count     INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +82,7 @@ ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_per_keyword_limit   INT
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_extract_concurrency INTEGER;
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_max_body_chars      INTEGER;
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_mcp_timeout         INTEGER;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_model               TEXT;
 
 -- 政策文件（对应「抓取结果」表格每行 + 抽屉头部元信息）
 CREATE TABLE IF NOT EXISTS policy_document (
@@ -96,6 +98,8 @@ CREATE TABLE IF NOT EXISTS policy_document (
     fetched_by   TEXT,                                        -- 抓取方式（如 China-Central-Policy-MCP）
     fetched_at   TIMESTAMPTZ,
     fulltext     TEXT,                                        -- 政策正文存档（提取阶段落库，供成果库「政策正文」展示）
+    judge_tagged BOOLEAN,                                     -- 入库判别标注（Phase 13）：NULL=未判别，TRUE=不建议入库
+    judge_prob   REAL,                                        -- 判别为「不入库」的概率（未判别 / 拿不到为 NULL）
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (task_id, source_url)
 );
@@ -104,6 +108,11 @@ CREATE TABLE IF NOT EXISTS policy_document (
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS catalog TEXT;
 -- 补丁：成果库「政策正文」需要全文存档，提取阶段落库（旧行为只回填元信息不落正文）。
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS fulltext TEXT;
+-- 补丁：Phase 13 入库判别——检索阶段判别服务（judge）对候选篇目的标注结果。
+-- judge_tagged：NULL = 未判别（判别关闭 / 服务不可用 fail-open / 已在库未判 / 历史行），
+--               TRUE = 不建议入库（手动任务仅提示；定时任务自动剔除）。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS judge_tagged BOOLEAN;
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS judge_prob   REAL;
 
 -- 提取结果（与 policy_document 一对一；对应抽屉「事实 / 信息 / 知识」三区）
 CREATE TABLE IF NOT EXISTS extraction (
@@ -165,6 +174,7 @@ CREATE TABLE IF NOT EXISTS schedule_job (
     pipeline_extract_concurrency INTEGER,
     pipeline_max_body_chars      INTEGER,
     pipeline_mcp_timeout         INTEGER,
+    pipeline_model               TEXT,
     -- 调度参数
     schedule_kind    schedule_type NOT NULL DEFAULT 'daily',  -- minutely / hourly / daily / weekly
     interval_minutes INTEGER,                                 -- minutely / hourly 的间隔（小时折算成分钟）
@@ -184,6 +194,8 @@ CREATE TABLE IF NOT EXISTS schedule_job (
 
 -- 补丁：老库幂等补列/补表（可重复执行，重跑 init.sh 安全）
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS schedule_job_id BIGINT REFERENCES schedule_job(id) ON DELETE SET NULL;
+-- 补丁：schedule_job 补「提取模型」覆盖列（老库已建过 schedule_job 时 CREATE TABLE 不会补列）
+ALTER TABLE schedule_job ADD COLUMN IF NOT EXISTS pipeline_model TEXT;
 
 -- ---------- 索引 ----------
 
@@ -194,6 +206,8 @@ CREATE INDEX IF NOT EXISTS idx_task_log_task_time    ON task_log(task_id, create
 -- 定时调度：到点扫描走这个索引；跨轮 URL 去重按 (task_id, source_url) 查
 CREATE INDEX IF NOT EXISTS idx_schedule_job_due      ON schedule_job(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_policy_document_url   ON policy_document(task_id, source_url);
+-- Phase 13：v_policy_results.in_library 的相关子查询只按 source_url 探测（前导列是 task_id 用不上）
+CREATE INDEX IF NOT EXISTS idx_policy_document_url_only ON policy_document(source_url);
 
 -- ---------- updated_at 自动维护 ----------
 
@@ -222,6 +236,7 @@ END $$;
 
 -- ---------- 前端「抓取结果」表格视图 ----------
 
+-- 注意：新列只能**追加在列尾**（CREATE OR REPLACE VIEW 的限制），不要插到中间。
 CREATE OR REPLACE VIEW v_policy_results AS
 SELECT
     p.id,
@@ -231,6 +246,18 @@ SELECT
     p.source_url,
     p.catalog,
     COALESCE(e.status, 'pending') AS status,
-    e.extracted_at
+    e.extracted_at,
+    p.judge_tagged,
+    p.judge_prob,
+    -- 已在成果库（**其它任务**已提取成功的同一 URL）：确认面板据此置灰沉底、默认不勾选。
+    -- 排除本任务自己的行，否则提取中途全表都会变成「已在库」。
+    EXISTS (
+        SELECT 1
+        FROM policy_document p2
+        JOIN extraction e2 ON e2.policy_id = p2.id
+        WHERE e2.status = 'extracted'
+          AND p2.source_url = p.source_url
+          AND p2.task_id <> p.task_id
+    ) AS in_library
 FROM policy_document p
 LEFT JOIN extraction e ON e.policy_id = p.id;

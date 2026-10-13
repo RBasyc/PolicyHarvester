@@ -7,6 +7,7 @@ import {
   form,
   ingestMode,
   loadFacets,
+  loadPipelineConfig,
   pipelineConfig,
   resetPipelineOverrides,
 } from '../store'
@@ -16,6 +17,13 @@ const draftKeyword = ref('')
 
 /** 高级设置（流水线参数，预填 .env 默认、可按任务覆盖）默认收起 */
 const advancedOpen = ref(false)
+
+/** 展开时顺手重拉配置：后端热读 .env（PIPELINE_MODELS 改完即生效，无需重启），
+ *  每次展开都能看到最新模型列表；选中项已不在列表里时 store 会把它吸回默认。 */
+function toggleAdvanced() {
+  advancedOpen.value = !advancedOpen.value
+  if (advancedOpen.value) void loadPipelineConfig()
+}
 
 /** 当前展开的下拉（发布机构 / 文种）；null = 两个都收起 */
 const openMenu = ref<'agency' | 'doc_type' | null>(null)
@@ -129,6 +137,9 @@ const PIPELINE_KEYS = [
   'pipeline_max_body_chars',
   'pipeline_mcp_timeout',
 ] as const
+
+/** 提取模型下拉框选项（后端 .env PIPELINE_MODELS 注册表；第一项 = 默认模型）。 */
+const modelOptions = computed(() => pipelineConfig.value?.models ?? [])
 
 /** 数字输入框 → 表单字段：清空 / 非法输入记为 null（= 该项用服务端 .env 默认）。 */
 function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
@@ -375,13 +386,24 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
           type="button"
           class="advanced-toggle"
           :aria-expanded="advancedOpen"
-          @click="advancedOpen = !advancedOpen"
+          @click="toggleAdvanced"
         >
           <span class="advanced-title">高级设置</span>
           <span class="advanced-hint">抓取 / 提取流水线参数（预填 .env 默认值，可按任务覆盖）</span>
           <AppIcon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" :size="16" class="advanced-arrow" />
         </button>
         <div v-if="advancedOpen" class="advanced-body">
+          <div class="advanced-row">
+            <code class="advanced-env">PIPELINE_MODEL</code>
+            <span class="advanced-label">提取用大模型（结构化提取时调用）</span>
+            <select v-model="form.pipeline_model" class="advanced-input advanced-select">
+              <!-- 后端未启动 / 配置拉取失败时的兜底显示；正常情况下列表来自 .env 注册表 -->
+              <option v-if="!modelOptions.length" :value="null">默认（服务端 .env）</option>
+              <option v-for="opt in modelOptions" :key="opt.id" :value="opt.id">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
           <div class="advanced-row">
             <code class="advanced-env">PIPELINE_MAX_POLICIES</code>
             <span class="advanced-label">单次任务最多处理篇数</span>
@@ -913,6 +935,13 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
 .advanced-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* 提取模型下拉框：比数字输入框宽，左对齐（模型名比数字长得多） */
+.advanced-select {
+  flex-basis: 200px;
+  text-align: left;
+  cursor: pointer;
 }
 
 .advanced-foot {

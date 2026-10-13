@@ -27,6 +27,8 @@ class PolicyRow(TypedDict, total=False):
     doc_no: str | None
     catalog: str | None
     fetched_by: str | None
+    judge_tagged: bool | None  # 入库判别标注（Phase 13）：True=不建议入库；None=未判别
+    judge_prob: float | None  # 判别为「不入库」的概率（未判别 / 拿不到为 None）
 
 
 # ---------- 读：抓取任务 ----------
@@ -72,7 +74,8 @@ async def fetch_task_policies(task_id: int) -> list[Row]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT id, task_id, title, publish_date, source_url, catalog, status, extracted_at
+                SELECT id, task_id, title, publish_date, source_url, catalog, status, extracted_at,
+                       judge_tagged, judge_prob, in_library
                 FROM v_policy_results
                 WHERE task_id = %s
                 ORDER BY publish_date DESC NULLS LAST, id
@@ -150,14 +153,15 @@ async def create_task(
     keywords: list[str],
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
-    pipeline_overrides: dict[str, int | None] | None = None,
+    pipeline_overrides: dict[str, int | str | None] | None = None,
     schedule_job_id: int | None = None,
 ) -> int:
     """新建抓取任务（status=pending），返回 task_id。
 
-    `pipeline_overrides` 是页面「高级设置」提交的本任务参数（键为 `pipeline_*` 列名）；
-    覆盖值必须**落库**而不是只留在请求里：第二段提取是确认后从库里重建的，
-    到那时请求早已结束，只有任务行上的值还能读到。NULL = 用服务端 .env 默认。
+    `pipeline_overrides` 是页面「高级设置」提交的本任务参数（键为 `pipeline_*` 列名；
+    `pipeline_model` 是模型注册表 id，str）；覆盖值必须**落库**而不是只留在请求里：
+    第二段提取是确认后从库里重建的，到那时请求早已结束，只有任务行上的值还能读到。
+    NULL = 用服务端 .env 默认。
 
     `schedule_job_id` 由定时调度器传入：标记本任务由哪个定时任务触发（跨轮去重与溯源用）。
     """
@@ -170,8 +174,9 @@ async def create_task(
                     (source, date_from, date_to, keywords, agencies, doc_types, status,
                      pipeline_max_policies, pipeline_per_keyword_limit,
                      pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout,
+                     pipeline_model,
                      schedule_job_id)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -181,6 +186,7 @@ async def create_task(
                     overrides.get("pipeline_extract_concurrency"),
                     overrides.get("pipeline_max_body_chars"),
                     overrides.get("pipeline_mcp_timeout"),
+                    overrides.get("pipeline_model"),
                     schedule_job_id,
                 ),
             )
@@ -274,8 +280,9 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                     """
                     INSERT INTO policy_document
                         (task_id, title, publish_date, source_name, source_url,
-                         agency, doc_no, catalog, fetched_by, fetched_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                         agency, doc_no, catalog, fetched_by, fetched_at,
+                         judge_tagged, judge_prob)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
                     ON CONFLICT (task_id, source_url) DO NOTHING
                     """,
                     (
@@ -288,6 +295,8 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                         policy.get("doc_no"),
                         policy.get("catalog"),
                         policy.get("fetched_by"),
+                        policy.get("judge_tagged"),
+                        policy.get("judge_prob"),
                     ),
                 )
 
@@ -727,6 +736,7 @@ _PIPELINE_OVERRIDE_KEYS = (
     "pipeline_extract_concurrency",
     "pipeline_max_body_chars",
     "pipeline_mcp_timeout",
+    "pipeline_model",
 )
 
 
@@ -738,7 +748,7 @@ async def create_schedule_job(
     keywords: list[str],
     agencies: list[str],
     doc_types: list[str],
-    pipeline_overrides: dict[str, int | None] | None,
+    pipeline_overrides: dict[str, int | str | None] | None,
     schedule_kind: str,
     interval_minutes: int | None,
     run_time: Any,  # datetime.time | None（psycopg 适配）
@@ -755,8 +765,9 @@ async def create_schedule_job(
                     (name, source, date_from, keywords, agencies, doc_types,
                      pipeline_max_policies, pipeline_per_keyword_limit,
                      pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout,
+                     pipeline_model,
                      schedule_kind, interval_minutes, run_time, run_weekday, next_run_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -875,5 +886,25 @@ async def fetch_schedule_job_urls(job_id: int) -> set[str]:
                 WHERE t.schedule_job_id = %s AND p.source_url IS NOT NULL
                 """,
                 (job_id,),
+            )
+            return {row["source_url"] for row in await cur.fetchall()}
+
+
+async def fetch_library_urls() -> set[str]:
+    """成果库（**全部任务**里提取成功、按 URL 去重后）的原文链接集合。
+
+    与 fetch_schedule_job_urls（仅本定时任务历史轮次）互补：手动检索用它区分
+    「新增 / 已在库」（已在库的置灰展示、不计入续抓目标），定时任务把它并入
+    跨轮去重集，避免不同任务对同一篇重复提取。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT DISTINCT p.source_url
+                FROM policy_document p
+                JOIN extraction e ON e.policy_id = p.id
+                WHERE e.status = 'extracted' AND p.source_url IS NOT NULL
+                """
             )
             return {row["source_url"] for row in await cur.fetchall()}

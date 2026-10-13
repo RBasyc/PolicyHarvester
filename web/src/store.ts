@@ -74,6 +74,8 @@ export const form = reactive<TaskCreatePayload>({
   pipeline_extract_concurrency: null,
   pipeline_max_body_chars: null,
   pipeline_mcp_timeout: null,
+  // 提取模型（.env PIPELINE_MODELS 注册表 id）；同上回填为默认模型后随任务提交
+  pipeline_model: null,
 })
 
 /** 筛选器可选值（发布机构 / 文种）；loadFacets 填充，失败时后端已回退静态名单 */
@@ -231,12 +233,16 @@ export async function loadPipelineConfig(): Promise<void> {
     ] as const) {
       if (form[key] == null) form[key] = config[key]
     }
+    // 提取模型回填默认（注册表第一项）；当前选择已不在注册表里（.env 改过、后端热加载）时也吸回默认
+    if (!config.models.some((m) => m.id === form.pipeline_model)) {
+      form.pipeline_model = config.default_model
+    }
   } catch {
     /* 保持 null，高级设置面板显示占位 */
   }
 }
 
-/** 「高级设置」里的恢复默认：把五项重置回 .env 当前值。 */
+/** 「高级设置」里的恢复默认：把各项重置回 .env 当前值（模型回默认项）。 */
 export function resetPipelineOverrides(): void {
   const config = pipelineConfig.value
   if (!config) return
@@ -245,6 +251,7 @@ export function resetPipelineOverrides(): void {
   form.pipeline_extract_concurrency = config.pipeline_extract_concurrency
   form.pipeline_max_body_chars = config.pipeline_max_body_chars
   form.pipeline_mcp_timeout = config.pipeline_mcp_timeout
+  form.pipeline_model = config.default_model
 }
 
 /** 订阅任务进度（SSE）。服务端会先补发全部历史日志，所以这里清空本地日志。 */
@@ -297,6 +304,7 @@ export async function startTask(): Promise<void> {
       pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,
       pipeline_max_body_chars: form.pipeline_max_body_chars || null,
       pipeline_mcp_timeout: form.pipeline_mcp_timeout || null,
+      pipeline_model: form.pipeline_model || null,
     })
     task.value = await api.task(task_id)
     policies.value = []
@@ -350,7 +358,7 @@ export async function cancelTask(): Promise<void> {
   }
 }
 
-/** 点「清空」：删除全部任务与结果，页面回到「尚未抓取」空状态。 */
+/** 点「清空」（成果库页顶栏）：删除全部任务与结果，抓取页回到「尚未抓取」，库页同步刷新。 */
 export async function clearAll(): Promise<void> {
   if (clearing.value) return
   clearing.value = true
@@ -364,6 +372,13 @@ export async function clearAll(): Promise<void> {
     policies.value = []
     summary.value = { ...EMPTY_SUMMARY }
     showToast(deleted ? `已清空 ${deleted} 个抓取任务` : '暂无可清空的数据')
+    // 按钮在成果库/详情页顶栏：库里的条目随任务级联删除，列表与计数要跟着刷新
+    void loadLibraryMeta()
+    if (view.value === 'library-detail') {
+      backToLibrary() // 正在看的详情已不存在，回列表
+    } else if (view.value === 'library') {
+      void loadLibraryPage(1)
+    }
   } catch (error) {
     showToast(`清空失败：${errorText(error)}`)
     await bootstrap() // 清空失败：把服务端的真实状态拉回来
@@ -435,6 +450,7 @@ export function buildSchedulePayload(): Omit<ScheduleCreatePayload, 'schedule_ki
     pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,
     pipeline_max_body_chars: form.pipeline_max_body_chars || null,
     pipeline_mcp_timeout: form.pipeline_mcp_timeout || null,
+    pipeline_model: form.pipeline_model || null,
   }
 }
 
