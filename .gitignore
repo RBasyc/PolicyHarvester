@@ -3,3 +3,6 @@
 
 # Claude Code 会话状态（本地工具目录，不入库）
 .claude/
+
+# start.sh 的运行态目录（服务 PID 文件）
+.run/
