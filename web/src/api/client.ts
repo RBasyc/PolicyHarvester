@@ -7,6 +7,9 @@
 
 import type {
   FacetList,
+  LibraryListResponse,
+  LibraryMeta,
+  LibraryPolicyDetail,
   LogLine,
   PipelineConfig,
   PolicyActionResponse,
@@ -99,6 +102,33 @@ export const api = {
     request<PolicyActionResponse>(`/policies/${policyId}/retry`, { method: 'POST' }),
   reextractPolicy: (policyId: number) =>
     request<PolicyActionResponse>(`/policies/${policyId}/reextract`, { method: 'POST' }),
+
+  /** 成果库头部统计 + 筛选选项（机构/文种/年份）。 */
+  libraryMeta: () => request<LibraryMeta>('/policies/meta'),
+
+  /** 成果库列表：仅提取成功的篇目，按 source_url 去重，发布日期倒序分页。 */
+  libraryPolicies: (params: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    agency?: string
+    doc_type?: string
+    year?: number
+  }) => {
+    const search = new URLSearchParams()
+    if (params.page) search.set('page', String(params.page))
+    if (params.page_size) search.set('page_size', String(params.page_size))
+    if (params.keyword) search.set('keyword', params.keyword)
+    if (params.agency) search.set('agency', params.agency)
+    if (params.doc_type) search.set('doc_type', params.doc_type)
+    if (params.year) search.set('year', String(params.year))
+    const qs = search.toString()
+    return request<LibraryListResponse>(`/policies${qs ? `?${qs}` : ''}`)
+  },
+
+  /** 成果库详情页：元信息 + 三栏提取结果 + 政策正文存档。 */
+  libraryPolicy: (policyId: number) =>
+    request<LibraryPolicyDetail>(`/policies/${policyId}`),
 
   /** 生效的流水线参数（只读）；改配置走根目录 .env + 重启服务。 */
   pipelineConfig: () => request<PipelineConfig>('/config/pipeline'),

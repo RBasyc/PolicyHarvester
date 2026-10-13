@@ -11,6 +11,9 @@ import { computed, reactive, ref } from 'vue'
 import { ApiError, api, subscribeTaskStream } from './api/client'
 import type {
   FacetList,
+  LibraryMeta,
+  LibraryPolicyDetail,
+  LibraryPolicyItem,
   LogLine,
   PipelineConfig,
   PolicyExtractionResponse,
@@ -152,6 +155,8 @@ export async function bootstrap(): Promise<void> {
     // 筛选器名单与任务无关，并行拉（失败时后端已回退静态名单，不阻塞首屏）
     void loadFacets()
     void loadPipelineConfig()
+    // 「已入库 N 篇」与抓取任务无关，一并预热
+    void loadLibraryMeta()
     const current = await api.currentTask()
     task.value = current
     if (current) {
@@ -376,4 +381,169 @@ export async function refreshLogs(): Promise<void> {
 
 export function isRunning(status: TaskStatus | undefined): boolean {
   return status === 'running'
+}
+
+// ---------- 成果库（跨任务沉淀；页面切换不走路由，用 view 状态驱动） ----------
+
+export type AppView = 'crawl' | 'library' | 'library-detail'
+
+export const view = ref<AppView>('crawl')
+export const libraryPolicyId = ref<number | null>(null)
+
+export const libraryItems = ref<LibraryPolicyItem[]>([])
+export const libraryTotal = ref(0)
+export const libraryPage = ref(1)
+export const libraryPageSize = ref(6)
+export const libraryLoading = ref(false)
+export const libraryMeta = ref<LibraryMeta | null>(null)
+
+/** 筛选条件：空串 = 不过滤；改动后自动回到第一页 */
+export const libraryFilters = reactive({
+  keyword: '',
+  agency: '',
+  doc_type: '',
+  year: '',
+})
+
+export const libraryDetail = ref<LibraryPolicyDetail | null>(null)
+export const libraryDetailLoading = ref(false)
+export const libraryDetailError = ref(false)
+export const libraryReextracting = ref(false)
+
+let detailPollTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopDetailPoll(): void {
+  if (detailPollTimer) clearTimeout(detailPollTimer)
+  detailPollTimer = null
+}
+
+/** 拉成果库头部统计 + 筛选选项（TopBar「已入库 N 篇」与库页头部共用）。 */
+export async function loadLibraryMeta(): Promise<void> {
+  try {
+    libraryMeta.value = await api.libraryMeta()
+  } catch {
+    /* 保持旧值；顶栏数字不至于因为一次失败消失 */
+  }
+}
+
+/** 拉成果库列表的一页；页码越界时（过滤后总页数变少）自动回收。 */
+export async function loadLibraryPage(page = libraryPage.value): Promise<void> {
+  libraryLoading.value = true
+  try {
+    const data = await api.libraryPolicies({
+      page,
+      page_size: libraryPageSize.value,
+      keyword: libraryFilters.keyword.trim() || undefined,
+      agency: libraryFilters.agency || undefined,
+      doc_type: libraryFilters.doc_type || undefined,
+      year: libraryFilters.year ? Number(libraryFilters.year) : undefined,
+    })
+    libraryItems.value = data.items
+    libraryTotal.value = data.total
+    libraryPage.value = data.page
+    if (!data.items.length && data.total > 0 && data.page > 1) {
+      await loadLibraryPage(data.page - 1)
+    }
+  } catch (error) {
+    showToast(`成果库加载失败：${errorText(error)}`)
+  } finally {
+    libraryLoading.value = false
+  }
+}
+
+/** 改筛选条件：合并 → 回第一页 → 重拉。 */
+export function setLibraryFilter(patch: Partial<typeof libraryFilters>): void {
+  Object.assign(libraryFilters, patch)
+  void loadLibraryPage(1)
+}
+
+/** 切到成果库页：刷新统计 + 第一页列表。 */
+export function goLibrary(): void {
+  view.value = 'library'
+  void loadLibraryMeta()
+  void loadLibraryPage(1)
+}
+
+/** 切回抓取任务页。 */
+export function goCrawl(): void {
+  view.value = 'crawl'
+}
+
+/** 成果库详情页数据。 */
+export async function loadLibraryDetail(policyId: number): Promise<void> {
+  stopDetailPoll()
+  libraryDetailLoading.value = true
+  libraryDetailError.value = false
+  libraryDetail.value = null
+  try {
+    libraryDetail.value = await api.libraryPolicy(policyId)
+    // 详情页打开时恰好遇到「提取中」（如重新提取后刷新页面）：轮询到终态
+    if (libraryDetail.value.extraction.status === 'extracting') {
+      scheduleDetailPoll(policyId)
+    }
+  } catch (error) {
+    libraryDetailError.value = true
+    showToast(`政策详情加载失败：${errorText(error)}`)
+  } finally {
+    libraryDetailLoading.value = false
+  }
+}
+
+function scheduleDetailPoll(policyId: number, attempts = 0): void {
+  if (attempts >= 60) return // 最长约 3 分钟，之后停在「提取中」由用户手动刷新
+  stopDetailPoll()
+  detailPollTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        const data = await api.libraryPolicy(policyId)
+        if (view.value === 'library-detail' && libraryPolicyId.value === policyId) {
+          libraryDetail.value = data
+        }
+        if (data.extraction.status === 'extracting') {
+          scheduleDetailPoll(policyId, attempts + 1)
+        } else {
+          void loadLibraryMeta()
+          void loadLibraryPage()
+        }
+      } catch {
+        scheduleDetailPoll(policyId, attempts + 1)
+      }
+    })()
+  }, 3000)
+}
+
+/** 成果库卡片 → 详情页。 */
+export function openLibraryPolicy(policyId: number): void {
+  libraryPolicyId.value = policyId
+  view.value = 'library-detail'
+  void loadLibraryDetail(policyId)
+}
+
+/** 详情页「返回成果库」：刷新当前页（计数可能已变）后返回。 */
+export function backToLibrary(): void {
+  view.value = 'library'
+  stopDetailPoll()
+  void loadLibraryPage()
+}
+
+/** 详情页「重新提取」：复用 /reextract，提交后轮询到提取完成。 */
+export async function reextractLibraryPolicy(): Promise<void> {
+  const id = libraryPolicyId.value
+  if (id == null || libraryReextracting.value) return
+  libraryReextracting.value = true
+  try {
+    await api.reextractPolicy(id)
+    notify('已提交重新提取，正在后台重新解析该篇')
+    if (libraryDetail.value) {
+      libraryDetail.value = {
+        ...libraryDetail.value,
+        extraction: { ...libraryDetail.value.extraction, status: 'extracting' },
+      }
+    }
+    scheduleDetailPoll(id)
+  } catch (error) {
+    showToast(`重新提取失败：${errorText(error)}`)
+  } finally {
+    libraryReextracting.value = false
+  }
 }

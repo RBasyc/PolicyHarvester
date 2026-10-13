@@ -41,23 +41,38 @@ async function fetchHtml(url) {
 }
 function parseGovCnPolicyHtml(html, url) {
     const $ = cheerio.load(html);
-    // Title extraction
-    const title = $("h1").first().text().trim() ||
+    // gov.cn 政策库详情页的元信息表：<div class="policyLibraryOverview_content"> 里的 table，
+    // <td> 为「标 题：/发文机关：/发文字号：/来 源：/主题分类：/公文种类：/成文日期：」标签值对
+    // （标签里可能带全角空格）。解析成归一化 meta map，作为 title/issuer/doc_no/date 的首选来源。
+    const headMeta = extractOverviewMeta($);
+    // Title extraction：优先元信息表的「标题」，其次页面 <title>（剥掉 _中国政府网 一类站点后缀）
+    const rawTitle = headMeta["标题"] ||
+        $("h1").first().text().trim() ||
         $(".article .title").first().text().trim() ||
         $("title").first().text().trim();
+    const title = rawTitle.replace(/_.{0,12}中国政府网\s*$/, "").trim();
     // Date extraction
-    let date = $("time").attr("datetime") ||
+    let date = headMeta["成文日期"] ||
+        $("time").attr("datetime") ||
         $(".meta .date").first().text().trim() ||
         $(".date").first().text().trim() ||
         extractDate($("body").text());
     // Issuer extraction
-    const issuer = $(".source, .publisher, .department, .origin").first().text().trim() ||
+    const issuer = headMeta["发文机关"] ||
+        $(".source, .publisher, .department, .origin").first().text().trim() ||
         inferIssuerFromText($("body").text());
     // Document number extraction (e.g., 国发〔2023〕X号)
-    const docNo = $(".doc-no, .docnum, .docNo").first().text().trim() ||
+    const docNo = headMeta["发文字号"] ||
+        $(".doc-no, .docnum, .docNo").first().text().trim() ||
         extractDocNo($("body").text());
-    // Body extraction
-    let body = $("article").text().trim();
+    // Body extraction —— 真正的正文容器是 div#UCAP-CONTENT（.pages_content）。
+    // 旧顺序 article→.content→.article 在 gov.cn 页面全部落空，会兜底到整页 body 文本，
+    // 把 CSS/JS/导航噪声存进正文。
+    let body = $("div#UCAP-CONTENT").text().trim();
+    if (!body)
+        body = $(".pages_content").first().text().trim();
+    if (!body)
+        body = $("article").text().trim();
     if (!body)
         body = $(".content").text().trim();
     if (!body)
@@ -71,8 +86,35 @@ function parseGovCnPolicyHtml(html, url) {
         doc_no: docNo,
         issuer,
         url,
-        body
+        body,
+        // 元信息表里的补充字段（服务端按名取用，缺省时为 ""）
+        source: headMeta["来源"] || "",
+        category: headMeta["主题分类"] || "",
+        doc_kind: headMeta["公文种类"] || ""
     };
+}
+/** 解析政策库 overview 元信息表：把 <td> 标签值对归一化成 { 发文机关: "…", … }。 */
+function extractOverviewMeta($) {
+    const meta = {};
+    const $table = $("div.policyLibraryOverview_content table").first();
+    if (!$table.length)
+        return meta;
+    const cells = $table
+        .find("td")
+        .map((_, td) => ($(td)
+        .text()
+        .replace(/ /g, " ") || "")
+        .trim())
+        .get();
+    for (let i = 0; i < cells.length; i++) {
+        const label = cells[i].replace(/[\s　]+/g, "");
+        if (!/^(标　*题|发文机关|发文字号|来　*源|主题分类|公文种类|成文日期)：$/.test(label))
+            continue;
+        const key = label.replace(/：$/, "");
+        // 标签的下一个 td 是对应的值
+        meta[key] = (cells[i + 1] || "").trim();
+    }
+    return meta;
 }
 function extractDate(text) {
     const m = text.match(/(20\d{2})[年\-\.\/]\s?(\d{1,2})[月\-\.\/]\s?(\d{1,2})[日]?/);

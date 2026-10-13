@@ -26,6 +26,7 @@
 | 7 | 端到端验收与文档 | 🟨 进行中（文档已对齐，端到端验收待用户执行） | — |
 | 8 | 终止 / 清空与重启收尾 | 🟨 进行中（代码完成，待实机验收） | — |
 | 9 | 检索结果人工确认环节 | 🟨 进行中（代码完成，待实机验收） | — |
+| 10 | 成果库两页改版（成果库 + 政策详情页） | 🟨 进行中（代码完成，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -403,6 +404,31 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 
 ---
 
+## Phase 10 — 成果库两页改版
+
+**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：产品改为两页结构——「抓取任务」页布局功能不变，新增「成果库」页（跨任务沉淀 + 筛选 + 分页）与「政策详情页」（三栏 + 政策正文存档）
+
+**背景**（用户提出，2026-10-12）：整体设计见 `design.pen` 画板「成果库 展示页 / 政策详情页」及数据说明便签。核心语义：成果库**仅展示提取成功**的篇目、**跨抓取任务持久化**（重新执行任务不影响已入库数据）。
+
+- [x] `database/schema.sql`：`policy_document` 幂等补 `fulltext TEXT` 列 + `publish_date` 索引（老库重跑 `init.sh` 即可）
+- [x] 提取阶段把正文存档（`update_policy_from_fulltext` 顺带落 `fulltext`，空正文不覆盖旧存档）
+- [x] `repositories.py`：`fetch_library_policies` / `count_library_policies` / `fetch_library_meta`——按 `source_url` `DISTINCT ON` 去重（最新任务行胜出），文种由文号前缀推导
+- [x] `schemas/policy.py`：`LibraryPolicyItem` / `LibraryListResponse` / `LibraryMeta` / `LibraryPolicyDetail`
+- [x] `routes/policies.py`：`GET /api/policies/meta`、`GET /api/policies`（keyword/agency/doc_type/year + 分页，默认每页 6）、`GET /api/policies/{id}`（注册顺序：meta/列表在 `/{id}` 之前）
+- [x] 前端：`store.ts` 增加 `view`（crawl/library/library-detail）与成果库状态/动作；`TopBar` 加页面切换胶囊（抓取操作仅 crawl 页显示）；新增 `LibraryPage` / `LibraryDetailPage` / `SelectMenu`，三栏抽为共享组件 `ExtractionColumns`（`DetailDrawer` 复用，抽屉行为不变）
+- [x] 「重新提取」提交后轮询详情直到终态；旧数据无正文时详情页显示友好空态
+
+**验收**（待用户执行）：
+
+1. `cd server && python main.py` + `cd web && pnpm dev`；抓取页完整跑一遍「新建任务 → 确认 → 提取」，行为与改版前一致（顶栏仅多切换器与「已入库 N 篇」）。
+2. 成果库：只含提取成功篇目；机构/文种/年份/关键词筛选与分页联动；同一 URL 重复抓取任务后库内仍只有一条。
+3. 详情页：三栏与抽屉一致；「查看原文」跳新标签；「重新提取」后计数自动刷新；「展开全文」显示存档正文（改版前的旧数据应显示空态文案而非报错）。
+4. `pnpm build` 通过类型检查。
+
+> 截止本次改动只做了 Python 侧 import 检查与语法检查（全部通过），未运行服务/前端构建——运行时结论以用户实机执行为准。
+
+---
+
 ## 进度日志
 
 > 规则：每完成一个 Phase（或发生阻塞/范围变更）追加一行，倒序不必——按时间正序追加。
@@ -444,3 +470,6 @@ curl -X POST http://localhost:8000/api/tasks/<id>/confirm -H "Content-Type: appl
 | 2026-10-12 | 9 | 缺陷修复（facet 有 1 条却报「未检索到匹配的政策原文」） | 用户报：「筛选完时间后单独勾选发布机构、文种默认全部，发布机构明明显示有 1 条，却提示抓取失败：未检索到匹配的政策原文」。3 个探针（`.probe/agency_mismatch.py`（facet 计数 vs 实拉条目）、`slice_probe.py`（照 MCP 原样复现 catMap 拼接 + `slice(0,limit)`）、`date_field_probe.py`（换窗口验证接口按哪个字段过滤））查明根因**在 MCP 的日期取值**：`getLatestPolicies.ts` 原先 `formatDateFromEpoch(result.ptime) \|\| formatDate(result.ptimeStr)`——**优先取 `ptime`（epoch，实测常是更早的「成文日期」）**，而 gov.cn 做时间窗过滤用的是**站点显示的那个发布日期**（`ptimeStr`/`pubtimeStr`）。实测（窗口 2026-10-05..10-12 + `bmfl=工业和信息化部`，即用户场景）：唯一真命中 `ptimeStr=2026.10.08` 在窗内、`ptime` 解码为 **2026-10-03 出窗**；同批 `bumenfile` 行 `ptimeStr=2026.10.10` / `ptime=2026-09-11` 同样出窗；12 条公报行 `ptimeStr` 全为 `2026.10.10`（该期公报出版日）而 `ptime` 散在 2026-05..09。**于是流水线规则③「日期必须落在窗口内」把接口按窗口返回的行整批误判越界 → 0 条**，而 facet 计数（1）是接口自己的口径，二者必然矛盾。第二个（潜在同类）缺陷：MCP 先按 catMap 顺序全量拼接再 `items.slice(0, ten)`（`pipeline_per_keyword_limit=10`），公报行**恒不受 `bmfl`/`pcodeJiguan` 过滤**（恒 12–56 条），一旦非公报行不足十条，`limit` 会被随后被调用方整批丢弃的公报占满。**修**：① MCP 日期优先级反转为**文本日期优先、epoch 兜底**（`formatDate(ptimeStr\|pubtimeStr\|publishtime\|time) \|\| formatDateFromEpoch(ptime\|pubtime)`，两者都覆盖：另一个探针里接口对整批记录**不返回** `ptimeStr`，此时只能落 epoch，而该批 `ptime` 8/9、20/25 在窗内）；② MCP 在 **`slice` 之前**丢弃公报（`(agency \|\| docType) && catKey === "gongbao"` → `continue`），空筛选的浏览态仍保留公报；③ 流水线侧规则①保留为兜底并注明「MCP 已先丢，防线上跑旧 `build/index.js`」、规则③补注「其前提是 MCP 报的 date 与接口窗口同源」。**未动** `_parse_date`（本就兼容 `-/.` 分隔，非根因）。静态检查：`npx tsc --noEmit` 通过（`TYPECHECK DONE`，无输出）；**⚠️ 必须 `npm run build`** 重建 `build/index.js`，否则本次 MCP 改动与上一轮一样是静默空操作。**待验收**：复现原场景（选时间窗 + 单个发布机构）应能检索到与 facet 计数一致的篇目 |
 | 2026-10-12 | 9 | 需求变更（配置面板精简 + 高级设置） | 用户四点要求：① 发布机构 / 文种**删掉条数显示**；② 删除「导入 JSON 配置」；③ `.env` 移到**仓库根目录**；④ `.env` 里的五个 `PIPELINE_*` 参数显示在页面「高级设置」（默认收起），且**用户可改了用**（后续消息确认：展示 .env 默认值、按任务覆盖）。实现：**前端** `ConfigPanel.vue` 删菜单 `.menu-count` 与已选 chip 的条数后缀、简化 `selectedAgencies/selectedDocTypes`（不再按 count 排序）；删 `pickFile/onFileChange/fileInput/config-foot` 与导入按钮；新增默认收起的「高级设置」区（五个数字输入框，预填 `GET /api/config/pipeline` 的 .env 默认值，`setPipelineValue` 把空/非法输入记为 null，附「恢复默认」）。**后端**：`app/config.py` 改为按 `__file__` 定位根目录 `.env`（`load_dotenv(_REPO_ROOT/'.env')` + `env_file` 同步，工作目录无关）；新增 `app/schemas/config.py::PipelineConfig` 与 `GET /api/config/pipeline`（只读透出生效默认值）；`crawl_task` 增 5 个可空 `pipeline_*` 列（`schema.sql` 建表 + 幂等 `ALTER TABLE ADD COLUMN IF NOT EXISTS`，老库重跑 `init.sh` 即可，不重置数据）；`create_task` 落库覆盖值；`TaskCreate`/`TaskDTO` 增字段（`from_row` 用 `.get` 防御老库）；`crawl_graph`：`PipelineState` 增 5 个覆盖键 + `_effective()`（任务值优先、空则回退 .env），`fetch_node`（max_policies）、`_search_policies`（per_keyword_limit/mcp_timeout）、`extract_node`（extract_concurrency）、`_fetch_fulltext`（mcp_timeout）、`extract_policy`（max_body_chars）全部改为「任务覆盖 → 全局默认」两段取值；`run_extraction_phase`/`run_single_extraction` **从任务行重读覆盖值**（两段式流水线第二段是确认后重建的，创建请求早已结束，只有库里的值还在）。**覆盖值必须落库的原因**：第二段提取由 `POST /{id}/confirm` 触发，`run_extraction_phase` 只拿 task_id 从库里重建，不传请求参数。前端 `types.ts`/`store.ts`（form 增 5 字段、`loadPipelineConfig` 回填空位、`resetPipelineOverrides`、`startTask` 空串转 null）、`client.ts` 加 `api.pipelineConfig`。**文档**：`.gitignore`（根，忽略 `.env`）、`.env.example` 头注、`CLAUDE.md`（config 段 + Business API 补 `/api/config/pipeline`）、根/server/database 三个 `README.md` 的 .env 位置与路由清单。静态检查：Python 9 文件 `ast.parse` 全通过；前端未跑 `vue-tsc`（按约定不主动构建）。**待验收**：重跑 `database/init.sh`（幂等补列）+ 重启 server；页面上发布机构/文种下拉不再显示条数、无导入按钮；「高级设置」展开显示 .env 默认值，改成 5/并发 2 后发任务，日志应体现（如第 N/M 篇节奏变化）；单篇重试沿用创建任务时的覆盖值 |
 | 2026-10-12 | 9 | 缺陷修复（关键词复核误杀分词命中） | 用户报「输入『水域』，发布机构有 6 项、文种为空，抓取报未检索到匹配的政策原文」。实探（`get_latest_policies q=水域`）：接口正常返回 gongwen 17 / bumenfile 35 条候选、items 标题全是「…流域防洪建设…」「…水污染防治…」——**gov.cn `searchfield=title` 是分词检索**（水域 → 水 + 域），不是精确子串；而流水线复核规则②「标题必须包含完整关键词」把这批正常命中整批误杀。修：规则②放宽为「标题与关键词**至少共享一个字**」（`keyword not in title and not any(ch in title)` 才丢）——仍能拦住「0 命中静默退回全量浏览列表」的整页噪声（与关键词毫无交集），不再误杀分词命中。实测：`水域` 3 篇通过（= .env 的 PER_KEYWORD_LIMIT=3，全 gongwen）、`量子计算` 0 篇（真无命中，依旧如实失败）。文档：CLAUDE.md quirks 段同步。**待验收**：重启 server 后搜「水域」应能出候选篇目 |
+| 2026-10-12 | 10 | 成果库两页改版（代码完成） | 按 design.pen「成果库 展示页 / 政策详情页」画板实现：新增 `GET /api/policies[/meta][/{id}]` 三端点；库查询按 `source_url` `DISTINCT ON` 去重（重新执行任务不产生重复）；文种由文号前缀推导；`policy_document` 幂等补 `fulltext` 列、提取阶段存档正文；前端不引入路由，用 store.view 切三页（抓取页不变），新增 `LibraryPage`/`LibraryDetailPage`/`SelectMenu`，三栏抽共享组件 `ExtractionColumns` 且 `DetailDrawer` 复用。Python 侧 import/语法检查通过；**待用户实机验收**（跑一遍抓取→成果库→详情→重新提取，另跑 `pnpm build`） |
+| 2026-10-12 | 10 | 修复成果库列表 500 | 根因有二，均在 `repositories.py`：① 库查询用了 `%(name)s` pyformat 命名占位符，psycopg3 只支持 `%s/%b/%t`（`ProgrammingError: only '%s', '%b', '%t' are allowed`），全部改为位置式 `%s` + 元组；② CTE 里文号推导的 `LIKE '国办发%'` 含字面 `%`，psycopg3 客户端绑定同样不允许，改用 `starts_with()`。同文件 `refresh_task_counts` 的 `%(task_id)s` 一并改为位置式（该函数此前必然也未真正跑通）。只读诊断脚本实测：agency/doc_type/year/keyword 各过滤组合 + meta 均返回正常 |
+| 2026-10-13 | 10 | 缺陷修复（已归档正文清洗） | 用户发现详情页「政策正文（已归档全文）」混入整页杂质（CSS/JS/导航/元信息表）。根因：MCP `getPolicyFulltext.ts` 正文提取顺序 `article→.content→.article` 在 gov.cn 页面全部落空，兜底 `$("body").text()` 把整页文本存进 `fulltext` 列（实测该行 17,755 字 vs 真实正文 5,635 字），杂质还吃掉 `pipeline_max_body_chars` 截断预算。修：① **MCP**——正文改取 `div#UCAP-CONTENT`（`.pages_content` 兜底链），解析 `div.policyLibraryOverview_content` 元信息表（发文机关/发文字号/来 源/主题分类/公文种类/成文日期，标签值对含全角空格、PC/移动双份），返回新增 `source`/`category`/`doc_kind` 键；标题优先元信息表「标题」并剥 `_中国政府网` 后缀。已 `npm run build` 并用真实 URL（content_7082302.htm）实测：正文 5,635 字、八部门 issuer、日期 2026-09-25 全部正确。② **新增 `server/app/pipeline/fulltext_clean.py::split_fulltext`**——元信息按行提取（标签与值常分成两行，顺延取值），正文按行剥 CSS/JS/导航/页脚/元信息表噪声、去 PC/移动重复拷贝与首段截断重复，结果短于原文 5% 视为误伤原样返回；**归档时**（`_fetch_fulltext` 写库前清洗 + meta 择优回填 agency/doc_no/中文成文日期）与**读取时**（`GET /api/policies/{id}` 兜底洗历史脏数据）共用，旧行无需重跑即洗净。③ **详情契约**——新增 `fulltext_meta`（`schemas/policy.py` + `types.ts` 手工镜像）；`LibraryDetailPage` head-card 按「库字段优先、meta 补缺」展示发文机关/文号/来源/主题分类/公文种类/成文日期；`AppIcon` 补 `folder`。实测：17,755 字脏存档 → 5,635 字干净正文（与 MCP 新解析长度逐字一致），干净输入原样透传不变。`_parse_date` 补「2026年09月25日」中文日期。未跑 `pnpm build`（按约定不主动构建）。**待验收**：重启 server 打开那篇 17,755 字详情页，正文应只剩政策原文、head-card 出现八部门发文机关等元信息 |

@@ -7,10 +7,14 @@ import {
   clearAll,
   clearing,
   form,
+  goCrawl,
+  goLibrary,
+  libraryMeta,
   startTask,
   starting,
   stopping,
   task,
+  view,
 } from '../store'
 import type { TaskStatus } from '../api/types'
 
@@ -74,59 +78,98 @@ async function onConfirmClear() {
         <p class="subtitle">国务院政策抓取 · 大模型结构化提取 Demo</p>
       </div>
     </div>
+    <div class="page-tabs" role="tablist" aria-label="页面切换">
+      <button
+        class="tab"
+        :class="{ active: view === 'crawl' }"
+        type="button"
+        role="tab"
+        :aria-selected="view === 'crawl'"
+        @click="goCrawl()"
+      >
+        <AppIcon name="radar" :size="13" />
+        <span>抓取任务</span>
+      </button>
+      <button
+        class="tab"
+        :class="{ active: view !== 'crawl' }"
+        type="button"
+        role="tab"
+        :aria-selected="view !== 'crawl'"
+        @click="goLibrary()"
+      >
+        <AppIcon name="database" :size="13" />
+        <span>成果库</span>
+      </button>
+    </div>
     <div class="actions">
-      <div class="status-tag" :class="tone">
-        <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
-        <span>{{ label }}</span>
-      </div>
-      <span class="hint">{{ keywordHint }}</span>
+      <!-- 抓取任务页：原有操作（布局与行为不变） -->
+      <template v-if="view === 'crawl'">
+        <div class="status-tag" :class="tone">
+          <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
+          <span>{{ label }}</span>
+        </div>
+        <span class="hint">{{ keywordHint }}</span>
 
-      <button
-        v-if="canCancel"
-        class="ghost-btn"
-        type="button"
-        :disabled="stopping"
-        :title="cancelTitle"
-        @click="cancelTask()"
-      >
-        <AppIcon name="square" :size="13" />
-        <span>{{ stopping ? '处理中…' : cancelLabel }}</span>
-      </button>
-
-      <button
-        v-if="!confirmingClear"
-        class="ghost-btn danger"
-        type="button"
-        :disabled="!task || clearing"
-        title="删除全部抓取任务与结果"
-        @click="confirmingClear = true"
-      >
-        <AppIcon name="trash-2" :size="13" />
-        <span>清空</span>
-      </button>
-      <div v-else class="confirm-group" role="alertdialog" aria-label="确认清空">
-        <span class="confirm-text">清空全部数据？</span>
         <button
+          v-if="canCancel"
+          class="ghost-btn"
+          type="button"
+          :disabled="stopping"
+          :title="cancelTitle"
+          @click="cancelTask()"
+        >
+          <AppIcon name="square" :size="13" />
+          <span>{{ stopping ? '处理中…' : cancelLabel }}</span>
+        </button>
+
+        <button
+          v-if="!confirmingClear"
           class="ghost-btn danger"
           type="button"
-          :disabled="clearing"
-          @click="onConfirmClear()"
+          :disabled="!task || clearing"
+          title="删除全部抓取任务与结果"
+          @click="confirmingClear = true"
         >
-          {{ clearing ? '清空中…' : '确认' }}
+          <AppIcon name="trash-2" :size="13" />
+          <span>清空</span>
         </button>
-        <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
-      </div>
+        <div v-else class="confirm-group" role="alertdialog" aria-label="确认清空">
+          <span class="confirm-text">清空全部数据？</span>
+          <button
+            class="ghost-btn danger"
+            type="button"
+            :disabled="clearing"
+            @click="onConfirmClear()"
+          >
+            {{ clearing ? '清空中…' : '确认' }}
+          </button>
+          <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
+        </div>
 
-      <button
-        class="start-btn"
-        type="button"
-        :disabled="starting"
-        :title="`抓取源：${form.source}`"
-        @click="onStart"
-      >
-        <AppIcon name="play" :size="14" />
-        <span>{{ starting ? '提交中…' : '开始抓取' }}</span>
-      </button>
+        <button
+          class="start-btn"
+          type="button"
+          :disabled="starting"
+          :title="`抓取源：${form.source}`"
+          @click="onStart"
+        >
+          <AppIcon name="play" :size="14" />
+          <span>{{ starting ? '提交中…' : '开始抓取' }}</span>
+        </button>
+      </template>
+
+      <!-- 成果库 / 详情页：入库计数 + 新建任务入口 -->
+      <template v-else>
+        <div class="status-tag">
+          <AppIcon name="database" :size="12" />
+          <span>已入库 {{ libraryMeta?.total ?? 0 }} 篇</span>
+        </div>
+        <button class="start-btn" type="button" title="回到抓取任务页新建抓取" @click="goCrawl()">
+          <AppIcon name="plus" :size="14" />
+          <span>新建抓取任务</span>
+        </button>
+      </template>
     </div>
   </header>
 </template>
@@ -136,9 +179,51 @@ async function onConfirmClear() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 24px;
   padding: 16px 32px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
+}
+
+/* 页面切换胶囊：抓取任务 / 成果库 */
+.page-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: auto;
+  padding: 3px;
+  background: #eff0f3;
+  border-radius: 9px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tab.active {
+  background: var(--card);
+  font-weight: 600;
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px #00000014;
+}
+
+.tab.active svg {
+  color: var(--accent);
 }
 
 .brand {

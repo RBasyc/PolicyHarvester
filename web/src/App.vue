@@ -7,7 +7,9 @@ import ProgressPanel from './components/ProgressPanel.vue'
 import ConfirmPanel from './components/ConfirmPanel.vue'
 import ResultTable from './components/ResultTable.vue'
 import DetailDrawer from './components/DetailDrawer.vue'
-import { bootstrap, dismissToast, phase, toast } from './store'
+import LibraryPage from './components/LibraryPage.vue'
+import LibraryDetailPage from './components/LibraryDetailPage.vue'
+import { bootstrap, dismissToast, phase, toast, view } from './store'
 
 const drawerPolicyId = ref<number | null>(null)
 const drawerOpen = ref(false)
@@ -41,12 +43,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 <template>
   <div class="page">
     <TopBar />
-    <main class="content">
+    <main v-if="view === 'crawl'" class="content">
       <ConfigPanel />
       <ProgressPanel />
       <!-- 检索完成、等用户确认：确认面板取代结果表（同一批篇目，避免重复展示两遍） -->
       <ConfirmPanel v-if="phase === 'confirming'" />
       <ResultTable v-else @row-click="openDrawer" />
+    </main>
+    <!-- 成果库两页：无路由，按 store.view 切换（与既有 phase 切换同一套模式） -->
+    <main v-else-if="view === 'library'" class="content">
+      <LibraryPage />
+    </main>
+    <main v-else class="content">
+      <LibraryDetailPage />
     </main>
 
     <DetailDrawer :open="drawerOpen" :policy-id="drawerPolicyId" @close="closeDrawer" />

@@ -90,12 +90,15 @@ CREATE TABLE IF NOT EXISTS policy_document (
     catalog      TEXT,                                        -- 来源目录（gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读）
     fetched_by   TEXT,                                        -- 抓取方式（如 China-Central-Policy-MCP）
     fetched_at   TIMESTAMPTZ,
+    fulltext     TEXT,                                        -- 政策正文存档（提取阶段落库，供成果库「政策正文」展示）
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (task_id, source_url)
 );
 
 -- 补丁：老库的 policy_document 已存在，幂等补 catalog 列。
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS catalog TEXT;
+-- 补丁：成果库「政策正文」需要全文存档，提取阶段落库（旧行为只回填元信息不落正文）。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS fulltext TEXT;
 
 -- 提取结果（与 policy_document 一对一；对应抽屉「事实 / 信息 / 知识」三区）
 CREATE TABLE IF NOT EXISTS extraction (
@@ -138,6 +141,7 @@ CREATE TABLE IF NOT EXISTS task_log (
 -- ---------- 索引 ----------
 
 CREATE INDEX IF NOT EXISTS idx_policy_document_task  ON policy_document(task_id);
+CREATE INDEX IF NOT EXISTS idx_policy_document_date   ON policy_document(publish_date);
 CREATE INDEX IF NOT EXISTS idx_fact_item_extraction  ON fact_item(extraction_id);
 CREATE INDEX IF NOT EXISTS idx_task_log_task_time    ON task_log(task_id, created_at);
 

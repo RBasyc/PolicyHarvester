@@ -44,6 +44,7 @@ from app.config import get_settings
 from app.db import repositories as repo
 from app.db.repositories import PolicyRow
 from app.pipeline.extract import extract_policy
+from app.pipeline.fulltext_clean import split_fulltext
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +268,11 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
 
 
 def _parse_date(value: Any) -> date | None:
-    """把 MCP 返回的 `2025-06-05` / `2025-6-5` 之类转成 date；解析不了就当没有。"""
+    """把 MCP 返回的 `2025-06-05` / `2025年6月5日` 之类转成 date；解析不了就当没有。"""
     text = str(value or "").strip()
     match = re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", text)
+    if not match:
+        match = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text)
     if not match:
         return None
     year, month, day = (int(g) for g in match.groups())
@@ -379,11 +382,18 @@ async def _fetch_fulltext(url: str | None, policy_id: int, *, timeout: int | Non
     if not isinstance(data, dict):
         raise ValueError("全文接口返回了非预期内容")
 
+    # 清洗：剥掉整页抓取带入的 CSS/JS/导航噪声，元信息表（发文机关/来源/主题分类…）
+    # 单独解析出来。干净正文写回 data["body"]，让下游 LLM 提取与 fulltext 归档都用干净版本。
+    meta, clean_body = split_fulltext(str(data.get("body") or ""))
+    if clean_body:
+        data["body"] = clean_body
+
     await repo.update_policy_from_fulltext(
         policy_id,
-        agency=str(data.get("issuer") or "").strip(),
-        doc_no=str(data.get("doc_no") or "").strip(),
-        publish_date=_parse_date(data.get("date")),
+        agency=str(data.get("issuer") or "").strip() or (meta.agency or ""),
+        doc_no=str(data.get("doc_no") or "").strip() or (meta.doc_no or ""),
+        publish_date=_parse_date(data.get("date")) or _parse_date(meta.signed_date),
+        fulltext=str(data.get("body") or "").strip(),
     )
     return data
 

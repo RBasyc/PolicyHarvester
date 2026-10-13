@@ -290,9 +290,13 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
 
 
 async def update_policy_from_fulltext(
-    policy_id: int, *, agency: str, doc_no: str, publish_date: date | None
+    policy_id: int, *, agency: str, doc_no: str, publish_date: date | None, fulltext: str | None = None
 ) -> None:
-    """用全文解析出的元信息回填；解析不到的字段保持原值（不写空值进去）。"""
+    """用全文解析出的元信息回填；解析不到的字段保持原值（不写空值进去）。
+
+    同时把全文正文存档到 `fulltext` 列（成果库详情页「政策正文」用）；
+    正文只在非空时覆盖，重试时拿到空正文不会清掉旧存档。
+    """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -300,10 +304,11 @@ async def update_policy_from_fulltext(
                 UPDATE policy_document
                 SET agency       = COALESCE(NULLIF(%s, ''), agency),
                     doc_no       = COALESCE(NULLIF(%s, ''), doc_no),
-                    publish_date = COALESCE(%s, publish_date)
+                    publish_date = COALESCE(%s, publish_date),
+                    fulltext     = COALESCE(NULLIF(%s, ''), fulltext)
                 WHERE id = %s
                 """,
-                (agency, doc_no, publish_date, policy_id),
+                (agency, doc_no, publish_date, fulltext or "", policy_id),
             )
 
 
@@ -456,18 +461,18 @@ async def refresh_task_counts(task_id: int) -> Row | None:
                     extracted_count = s.extracted,
                     failed_count    = s.failed
                 FROM (
-                    SELECT %(task_id)s::bigint AS task_id,
+                    SELECT %s::bigint AS task_id,
                            COUNT(p.id) AS total,
                            COUNT(*) FILTER (WHERE COALESCE(e.status, 'pending') = 'extracted') AS extracted,
                            COUNT(*) FILTER (WHERE COALESCE(e.status, 'pending') = 'failed')    AS failed
                     FROM policy_document p
                     LEFT JOIN extraction e ON e.policy_id = p.id
-                    WHERE p.task_id = %(task_id)s
+                    WHERE p.task_id = %s
                 ) s
                 WHERE t.id = s.task_id
                 RETURNING t.*
                 """,
-                {"task_id": task_id},
+                (task_id, task_id),
             )
             return await cur.fetchone()
 
@@ -545,6 +550,154 @@ async def mark_extraction_failed(policy_id: int, error: str) -> None:
                 """,
                 (policy_id, error),
             )
+
+
+# ---------- 读：成果库（跨任务沉淀，仅提取成功的篇目） ----------
+
+# 成果库「同一原文只出现一次」的实现：DISTINCT ON (source_url) 按 url 去重，
+# 同一篇被多个任务抓到时保留最新一行（id 最大），重新执行任务不会覆盖/重复入库。
+# 文种 policy_document 没有列，由文号前缀推导（国办发/国办函 优先于 国发/国函，再 国令）。
+_LIBRARY_LATEST_CTE = """
+WITH latest AS (
+    SELECT DISTINCT ON (p.source_url)
+        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.source_url, p.created_at,
+        e.extracted_at, e.info_summary,
+        (SELECT COUNT(*) FROM fact_item fi WHERE fi.extraction_id = e.id) AS fact_count,
+        COALESCE(jsonb_array_length(e.info_points), 0) AS point_count,
+        CASE WHEN starts_with(p.doc_no, '国办发') THEN '国办发'
+             WHEN starts_with(p.doc_no, '国办函') THEN '国办函'
+             WHEN starts_with(p.doc_no, '国发')  THEN '国发'
+             WHEN starts_with(p.doc_no, '国函')  THEN '国函'
+             WHEN starts_with(p.doc_no, '国令')  THEN '国令'
+        END AS doc_type
+    FROM policy_document p
+    JOIN extraction e ON e.policy_id = p.id
+    WHERE e.status = 'extracted'
+    ORDER BY p.source_url, p.id DESC
+)
+"""
+
+# 列表过滤条件（agency / doc_type / year / keyword 全部可选，None = 不过滤）。
+# 占位符用位置式 %s + 元组：psycopg3 不支持 %(name)s 这种 pyformat 命名占位符。
+# keyword 用 strpos 做包含匹配：中文标题无大小写问题，且避开了 psycopg3 不能写字面 % 的限制
+_LIBRARY_FILTER_WHERE = """
+WHERE (%s::text IS NULL OR agency = %s)
+  AND (%s::text IS NULL OR doc_type = %s)
+  AND (%s::int IS NULL OR EXTRACT(YEAR FROM publish_date)::int = %s)
+  AND (%s::text IS NULL OR strpos(title, %s) > 0)
+"""
+
+
+def _library_filter_params(
+    agency: str | None, doc_type: str | None, year: int | None, keyword: str | None
+) -> tuple:
+    """过滤参数展开成位置式元组（每个条件占位符出现两次，值也要给两次）。"""
+    return (agency, agency, doc_type, doc_type, year, year, keyword, keyword)
+
+
+async def fetch_library_policies(
+    *,
+    agency: str | None,
+    doc_type: str | None,
+    year: int | None,
+    keyword: str | None,
+    limit: int,
+    offset: int,
+) -> list[Row]:
+    """成果库列表页：按 url 去重后的提取成功篇目，发布日期倒序 + 分页。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + f"SELECT * FROM latest\n{_LIBRARY_FILTER_WHERE}"
+                + "ORDER BY publish_date DESC NULLS LAST, id DESC\nLIMIT %s OFFSET %s",
+                _library_filter_params(agency, doc_type, year, keyword) + (limit, offset),
+            )
+            return await cur.fetchall()
+
+
+async def count_library_policies(
+    *, agency: str | None, doc_type: str | None, year: int | None, keyword: str | None
+) -> int:
+    """同过滤条件下的总条数（分页用）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + f"SELECT COUNT(*) AS total FROM latest\n{_LIBRARY_FILTER_WHERE}",
+                _library_filter_params(agency, doc_type, year, keyword),
+            )
+            row = await cur.fetchone()
+            return int(row["total"]) if row else 0
+
+
+async def fetch_library_meta() -> dict[str, Any]:
+    """成果库头部统计 + 筛选下拉选项（机构 / 文种 / 年份，均在去重子集上计算）。
+
+    返回 `{"total", "agency_count", "month_new", "agencies", "doc_types", "years"}`；
+    years 的 name 是年份字符串（前端筛选项统一 name+count 形状）。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + """
+                SELECT
+                    (SELECT COUNT(*) FROM latest) AS total,
+                    (SELECT COUNT(DISTINCT agency) FROM latest WHERE agency IS NOT NULL) AS agency_count,
+                    (SELECT COUNT(*) FROM latest
+                      WHERE extracted_at >= date_trunc('month', now())) AS month_new
+                """,
+            )
+            stats = await cur.fetchone()
+
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + """
+                SELECT agency AS name, COUNT(*) AS count
+                FROM latest
+                WHERE agency IS NOT NULL
+                GROUP BY agency
+                ORDER BY count DESC, agency
+                """,
+            )
+            agencies = await cur.fetchall()
+
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + """
+                SELECT doc_type AS name, COUNT(*) AS count
+                FROM latest
+                WHERE doc_type IS NOT NULL
+                GROUP BY doc_type
+                ORDER BY count DESC, doc_type
+                """,
+            )
+            doc_types = await cur.fetchall()
+
+            await cur.execute(
+                _LIBRARY_LATEST_CTE
+                + """
+                SELECT EXTRACT(YEAR FROM publish_date)::int AS year, COUNT(*) AS count
+                FROM latest
+                WHERE publish_date IS NOT NULL
+                GROUP BY year
+                ORDER BY year DESC
+                """,
+            )
+            years = [
+                {"name": str(row["year"]), "count": row["count"]}
+                for row in await cur.fetchall()
+            ]
+
+    return {
+        "total": int(stats["total"] if stats else 0),
+        "agency_count": int(stats["agency_count"] if stats else 0),
+        "month_new": int(stats["month_new"] if stats else 0),
+        "agencies": agencies,
+        "doc_types": doc_types,
+        "years": years,
+    }
 
 
 async def fetch_logs_since(task_id: int, after_id: int) -> list[Row]:

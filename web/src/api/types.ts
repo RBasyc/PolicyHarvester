@@ -121,6 +121,63 @@ export interface PolicyActionResponse {
   retry_count: number
 }
 
+/** 成果库卡片：一行 = 一篇已提取政策（后端按 source_url 跨任务去重） */
+export interface LibraryPolicyItem {
+  id: number
+  title: string
+  agency: string | null
+  /** 由文号前缀推导（国令/国发/国函/国办发/国办函），推导不出为 null */
+  doc_type: string | null
+  publish_date: string | null
+  summary: string | null
+  fact_count: number
+  point_count: number
+  source_url: string | null
+}
+
+export interface LibraryListResponse {
+  items: LibraryPolicyItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 成果库头部统计 + 筛选下拉选项；years 的 name 是年份字符串。 */
+export interface LibraryMeta {
+  total: number
+  /** 覆盖机构（distinct 发文机关数） */
+  agency_count: number
+  /** 本月新增（extracted_at 落在本月） */
+  month_new: number
+  agencies: FacetOption[]
+  doc_types: FacetOption[]
+  years: FacetOption[]
+}
+
+/** 从归档全文解析出的 gov.cn 元信息表（head-card 补缺用），字段只在原文出现时才有值。 */
+export interface FulltextMeta {
+  /** 发文机关 */
+  agency: string | null
+  /** 发文字号 */
+  doc_no: string | null
+  /** 来源 */
+  source: string | null
+  /** 主题分类 */
+  category: string | null
+  /** 公文种类 */
+  doc_kind: string | null
+  /** 成文日期（原文形态，如「2026年09月25日」） */
+  signed_date: string | null
+}
+
+/** 成果库详情页：元信息 + 三栏提取结果 + 政策正文存档（旧数据无正文时为 null）。 */
+export interface LibraryPolicyDetail {
+  policy: PolicyMeta
+  extraction: ExtractionOut
+  fulltext: string | null
+  fulltext_meta: FulltextMeta | null
+}
+
 export interface TaskCreatePayload {
   source: string
   date_from: string | null

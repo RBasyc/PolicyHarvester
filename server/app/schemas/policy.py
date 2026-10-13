@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.task import FacetOption
+
 ExtractStatus = str  # pending | extracting | extracted | failed（由数据库枚举约束）
 
 
@@ -207,3 +209,75 @@ class PolicyActionResponse(BaseModel):
     id: int
     status: ExtractStatus
     retry_count: int = 0
+
+
+# ---------- 成果库（跨任务沉淀，仅提取成功的篇目） ----------
+
+
+class LibraryPolicyItem(BaseModel):
+    """成果库卡片：一行 = 一篇已提取政策（按 source_url 去重后）。"""
+
+    id: int
+    title: str
+    agency: str | None = None
+    doc_type: str | None = None  # 由文号前缀推导（国令/国发/国函/国办发/国办函），推导不出为 null
+    publish_date: date | None = None
+    summary: str | None = None  # 提取的摘要（信息栏）
+    fact_count: int = 0
+    point_count: int = 0
+    source_url: str | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "LibraryPolicyItem":
+        return cls(
+            id=row["id"],
+            title=row["title"],
+            agency=row.get("agency"),
+            doc_type=row.get("doc_type"),
+            publish_date=row.get("publish_date"),
+            summary=row.get("info_summary"),
+            fact_count=int(row.get("fact_count") or 0),
+            point_count=int(row.get("point_count") or 0),
+            source_url=row.get("source_url"),
+        )
+
+
+class LibraryListResponse(BaseModel):
+    items: list[LibraryPolicyItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class LibraryMeta(BaseModel):
+    """库头部统计 + 筛选下拉选项（机构 / 文种 / 年份）。"""
+
+    total: int
+    agency_count: int  # 覆盖机构（distinct 发文机关数）
+    month_new: int  # 本月新增（extracted_at 落在本月）
+    agencies: list[FacetOption]
+    doc_types: list[FacetOption]
+    years: list[FacetOption]  # name 为年份字符串
+
+
+class FulltextMeta(BaseModel):
+    """从已归档全文里解析出的 gov.cn 元信息表（详情页 head-card 补缺用）。
+
+    全部 optional：字段只在原文里出现时才有值。
+    """
+
+    agency: str | None = None  # 发文机关
+    doc_no: str | None = None  # 发文字号
+    source: str | None = None  # 来源
+    category: str | None = None  # 主题分类
+    doc_kind: str | None = None  # 公文种类
+    signed_date: str | None = None  # 成文日期（原文形态，如「2026年09月25日」）
+
+
+class LibraryPolicyDetail(BaseModel):
+    """成果库详情页：元信息 + 三栏提取结果 + 政策正文存档（旧数据可能为 null）。"""
+
+    policy: PolicyMeta
+    extraction: ExtractionOut
+    fulltext: str | None = None
+    fulltext_meta: FulltextMeta | None = None  # 从归档全文解析的 gov.cn 元信息表
