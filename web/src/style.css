@@ -69,3 +69,14 @@ button {
   font-family: inherit;
   cursor: pointer;
 }
+
+/* 系统开启「减弱动态效果」时禁用所有动画/过渡（抽屉、下拉、弹窗、骨架屏等） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

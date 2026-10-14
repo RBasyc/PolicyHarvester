@@ -81,10 +81,10 @@ class TaskDTO(BaseModel):
 
 
 def _progress(row: dict[str, Any]) -> int:
-    """进度条：抓取阶段 0→50（`fetched/total`），提取阶段 50→100（已完成篇数占比）。
+    """进度条：按「已完成篇数 / 总篇数」展示百分比（用户口径：3 篇完成 1 篇 = 33%）。
 
-    提取阶段的分子用「已提取 + 失败」——失败篇目也算处理完，否则进度条会永远差一截。
-    `awaiting_confirmation`（抓完了、还没确认）自然落在 50%：`fetched == total` 且一篇都没提取。
+    「完成」= 已提取或已失败——失败篇目也算处理完，否则进度条会永远差一截。
+    抓取（检索/等待确认）阶段尚无完成的篇目，自然落在 0%；`completed` 时由状态直接给 100。
     """
     status = row["status"]
     if status == "pending":
@@ -96,12 +96,10 @@ def _progress(row: dict[str, Any]) -> int:
     if total <= 0:
         return 0
 
-    fetched = row["fetched_count"] or 0
     done = (row["extracted_count"] or 0) + (row["failed_count"] or 0)
-    fetched = min(fetched, total)
     done = min(done, total)
     # 未完成时不显示 100%，避免「进度条满但仍在跑」的错觉
-    return min(99, round(50 * fetched / total + 50 * done / total))
+    return min(99, round(100 * done / total))
 
 
 def _eta_seconds(row: dict[str, Any]) -> int | None:

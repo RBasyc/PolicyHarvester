@@ -72,19 +72,6 @@ function isSelected(id: number): boolean {
   return !deselected.value.has(id)
 }
 
-/** 来源目录的友好显示名（gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读） */
-const CATALOG_LABEL: Record<string, string> = {
-  gongwen: '公文',
-  bumenfile: '部门文件',
-  gongbao: '公报',
-  otherfile: '政策解读',
-}
-
-function catalogLabel(catalog: string | null): string {
-  if (!catalog) return '—'
-  return CATALOG_LABEL[catalog] ?? catalog
-}
-
 function toggle(id: number): void {
   const next = new Set(deselected.value)
   if (next.has(id)) next.delete(id)
@@ -147,7 +134,6 @@ async function onConfirm(): Promise<void> {
         <div class="col check-col"></div>
         <div class="col title-col">政策标题</div>
         <div class="col date-col">发布日期</div>
-        <div class="col catalog-col">来源</div>
         <div class="col link-col">原文链接</div>
       </div>
 
@@ -182,9 +168,6 @@ async function onConfirm(): Promise<void> {
           <span v-if="row.in_library" class="flag lib">已在库</span>
           <span v-if="dateFlag(row) === 'out'" class="flag out">超出范围</span>
           <span v-else-if="dateFlag(row) === 'none'" class="flag none">无日期</span>
-        </div>
-        <div class="col catalog-col">
-          <span class="row-catalog">{{ catalogLabel(row.catalog) }}</span>
         </div>
         <div class="col link-col">
           <a
@@ -357,8 +340,7 @@ async function onConfirm(): Promise<void> {
 
 /* 置灰沉底的行（已在库 / 判别不建议）：整行压灰（勾选状态仍可手动改变） */
 .table-row.dim .row-title,
-.table-row.dim .row-date,
-.table-row.dim .row-catalog {
+.table-row.dim .row-date {
   color: var(--text-tertiary);
 }
 
@@ -391,20 +373,9 @@ async function onConfirm(): Promise<void> {
   flex-shrink: 0;
 }
 
-.catalog-col {
-  width: 80px;
-  flex-shrink: 0;
-}
-
 .link-col {
   width: 80px;
   flex-shrink: 0;
-}
-
-.row-catalog {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
 }
 
 .row-title {

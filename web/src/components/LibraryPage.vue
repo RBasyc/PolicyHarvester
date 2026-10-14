@@ -362,6 +362,13 @@ function hasFilter(): boolean {
   flex: 1 1 0;
 }
 
+/* 三个下拉（SelectMenu 根节点）固定等宽：选中多机构联合发布的长名称时
+   按钮内部省略号截断，工具栏布局保持稳定、不再被挤换行 */
+.toolbar > .select {
+  width: 180px;
+  flex-shrink: 0;
+}
+
 .sort-hint {
   display: flex;
   align-items: center;
@@ -641,6 +648,11 @@ function hasFilter(): boolean {
 
   .search {
     width: 100%;
+  }
+
+  .toolbar > .select {
+    width: auto;
+    flex: 1 1 140px;
   }
 
   .toolbar-spacer {

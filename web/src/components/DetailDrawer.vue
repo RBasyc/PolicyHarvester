@@ -116,9 +116,10 @@ function formatDateTime(value: string | null): string {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
-      <div class="mask"></div>
-      <aside class="drawer" role="dialog" aria-modal="true">
+    <Transition name="drawer">
+      <div v-if="open" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
+        <div class="mask"></div>
+        <aside class="drawer" role="dialog" aria-modal="true">
         <header class="drawer-head">
           <div class="tag-row">
             <div class="tag-left">
@@ -252,8 +253,9 @@ function formatDateTime(value: string | null): string {
             重新提取
           </button>
         </footer>
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -268,6 +270,34 @@ function formatDateTime(value: string | null): string {
   position: absolute;
   inset: 0;
   background: #1f232999;
+}
+
+/* 抽屉动画：遮罩淡入淡出；打开时面板从右侧滑入（带缓出回弹），
+   关闭时快速右滑出去——用 transform 而非 right 位移动画，避免每帧重排 */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity 0.24s ease;
+}
+
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+
+.drawer-enter-active .drawer {
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0.35, 1);
+}
+
+.drawer-enter-from .drawer {
+  transform: translateX(72px);
+}
+
+.drawer-leave-active .drawer {
+  transition: transform 0.2s ease-in;
+}
+
+.drawer-leave-to .drawer {
+  transform: translateX(100%);
 }
 
 .drawer {

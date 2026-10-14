@@ -133,8 +133,9 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div v-if="scheduleModalOpen" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
-    <div class="mask"></div>
+  <Transition name="modal">
+    <div v-if="scheduleModalOpen" class="overlay" @mousedown="onOverlayDown" @click="onOverlayClick">
+      <div class="mask"></div>
     <div class="card" role="dialog" aria-modal="true" aria-label="定时任务">
       <!-- ================= 列表视图 ================= -->
       <template v-if="scheduleModalView === 'list'">
@@ -319,7 +320,8 @@ async function onSubmit() {
         </footer>
       </template>
     </div>
-  </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -337,6 +339,36 @@ async function onSubmit() {
   position: absolute;
   inset: 0;
   background: #1f232999;
+}
+
+/* 弹窗动画：遮罩淡入淡出；卡片自下向上浮出 + 微缩放（transform 动画，无每帧重排） */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-enter-active .card {
+  transition:
+    transform 0.24s cubic-bezier(0.3, 0.9, 0.4, 1.05),
+    opacity 0.18s ease;
+}
+
+.modal-enter-from .card {
+  transform: translateY(14px) scale(0.97);
+  opacity: 0;
+}
+
+.modal-leave-active .card {
+  transition: transform 0.16s ease-in;
+}
+
+.modal-leave-to .card {
+  transform: translateY(8px);
 }
 
 .card {

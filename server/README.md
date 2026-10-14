@@ -140,7 +140,7 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 
 ### 进度与计数语义
 
-- `progress`：抓取阶段 `0→50`（`fetched/total`），提取阶段 `50→100`（`(extracted+failed)/total`）；`completed` 时为 100，停在 `awaiting_confirmation` 时自然为 50。
+- `progress`：按「已完成篇数 / 总篇数」展示百分比（如 3 篇完成 1 篇 = 33%），「完成」= 已提取 + 已失败；检索 / 等待确认阶段尚无完成篇目，自然为 0；`completed` 时为 100。
 - `eta_seconds`：按 `elapsed / 已完成篇数 × 剩余篇数` 外推；数据过旧（>6 小时）时返回 `null`，前端隐藏该行。
 - `total/fetched/extracted/failed_count` 由 `repositories.refresh_task_counts()` 从 `policy_document` / `extraction` 的实际行数**聚合派生**，不累加——保证进度面板与结果表格 `summary` 永远同源一致。
 

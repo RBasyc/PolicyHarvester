@@ -28,6 +28,12 @@ function toggleAdvanced() {
 /** 当前展开的下拉（发布机构 / 文种）；null = 两个都收起 */
 const openMenu = ref<'agency' | 'doc_type' | null>(null)
 
+function toggleCollapse() {
+  collapsed.value = !collapsed.value
+  // 折叠体收起时浮层会被 overflow 裁剪，状态一并复位避免残留
+  if (collapsed.value) openMenu.value = null
+}
+
 function toggleMenu(which: 'agency' | 'doc_type') {
   openMenu.value = openMenu.value === which ? null : which
 }
@@ -158,14 +164,16 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         <p class="head-desc">设置时间范围、关键词与筛选条件</p>
         <span v-if="summary" class="head-summary">{{ summary }}</span>
       </div>
-      <button class="collapse" type="button" @click="collapsed = !collapsed">
+      <button class="collapse" type="button" @click="toggleCollapse">
         <span>{{ collapsed ? '展开' : '收起' }}</span>
-        <AppIcon :name="collapsed ? 'chevron-down' : 'chevron-up'" :size="16" />
+        <AppIcon name="chevron-down" :size="16" :class="{ flip: !collapsed }" />
       </button>
     </header>
 
-    <template v-if="!collapsed">
-      <div class="field">
+    <!-- 整个配置体：grid-rows 0fr↔1fr 折叠动画（内容高度不固定，无法用 max-height 预设） -->
+    <div class="collapse-wrap" :class="{ closed: collapsed }">
+      <div class="config-body">
+    <div class="field">
         <p class="label">时间范围</p>
         <div class="chips-row">
           <div class="date-box">
@@ -249,34 +257,36 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
                 </span>
                 <AppIcon name="chevron-down" :size="16" class="select-arrow" />
               </button>
-              <div v-if="openMenu === 'agency'" class="menu">
-                <p v-if="facetsLoading" class="menu-hint">加载中…</p>
-                <p v-else-if="!facets.agencies.length" class="menu-hint">没有相关内容</p>
-                <template v-else>
-                  <p class="menu-meta">
-                    {{ facetScope ? `${facetScope} · 共 ${facets.agencies.length} 项` : `全部 · 共 ${facets.agencies.length} 项` }}
+              <Transition name="drop">
+                <div v-if="openMenu === 'agency'" class="menu">
+                  <p v-if="facetsLoading" class="menu-hint">加载中…</p>
+                  <p v-else-if="!facets.agencies.length" class="menu-hint">没有相关内容</p>
+                  <template v-else>
+                    <p class="menu-meta">
+                      {{ facetScope ? `${facetScope} · 共 ${facets.agencies.length} 项` : `全部 · 共 ${facets.agencies.length} 项` }}
+                    </p>
+                    <button
+                      v-for="opt in facets.agencies"
+                      :key="opt.name"
+                      type="button"
+                      class="menu-item"
+                      :class="{ active: form.agencies.includes(opt.name) }"
+                      @click="toggleAgency(opt.name)"
+                    >
+                      <span class="menu-name">{{ opt.name }}</span>
+                      <AppIcon
+                        v-if="form.agencies.includes(opt.name)"
+                        name="check"
+                        :size="14"
+                        class="menu-check"
+                      />
+                    </button>
+                  </template>
+                  <p v-if="facets.source === 'fallback'" class="menu-foot">
+                    实时名单暂不可用，已回退内置名单
                   </p>
-                  <button
-                    v-for="opt in facets.agencies"
-                    :key="opt.name"
-                    type="button"
-                    class="menu-item"
-                    :class="{ active: form.agencies.includes(opt.name) }"
-                    @click="toggleAgency(opt.name)"
-                  >
-                    <span class="menu-name">{{ opt.name }}</span>
-                    <AppIcon
-                      v-if="form.agencies.includes(opt.name)"
-                      name="check"
-                      :size="14"
-                      class="menu-check"
-                    />
-                  </button>
-                </template>
-                <p v-if="facets.source === 'fallback'" class="menu-foot">
-                  实时名单暂不可用，已回退内置名单
-                </p>
-              </div>
+                </div>
+              </Transition>
             </div>
             <div v-if="selectedAgencies.length" class="chips-row">
               <span v-for="a in selectedAgencies" :key="a" class="tag accent">
@@ -303,34 +313,36 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
                 </span>
                 <AppIcon name="chevron-down" :size="16" class="select-arrow" />
               </button>
-              <div v-if="openMenu === 'doc_type'" class="menu">
-                <p v-if="facetsLoading" class="menu-hint">加载中…</p>
-                <p v-else-if="!facets.doc_types.length" class="menu-hint">没有相关内容</p>
-                <template v-else>
-                  <p class="menu-meta">
-                    {{ facetScope ? `${facetScope} · 共 ${facets.doc_types.length} 项` : `全部 · 共 ${facets.doc_types.length} 项` }}
+              <Transition name="drop">
+                <div v-if="openMenu === 'doc_type'" class="menu">
+                  <p v-if="facetsLoading" class="menu-hint">加载中…</p>
+                  <p v-else-if="!facets.doc_types.length" class="menu-hint">没有相关内容</p>
+                  <template v-else>
+                    <p class="menu-meta">
+                      {{ facetScope ? `${facetScope} · 共 ${facets.doc_types.length} 项` : `全部 · 共 ${facets.doc_types.length} 项` }}
+                    </p>
+                    <button
+                      v-for="opt in facets.doc_types"
+                      :key="opt.name"
+                      type="button"
+                      class="menu-item"
+                      :class="{ active: form.doc_types.includes(opt.name) }"
+                      @click="toggleDocType(opt.name)"
+                    >
+                      <span class="menu-name">{{ opt.name }}</span>
+                      <AppIcon
+                        v-if="form.doc_types.includes(opt.name)"
+                        name="check"
+                        :size="14"
+                        class="menu-check"
+                      />
+                    </button>
+                  </template>
+                  <p v-if="facets.source === 'fallback'" class="menu-foot">
+                    实时名单暂不可用，已回退内置名单
                   </p>
-                  <button
-                    v-for="opt in facets.doc_types"
-                    :key="opt.name"
-                    type="button"
-                    class="menu-item"
-                    :class="{ active: form.doc_types.includes(opt.name) }"
-                    @click="toggleDocType(opt.name)"
-                  >
-                    <span class="menu-name">{{ opt.name }}</span>
-                    <AppIcon
-                      v-if="form.doc_types.includes(opt.name)"
-                      name="check"
-                      :size="14"
-                      class="menu-check"
-                    />
-                  </button>
-                </template>
-                <p v-if="facets.source === 'fallback'" class="menu-foot">
-                  实时名单暂不可用，已回退内置名单
-                </p>
-              </div>
+                </div>
+              </Transition>
             </div>
             <div v-if="selectedDocTypes.length" class="chips-row">
               <span v-for="d in selectedDocTypes" :key="d" class="tag accent">
@@ -390,9 +402,11 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         >
           <span class="advanced-title">高级设置</span>
           <span class="advanced-hint">抓取 / 提取流水线参数（预填 .env 默认值，可按任务覆盖）</span>
-          <AppIcon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" :size="16" class="advanced-arrow" />
+          <AppIcon name="chevron-down" :size="16" class="advanced-arrow" :class="{ flip: advancedOpen }" />
         </button>
-        <div v-if="advancedOpen" class="advanced-body">
+        <!-- 折叠体常驻 DOM，grid-rows 0fr↔1fr 做高度动画（高度随内容自适应，不用写死 max-height） -->
+        <div class="advanced-body-wrap" :class="{ closed: !advancedOpen }">
+          <div class="advanced-body">
           <div class="advanced-row">
             <code class="advanced-env">PIPELINE_MODEL</code>
             <span class="advanced-label">提取用大模型（结构化提取时调用）</span>
@@ -474,9 +488,11 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
               恢复默认
             </button>
           </div>
+          </div>
         </div>
       </div>
-    </template>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -546,6 +562,39 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: normal;
+}
+
+.collapse svg {
+  transition: transform 0.2s ease;
+}
+
+.collapse svg.flip {
+  transform: rotate(180deg);
+}
+
+/* 整个配置体的收起/展开动画：grid-rows 0fr↔1fr —— 高度跟随内容自适应，
+   比写死 max-height 过渡更顺滑（不会收尾抖动）；margin-top 抵消 .config 的 gap，
+   收起后卡片上下不留 16px 空档 */
+.collapse-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 0;
+  transition:
+    grid-template-rows 0.3s cubic-bezier(0.3, 0.9, 0.4, 1),
+    margin-top 0.3s cubic-bezier(0.3, 0.9, 0.4, 1);
+}
+
+.collapse-wrap.closed {
+  grid-template-rows: 0fr;
+  margin-top: -16px;
+}
+
+.collapse-wrap > .config-body {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .form-row {
@@ -658,6 +707,21 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  transform-origin: top left;
+}
+
+/* 下拉浮层动画：淡入 + 自上向下浮现 + 微缩放（与 SelectMenu 一致） */
+.drop-enter-active,
+.drop-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s cubic-bezier(0.3, 0.9, 0.4, 1);
+}
+
+.drop-enter-from,
+.drop-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
 }
 
 .menu-item {
@@ -883,6 +947,31 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
 .advanced-arrow {
   flex-shrink: 0;
   color: var(--text-tertiary);
+  transition: transform 0.2s ease;
+}
+
+.advanced-arrow.flip {
+  transform: rotate(180deg);
+}
+
+/* 高级设置折叠动画：同样 grid-rows 0fr↔1fr；margin-top 抵消 .advanced 的 gap */
+.advanced-body-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 0;
+  transition:
+    grid-template-rows 0.28s cubic-bezier(0.3, 0.9, 0.4, 1),
+    margin-top 0.28s cubic-bezier(0.3, 0.9, 0.4, 1);
+}
+
+.advanced-body-wrap.closed {
+  grid-template-rows: 0fr;
+  margin-top: -10px;
+}
+
+.advanced-body-wrap > .advanced-body {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .advanced-body {
@@ -937,11 +1026,31 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   border-color: var(--accent);
 }
 
-/* 提取模型下拉框：比数字输入框宽，左对齐（模型名比数字长得多） */
+/* 提取模型下拉框：与其他自定义下拉（抓取配置 .select / 成果库 SelectMenu）视觉对齐。
+   原生 <select> 去掉浏览器默认外观（appearance:none），自绘 chevron 背景图；
+   圆角 / 内边距 / 字号 / hover·focus 边框逐项对齐（原生弹层本身不可样式化，保留） */
 .advanced-select {
-  flex-basis: 200px;
+  flex: 0 0 200px;
+  padding: 8px 34px 8px 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  font-size: 14px;
   text-align: left;
   cursor: pointer;
+  border-radius: 8px;
+  background-color: var(--card);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238f959e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.advanced-select:hover {
+  border-color: var(--text-tertiary);
+}
+
+.advanced-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .advanced-foot {
