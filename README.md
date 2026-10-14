@@ -290,4 +290,4 @@ policyharvester/
 
 ## License
 
-[Apache-2.0](LICENSE) — 随意使用、修改与分发（含明确的专利授权），保留版权声明、NOTICE 与许可证全文即可。
+[Apache-2.0](LICENSE)
