@@ -2,16 +2,26 @@
 /**
  * 单选下拉（成果库筛选用）：按钮 + 浮层列表，选项带条数。
  * 与 ConfigPanel 的多选下拉不同，这里选中即生效、再点一次已选项即清除。
+ *
+ * 两处可配（默认都是「筛选」的语义，抓取来源下拉用另一套）：
+ * - `showCount`：选项右侧的条数。抓取来源没有「条数」，传 false 免得出一个 0；
+ * - `clearable`：是否允许通过占位项清空、再点已选项取消选中。抓取来源**必须**有值
+ *   （`crawl_task.source` 是解析适配器的外键），传 false 就既没有清空项、也不会 emit ''。
  */
 import { computed, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
 import type { FacetOption } from '../api/types'
 
-const props = defineProps<{
-  modelValue: string
-  options: FacetOption[]
-  placeholder: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    options: FacetOption[]
+    placeholder: string
+    showCount?: boolean
+    clearable?: boolean
+  }>(),
+  { showCount: true, clearable: true },
+)
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const open = ref(false)
@@ -21,6 +31,12 @@ const current = computed(
 )
 
 function choose(name: string) {
+  if (!props.clearable) {
+    // 不可清空：点已选项 = 什么都不做（不 emit ''，否则表单会落到一个解析不到的来源上）
+    if (name) emit('update:modelValue', name)
+    open.value = false
+    return
+  }
   emit('update:modelValue', name === props.modelValue ? '' : name)
   open.value = false
 }
@@ -42,6 +58,7 @@ function choose(name: string) {
     <Transition name="drop">
       <div v-if="open" class="menu" role="listbox">
         <button
+          v-if="clearable"
           class="menu-item"
           :class="{ active: !current }"
           type="button"
@@ -59,7 +76,7 @@ function choose(name: string) {
           @click="choose(option.name)"
         >
           <span class="menu-name">{{ option.name }}</span>
-          <span class="count">{{ option.count }}</span>
+          <span v-if="showCount" class="count">{{ option.count }}</span>
         </button>
       </div>
     </Transition>

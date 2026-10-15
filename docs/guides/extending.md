@@ -1,0 +1,46 @@
+# Extending the project
+
+> Part of the [docs wiki](../README.md). **One canonical list** of "I want to X → change Y" —
+> the architecture pages link here so these rules live in exactly one place.
+
+## At a glance
+
+| 想做的事           | 改哪里                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| 加一个对话工具     | `server/app/agent/tools.py` 用 `@tool` 定义并加入 `TOOLS`，图自动识别                                 |
+| 改对话图结构       | `server/app/agent/graph.py`（新增节点/边、`interrupt` 人工审批、条件路由）                            |
+| 加抓取流水线阶段   | `server/app/pipeline/crawl_graph.py` 加节点与边（分支还要动 `_route_after_fetch`）                    |
+| **加一个落库字段** | 需**同时**改四处（见下）                                                                              |
+| 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
+| 换模型 / 网关      | `.env` 的 `MODEL_NAME`、`ANTHROPIC_*`，或往 `PIPELINE_MODELS` 注册表加一项                            |
+| 接入一个新网站     | 写一份 `SourceConfig`，**不要**写爬虫（见下）                                                         |
+
+## Agent
+
+- New local tool: add a `@tool` function in `app/agent/tools.py` and append it to `TOOLS` — no graph changes needed.
+- New graph behavior (interrupts, conditional routing): edit `app/agent/graph.py`.
+- New state fields: `app/agent/state.py` (use reducers like `add_messages` for mergeable fields).
+
+## Crawl pipeline
+
+- **New website source: write a `SourceConfig`, don't write a crawler.** The flow is recon → sample → config → dry run → register (`html_source.HtmlListSource` executes any config). Only touch `app/sources/` when the site needs a genuinely new acquisition route (`engine`) or a parser capability the subset engine lacks. Adding a site this way is a **data** change, not a code change. See [source-onboarding.md](../architecture/source-onboarding.md).
+- New pipeline stage: add a node in `app/pipeline/crawl_graph.py` and wire the edges (and `_route_after_fetch` if it branches).
+- New `SourceConfig` field: add it to `SourceConfig.config_fingerprint()`'s dump **only if it affects what gets fetched** (prose fields stay out), and to `.claude/skills/website-source-onboarding/references/config-schema.md` — that doc is a hand-kept mirror too.
+- Any write that changes `policy_document`/`extraction` rows must be followed by `refresh_task_counts()` so the derived counters stay honest.
+
+## Adding a persisted field — four places, no generator
+
+1. `database/schema.sql`
+2. `app/db/repositories.py`
+3. the matching `app/schemas/*.py` DTO
+4. `web/src/api/types.ts`
+
+Nothing generates item 4 — it is a hand-kept mirror. Keep all four in step.
+
+## Hand-kept mirrors (update both sides)
+
+| Source of truth | Mirror |
+| --- | --- |
+| `app/schemas/*.py` DTOs | `web/src/api/types.ts` |
+| source-onboarding thresholds / criteria / config fields | `.claude/skills/website-source-onboarding/references/{config-schema,acceptance-criteria,tool-map}.md` |
+| pipeline & agent behaviour | this wiki (`docs/architecture/*.md`) + `CLAUDE.md` |

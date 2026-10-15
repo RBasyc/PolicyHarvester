@@ -123,7 +123,7 @@ function formatDateTime(value: string | null): string {
         <header class="drawer-head">
           <div class="tag-row">
             <div class="tag-left">
-              <span class="source-tag">{{ meta?.source_name ?? '国务院政策文件库' }}</span>
+              <span class="source-tag">{{ meta?.source_name || '未知来源' }}</span>
               <span class="status-tag" :class="TONE[status]">
                 <AppIcon
                   :name="status === 'failed' ? 'circle-x' : status === 'extracting' ? 'loader-circle' : 'circle-check'"
@@ -152,7 +152,7 @@ function formatDateTime(value: string | null): string {
               rel="noopener noreferrer"
             >
               <AppIcon name="external-link" :size="13" />
-              查看原文（gov.cn）
+              查看原文
             </a>
             <span v-else class="origin-btn disabled">
               <AppIcon name="external-link" :size="13" />

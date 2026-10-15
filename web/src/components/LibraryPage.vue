@@ -3,7 +3,8 @@
  * 成果库页：跨任务沉淀的已提取政策。
  * 卡片网格 + 关键词/机构/文种/年份筛选 + 分页；点卡片进「政策详情页」。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import SelectMenu from './SelectMenu.vue'
 import {
@@ -14,11 +15,19 @@ import {
   libraryPage,
   libraryPageSize,
   libraryTotal,
+  loadLibraryMeta,
   loadLibraryPage,
-  openLibraryPolicy,
   setLibraryFilter,
 } from '../store'
 import type { LibraryPolicyItem } from '../api/types'
+
+const router = useRouter()
+
+/** 路由化后本页自加载（原来由 goLibrary 触发）：进页/刷新都拉最新统计与第一页 */
+onMounted(() => {
+  void loadLibraryMeta()
+  void loadLibraryPage(1)
+})
 
 const keywordInput = ref(libraryFilters.keyword)
 let keywordTimer: ReturnType<typeof setTimeout> | null = null
@@ -55,7 +64,16 @@ const pageWindow = computed<(number | '…')[]>(() => {
 })
 
 function onCard(item: LibraryPolicyItem) {
-  openLibraryPolicy(item.id)
+  router.push({ name: 'library-detail', params: { id: item.id } })
+}
+
+/**
+ * 卡片摘要：摘要是大模型写的，常带换行/多段。在 `-webkit-line-clamp: 2` 下，
+ * 一个换行会占掉两行配额里的一行——表现就是「换行了、正文看不见」。先压成一段再截。
+ * 另外空串要落到「暂无摘要」：`??` 只挡 null/undefined，挡不住 `''`。
+ */
+function summaryOf(item: LibraryPolicyItem): string {
+  return (item.summary ?? '').replace(/\s+/g, ' ').trim() || '暂无摘要'
 }
 
 function hasFilter(): boolean {
@@ -163,12 +181,17 @@ function hasFilter(): boolean {
       >
         <h2 class="card-title">{{ item.title }}</h2>
         <div class="card-tags">
+          <!-- 来源打头：成果库跨来源混排，非 gov.cn 来源的机构/文种/日期常常
+               全为空（地方站没有发文字号时推不出文种），少了这一枚卡片就只剩标题 -->
+          <span v-if="item.source_name" class="card-tag source" :title="item.source_name">
+            {{ item.source_name }}
+          </span>
           <span v-if="item.agency" class="card-tag">{{ item.agency }}</span>
           <span v-if="item.doc_type" class="card-tag">{{ item.doc_type }}</span>
           <span class="card-tag-spacer"></span>
           <span v-if="item.publish_date" class="card-date">{{ item.publish_date }}</span>
         </div>
-        <p class="card-summary">{{ item.summary ?? '暂无摘要' }}</p>
+        <p class="card-summary">{{ summaryOf(item) }}</p>
         <div class="card-foot">
           <span class="card-counts">
             <AppIcon name="list-checks" :size="12" />
@@ -414,6 +437,8 @@ function hasFilter(): boolean {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* 一行标题也占满两行的高度：同一排卡片的标题/摘要/底栏才会逐行对齐 */
+  min-height: 44px;
 }
 
 .card-tags {
@@ -437,6 +462,15 @@ function hasFilter(): boolean {
   text-overflow: ellipsis;
 }
 
+/* 来源比机构/文种更容易长（「国务院政策文件库（gov.cn）」这种）：
+   限个上界 + 省略号，避免把同一行的机构/文种挤没；完整名走 title 悬浮查看 */
+.card-tag.source {
+  max-width: 45%;
+  flex-shrink: 1;
+  color: var(--blue);
+  background: var(--blue-bg);
+}
+
 .card-tag-spacer {
   flex: 1 1 0;
 }
@@ -448,8 +482,18 @@ function hasFilter(): boolean {
   flex-shrink: 0;
 }
 
+/*
+ * 摘要：**不能写 `flex: 1 1 0`**（这里原来就是，症状由此而来）。
+ * `flex-basis: 0` 会让摘要不参与卡片的固有高度计算——一排卡片的高度由标题/标签/底栏
+ * 决定，摘要只能分「剩下的空间」，而剩下多少取决于同一排里别人的标题占几行。
+ * 于是：标题短的卡片摘要显示得下，标题满两行的卡片摘要被挤到 0 行（看着就是没摘要），
+ * 中间态则是一行被截。表现正是「有时多一行、有时没有、有时换行了看不见」。
+ * 改为按自身高度参与计算（最多两行），剩余空间交给底栏顶开。
+ */
 .card-summary {
-  flex: 1 1 0;
+  flex: 0 0 auto;
+  /* 两行的固定槽位：没有摘要（或摘要只有一句）的卡片不会比别的矮一截 */
+  min-height: 40px;
   font-size: 13px;
   line-height: 20px;
   color: var(--text-secondary);
@@ -460,6 +504,8 @@ function hasFilter(): boolean {
 }
 
 .card-foot {
+  /* 卡片底部对齐：剩余高度在摘要与底栏之间，而不是接到摘要尾巴上 */
+  margin-top: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;

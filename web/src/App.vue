@@ -1,37 +1,24 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import AppIcon from './components/AppIcon.vue'
 import TopBar from './components/TopBar.vue'
-import ConfigPanel from './components/ConfigPanel.vue'
-import ProgressPanel from './components/ProgressPanel.vue'
-import ConfirmPanel from './components/ConfirmPanel.vue'
-import ResultTable from './components/ResultTable.vue'
-import DetailDrawer from './components/DetailDrawer.vue'
-import LibraryPage from './components/LibraryPage.vue'
-import LibraryDetailPage from './components/LibraryDetailPage.vue'
 import ScheduleModal from './components/ScheduleModal.vue'
-import { bootstrap, dismissToast, phase, scheduleModalOpen, toast, view } from './store'
+import {
+  bootstrap,
+  dismissToast,
+  scheduleModalOpen,
+  startTaskWatch,
+  stopTaskWatch,
+  toast,
+} from './store'
 
-const drawerPolicyId = ref<number | null>(null)
-const drawerOpen = ref(false)
-
-function openDrawer(policyId: number) {
-  drawerPolicyId.value = policyId
-  drawerOpen.value = true
-}
-
-function closeDrawer() {
-  drawerOpen.value = false
-}
-
+/**
+ * Esc 优先级：定时任务弹窗（全局） > 页面内组件自己的 Esc（CrawlPage 的抽屉等在各自组件里）。
+ * 来源管理自 Phase 16 起是独立页面（/sources），不再有「Esc 关来源弹窗」。
+ */
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    // 弹窗优先：开着弹窗时 Esc 关弹窗，不关抽屉
-    if (scheduleModalOpen.value) {
-      scheduleModalOpen.value = false
-      return
-    }
-    closeDrawer()
+  if (e.key === 'Escape' && scheduleModalOpen.value) {
+    scheduleModalOpen.value = false
   }
 }
 
@@ -44,36 +31,31 @@ function runToastAction() {
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void bootstrap()
+  // 定时任务到点触发、另一个标签页起的任务，都在本页面之外：轮询 /tasks/current 才能发现
+  startTaskWatch()
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  stopTaskWatch()
+})
 </script>
 
 <template>
   <div class="page">
     <TopBar />
-    <main v-if="view === 'crawl'" class="content">
-      <ConfigPanel />
-      <ProgressPanel />
-      <!-- 检索完成、等用户确认：确认面板取代结果表（同一批篇目，避免重复展示两遍） -->
-      <ConfirmPanel v-if="phase === 'confirming'" />
-      <ResultTable v-else @row-click="openDrawer" />
-    </main>
-    <!-- 成果库两页：无路由，按 store.view 切换（与既有 phase 切换同一套模式） -->
-    <main v-else-if="view === 'library'" class="content">
-      <LibraryPage />
-    </main>
-    <main v-else class="content">
-      <LibraryDetailPage />
+    <!-- 路由页共用同一条页面外壳（内边距/最大宽度/纵向间距）：
+         各页只负责自己内部的分组，不再各自重复这一段 -->
+    <main class="content">
+      <router-view />
     </main>
 
-    <DetailDrawer :open="drawerOpen" :policy-id="drawerPolicyId" @close="closeDrawer" />
     <ScheduleModal />
 
     <div v-if="toast" class="toast" role="status">
       <AppIcon name="circle-x" :size="15" class="toast-icon" />
       <p class="toast-text">{{ toast.message }}</p>
       <button v-if="toast.retry" class="toast-retry" type="button" @click="runToastAction">
-        重试
+        {{ toast.actionLabel || '重试' }}
       </button>
       <button class="toast-close" type="button" aria-label="关闭提示" @click="dismissToast">
         <AppIcon name="x" :size="14" />
@@ -89,6 +71,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   flex-direction: column;
 }
 
+/* 路由页的公共外壳：四个页面共用一套内边距与容器宽度 */
 .content {
   display: flex;
   flex-direction: column;

@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import SelectMenu from './SelectMenu.vue'
+import type { FacetOption } from '../api/types'
 import {
+  currentSource,
   facets,
   facetsLoading,
   form,
@@ -10,13 +14,40 @@ import {
   loadPipelineConfig,
   pipelineConfig,
   resetPipelineOverrides,
+  selectableSources,
+  setSource,
+  sourceSupportsDocTypes,
 } from '../store'
+
+const router = useRouter()
 
 const collapsed = ref(false)
 const draftKeyword = ref('')
 
 /** 高级设置（流水线参数，预填 .env 默认、可按任务覆盖）默认收起 */
 const advancedOpen = ref(false)
+
+// ---------- 抓取来源（Phase 15） ----------
+
+/** 来源下拉的选项：只有一个会命中 label 的名单，条数没有意义（SelectMenu 的 showCount 关掉）。 */
+const sourceOptions = computed<FacetOption[]>(() =>
+  selectableSources.value.map((item) => ({ name: item.label, count: 0 })),
+)
+
+/**
+ * 来源一行的说明文案。优先说「没验收过」这件事——它是会让抓取空跑的真问题；
+ * 其次是后端给的**口径说明**（配置化来源的「发布机构 = 站点栏目名」）。
+ */
+const sourceHint = computed(() => {
+  const selected = currentSource.value
+  if (selected && !selected.builtin && !selected.verified) {
+    return `「${selected.label}」没有通过验收的试运行记录：抓取可能取不到内容，建议到「来源管理」里重跑一次接入。`
+  }
+  return (
+    facets.value.supports.note ??
+    '不同来源的筛选项口径不同：切换来源会清空已选的发布机构与文种，并按新来源重拉名单。'
+  )
+})
 
 /** 展开时顺手重拉配置：后端热读 .env（PIPELINE_MODELS 改完即生效，无需重启），
  *  每次展开都能看到最新模型列表；选中项已不在列表里时 store 会把它吸回默认。 */
@@ -28,10 +59,23 @@ function toggleAdvanced() {
 /** 当前展开的下拉（发布机构 / 文种）；null = 两个都收起 */
 const openMenu = ref<'agency' | 'doc_type' | null>(null)
 
+/** 折叠动画时长（须与 `.collapse-wrap` 的 transition 一致）：动画期间才让配置体裁剪内容 */
+const COLLAPSE_MS = 300
+const collapseAnimating = ref(false)
+let collapseTimer: number | undefined
+
 function toggleCollapse() {
   collapsed.value = !collapsed.value
   // 折叠体收起时浮层会被 overflow 裁剪，状态一并复位避免残留
   if (collapsed.value) openMenu.value = null
+  // 裁剪只在**动画进行中**与**已收起**时开（见 `.collapse-wrap` 的 overflow 规则）：
+  // 常驻 overflow:hidden 会把绝对定位的浮层也一起裁掉——「高级设置」收起后卡片变矮，
+  // 发布机构 / 文种的下拉就在卡片底边被切掉一半。动画一结束立刻放开裁剪。
+  collapseAnimating.value = true
+  window.clearTimeout(collapseTimer)
+  collapseTimer = window.setTimeout(() => {
+    collapseAnimating.value = false
+  }, COLLAPSE_MS + 60)
 }
 
 function toggleMenu(which: 'agency' | 'doc_type') {
@@ -44,7 +88,10 @@ function onDocMouseDown(event: MouseEvent) {
 }
 
 onMounted(() => document.addEventListener('mousedown', onDocMouseDown))
-onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onDocMouseDown)
+  window.clearTimeout(collapseTimer)
+})
 
 type RangePreset = 'all' | 'week' | 'month' | 'year'
 
@@ -171,8 +218,41 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
     </header>
 
     <!-- 整个配置体：grid-rows 0fr↔1fr 折叠动画（内容高度不固定，无法用 max-height 预设） -->
-    <div class="collapse-wrap" :class="{ closed: collapsed }">
+    <div class="collapse-wrap" :class="{ closed: collapsed, animating: collapseAnimating }">
       <div class="config-body">
+      <!-- 抓取来源：决定后面所有筛选项的口径，所以排在最前 -->
+      <div class="field">
+        <p class="label">抓取来源</p>
+        <div class="source-row">
+          <!-- :key 让收起面板时重挂一次：浮层（含它的全屏 backdrop）会被 overflow:hidden 裁掉，
+               不重挂就会留下一个看不见却吃掉点击的遮罩（与上面 openMenu 复位同一个理由） -->
+          <SelectMenu
+            :key="collapsed ? 'collapsed' : 'open'"
+            :model-value="form.source"
+            :options="sourceOptions"
+            placeholder="选择抓取来源"
+            :show-count="false"
+            :clearable="false"
+            @update:model-value="setSource"
+          />
+          <button
+            class="chip source-import"
+            type="button"
+            title="接入一个新网站（勘察 → 生成配置 → 试运行验收）"
+            @click="router.push({ name: 'sources', query: { tab: 'import' } })"
+          >
+            <AppIcon name="plus" :size="12" />
+            <span>导入网址</span>
+          </button>
+        </div>
+        <div class="hint-row">
+          <AppIcon name="info" :size="12" class="hint-icon" />
+          <p class="hint-text">{{ sourceHint }}</p>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
     <div class="field">
         <p class="label">时间范围</p>
         <div class="chips-row">
@@ -295,7 +375,8 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
               </span>
             </div>
           </div>
-          <div class="field grow">
+          <!-- 配置化来源没有「文种」这个口径：留着它只会让人筛出一个静默的空结果 -->
+          <div v-if="sourceSupportsDocTypes" class="field grow">
             <p class="label">文种</p>
             <div class="select-wrap">
               <button
@@ -355,7 +436,7 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         <div class="hint-row">
           <AppIcon name="info" :size="12" class="hint-icon" />
           <p class="hint-text">
-            关键词回车提交后，选项将按检索结果实时收窄（下拉顶部显示当前口径）；无匹配时提示「没有相关内容」；留空可直接浏览全部机构与文种
+            关键词回车提交后，选项将按检索结果实时收窄（下拉顶部显示当前口径）；无匹配时提示「没有相关内容」；留空可直接浏览全部机构{{ sourceSupportsDocTypes ? '与文种' : '' }}
           </p>
         </div>
       </div>
@@ -591,10 +672,18 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
 
 .collapse-wrap > .config-body {
   min-height: 0;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* 裁剪只在真正需要挡住内容时开：**已收起**（内容不该溢出卡片）与**折叠动画进行中**。
+   常驻 overflow:hidden 会把绝对定位的浮层（发布机构 / 文种下拉、抓取来源下拉）一起裁掉——
+   「高级设置」收起后卡片变矮，那两个下拉就在卡片底边被切成一半。动画结束由
+   `collapseAnimating` 摘掉该类，浮层恢复可见。 */
+.collapse-wrap.closed > .config-body,
+.collapse-wrap.animating > .config-body {
+  overflow: hidden;
 }
 
 .form-row {
@@ -635,6 +724,39 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 抓取来源一行：下拉占满剩余宽度，右侧跟一个「导入网址」入口 */
+.source-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.source-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* SelectMenu 是按成果库工具栏（无边框、浅底）写的，这里对齐本卡片里有边框的输入框：
+   只覆盖按钮外观，浮层与选中逻辑仍是那一份（改一处不会漂出第二个单选下拉） */
+.source-row :deep(.select-btn) {
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.source-row :deep(.select-btn:hover) {
+  border-color: var(--text-tertiary);
+}
+
+.source-import {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .select-wrap {

@@ -3,19 +3,30 @@
  * 政策详情页（成果库进入）：元信息 + 事实/信息/知识三栏 + 政策正文存档。
  * 「重新提取」复用 /policies/{id}/reextract；「查看原文」打开 source_url。
  */
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import ExtractionColumns from './ExtractionColumns.vue'
 import {
-  backToLibrary,
   libraryDetail,
   libraryDetailError,
   libraryDetailLoading,
-  libraryPolicyId,
   loadLibraryDetail,
   reextractLibraryPolicy,
   libraryReextracting,
 } from '../store'
+
+/** 由路由 `/library/:id(\\d+)` 注入（router.ts 的 props 函数把 params.id 转成 number）。 */
+const props = defineProps<{ policyId: number }>()
+
+const router = useRouter()
+
+/**
+ * 路由化后 id 来自 props 而非 store：进页 + 同页换 id（浏览器前进/后退、
+ * 从详情页跳到另一篇）都要重拉；store 里的 detail 状态只管展示，不再持有 id。
+ */
+onMounted(() => void loadLibraryDetail(props.policyId))
+watch(() => props.policyId, (id) => void loadLibraryDetail(id))
 
 const expanded = ref(false)
 const FULLTEXT_LIMIT = 300
@@ -31,9 +42,25 @@ const headAgency = computed(() => policy.value?.agency || fulltextMeta.value?.ag
 const headDocNo = computed(() => policy.value?.doc_no || fulltextMeta.value?.doc_no || '')
 const headSource = computed(() => policy.value?.source_name || fulltextMeta.value?.source || '')
 
-/** 文种不在详情契约里，由文号前缀推导（与服务端列表口径一致） */
+/** 文号里可能出现的左括号符（半角/全角），文种就取它之前的那一段 */
+const DOC_NO_BRACKETS = ['〔', '[', '（', '【']
+
+/**
+ * 文种不在详情契约里，由文号前缀推导——**必须与服务端 `_LIBRARY_LATEST_CTE` 的
+ * 口径一致**（那是原始定义，这里是手抄镜像，改动要两边同步）：
+ *   ① 取第一个括号符之前的部分（国发〔2026〕3号 → 国发，粤府〔2026〕1号 → 粤府），前缀限 1–6 字；
+ *   ② 无括号的旧形态退回 gov.cn 名单。
+ * 非 gov.cn 来源只有第 ① 条能推得出文种，这正是列表卡片以前对它显示为空的原因。
+ */
 const docType = computed(() => {
-  const docNo = policy.value?.doc_no ?? ''
+  const docNo = (policy.value?.doc_no ?? '').trim()
+  if (!docNo) return ''
+  let cut = -1
+  for (const bracket of DOC_NO_BRACKETS) {
+    const index = docNo.indexOf(bracket)
+    if (index > 0 && (cut < 0 || index < cut)) cut = index
+  }
+  if (cut > 0 && cut <= 6) return docNo.slice(0, cut).trim()
   for (const prefix of ['国办发', '国办函', '国发', '国函', '国令']) {
     if (docNo.startsWith(prefix)) return prefix
   }
@@ -75,7 +102,11 @@ function onOpenOrigin() {
 }
 
 function reload() {
-  if (libraryPolicyId.value != null) void loadLibraryDetail(libraryPolicyId.value)
+  void loadLibraryDetail(props.policyId)
+}
+
+function backToLibrary() {
+  void router.push({ name: 'library' })
 }
 </script>
 
@@ -162,7 +193,7 @@ function reload() {
               class="btn-outline"
               type="button"
               :disabled="libraryReextracting || extraction?.status === 'extracting'"
-              @click="reextractLibraryPolicy()"
+              @click="reextractLibraryPolicy(props.policyId)"
             >
               <AppIcon name="refresh-ccw" :size="13" />
               {{ libraryReextracting ? '提交中…' : '重新提取' }}

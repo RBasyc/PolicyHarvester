@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import {
   canCancel,
@@ -8,8 +9,6 @@ import {
   clearing,
   enabledScheduleCount,
   form,
-  goCrawl,
-  goLibrary,
   ingestMode,
   libraryMeta,
   openScheduleModal,
@@ -17,9 +16,16 @@ import {
   starting,
   stopping,
   task,
-  view,
 } from '../store'
 import type { TaskStatus } from '../api/types'
+
+const route = useRoute()
+const router = useRouter()
+
+const isCrawl = computed(() => route.name === 'crawl')
+const isLibraryFamily = computed(
+  () => route.name === 'library' || route.name === 'library-detail',
+)
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '排队中',
@@ -89,30 +95,42 @@ async function onConfirmClear() {
     <div class="page-tabs" role="tablist" aria-label="页面切换">
       <button
         class="tab"
-        :class="{ active: view === 'crawl' }"
+        :class="{ active: isCrawl }"
         type="button"
         role="tab"
-        :aria-selected="view === 'crawl'"
-        @click="goCrawl()"
+        :aria-selected="isCrawl"
+        @click="router.push({ name: 'crawl' })"
       >
         <AppIcon name="radar" :size="13" />
         <span>抓取任务</span>
       </button>
       <button
         class="tab"
-        :class="{ active: view !== 'crawl' }"
+        :class="{ active: isLibraryFamily }"
         type="button"
         role="tab"
-        :aria-selected="view !== 'crawl'"
-        @click="goLibrary()"
+        :aria-selected="isLibraryFamily"
+        @click="router.push({ name: 'library' })"
       >
         <AppIcon name="database" :size="13" />
         <span>成果库</span>
       </button>
+      <button
+        class="tab"
+        :class="{ active: route.name === 'sources' }"
+        type="button"
+        role="tab"
+        :aria-selected="route.name === 'sources'"
+        title="接入新网站 / 管理已有抓取来源 / 复核接入记录"
+        @click="router.push({ name: 'sources' })"
+      >
+        <AppIcon name="globe" :size="13" />
+        <span>来源管理</span>
+      </button>
     </div>
     <div class="actions">
       <!-- 抓取任务页：状态 + 定时任务入口 / 终止 / 开始抓取（清空按钮在成果库页） -->
-      <template v-if="view === 'crawl'">
+      <template v-if="isCrawl">
         <div class="status-tag" :class="tone">
           <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
           <span>{{ label }}</span>
@@ -154,18 +172,25 @@ async function onConfirmClear() {
         </button>
       </template>
 
-      <!-- 成果库 / 详情页：入库计数 + 清空（从抓取页移来，两步确认交互不变） -->
-      <template v-else>
+      <!-- 成果库 / 详情页：入库计数 + 清空（来源管理页不需要动作区） -->
+      <template v-else-if="isLibraryFamily">
         <div class="status-tag">
           <AppIcon name="database" :size="12" />
           <span>已入库 {{ libraryMeta?.total ?? 0 }} 篇</span>
         </div>
 
+        <!--
+          「清空」是**全库重置**（DELETE /api/tasks），不绑定任何单个任务：早先的
+          `!task` 守卫会让按钮在浏览器端 task 过期时永久置灰——成果库是跨任务沉淀的，
+          而 task 只是最近一次抓取任务（清库后为 null、试运行/定时/另一个页面起的任务
+          也不会同步过来），于是库里还有数据、按钮却点不动。空库点击是安全的：
+          后端返回 deleted=0，前端提示「暂无可清空的数据」。
+        -->
         <button
           v-if="!confirmingClear"
           class="ghost-btn danger"
           type="button"
-          :disabled="!task || clearing"
+          :disabled="clearing"
           title="删除全部抓取任务与结果"
           @click="confirmingClear = true"
         >
