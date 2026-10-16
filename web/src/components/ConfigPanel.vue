@@ -16,6 +16,7 @@ import {
   resetPipelineOverrides,
   selectableSources,
   setSource,
+  sourceFilterNote,
   sourceSupportsDocTypes,
 } from '../store'
 
@@ -248,6 +249,12 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         <div class="hint-row">
           <AppIcon name="info" :size="12" class="hint-icon" />
           <p class="hint-text">{{ sourceHint }}</p>
+        </div>
+        <!-- 筛选口径第二行：配置化来源的「关键词/时间范围在哪一层生效」必须说清楚，
+             否则用户会把「筛过了」当成「筛全了」（口径来自后端，见 store.sourceFilterNote） -->
+        <div v-if="sourceFilterNote" class="hint-row">
+          <AppIcon name="info" :size="12" class="hint-icon" />
+          <p class="hint-text">{{ sourceFilterNote }}</p>
         </div>
       </div>
 

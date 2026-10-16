@@ -113,7 +113,9 @@
 | **PDF / OFD 文字抽取** | 图片版红头文件、附件里的正文取不到 | 附件只做可达性 + 归档 + 哈希；正文抽取未实现 |
 | **OCR** | 扫描件内容无法进入链路 | 未实现 |
 | **登录 / 验证码 / 付费墙后的内容** | 这类站点接不进来 | **规范不允许绕过**，遇到即报「受阻」 |
-| **RSS / 官方 API 专用引擎** | 有 `feeds` 与 `search_forms` 的识别，但没有对应的取数引擎 | `engine` 目前只有 `html_list`；RSS 源可先当普通列表页抓 |
+| **RSS / 官方 API 专用引擎** | 有 `feeds` 的识别，但没有对应的取数引擎 | `engine` 目前只有 `html_list`；RSS 源可先当普通列表页抓 |
+| **站内检索的日期参数自动识别** | 检索页支持按日期收窄但配置没填 `date_from_param` / `date_to_param` 时，日期只能取回后复核 | `search_forms` 只报关键词框与隐藏参数，**不认**日期输入框；要接就得人工实测后填进 `entrypoints[].search` |
+| ~~**站内检索（search_forms）没有落点**~~ | 关键词/日期无处可推，只能客户端逐条比对（召回 = 翻页深度） | **已实现**：`entrypoints[].search`（`SearchConfig`）把入口声明成检索型；页面导入会自动探测并补一个「站内检索」入口，Agent 侧照 `search_forms` 报告自己填 |
 | ~~**前端来源管理界面**~~ | — | **已实现**：Phase 15 起在 `web/src/components/SourceReport.vue`（验收报告）+ 抓取页的来源下拉；Phase 16 起来源管理独立成页 `/sources`（`web/src/views/SourcesPage.vue` + `web/src/components/sources/{SourceListSection,ImportSection,RunsSection}.vue`），含单条/批量导入、启停/回滚、试运行/健康检查与接入记录——旧的 `SourceModal.vue` 已删除 |
 | **来源健康巡检的定时化** | 站点改版无法自动发现 | `manage_ingestion_job(action="health")` 是**手动**触发的 |
 | **文件级访问许可自动判定** | 无法自动判断「这个站允不允许转载」 | `governance.license_note` 留人工填写 |
@@ -155,6 +157,8 @@
 - **部分失败**：部分详情页 500 → 验收 `failed`，报告如实写出「取回失败」；
 - **无法抓取**：403 / robots 禁止 → `blocked`，原因点明访问控制且说明不绕过；
 - **人工确认**：无验收记录时拒绝启用；`force` 必须显式传；默认注册为 `draft`；
+  凭据按指纹**全表**查（不设条数窗口）——来源反复导入后凭据被更晚的记录埋住仍要能启用
+  （2026-10-15「手动停用的项目无法再次启用」的回归用例）；
 - **工具层**：9 个工具都返回可解析 JSON、坏输入不抛异常、展示名撞车被拒。
 
 跑法：

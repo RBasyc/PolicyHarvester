@@ -57,6 +57,8 @@ The condensed rules — full measured evidence, tables and channel matrix in [go
 - `gongbao`(公报) rows **ignore all facet filters** — drop them when any filter is active (in `getLatestPolicies.ts` **before** the `limit` slice, so un-filterable 公报 rows can't crowd out real matches; the pipeline repeats the check as a safety net).
 - The date window filters on the **displayed 发布日期** (`ptimeStr`/`pubtimeStr`) — `ptime` is an epoch that is often an *earlier* 成文日期, so `getLatestPolicies.ts` must report the **text date first, epoch only as fallback**; reporting the epoch made the pipeline's "date must fall inside the window" re-check discard rows the API had legitimately returned for the window (symptom: the facet shows 1 match, yet the run fails with 未检索到匹配的政策原文).
 - `get_policy_facets` reads `searchVO.extendresult.facetMap`/`groupMap` for the agency/doc-type option lists.
+- **`publish_date` means 发布日期 and nothing else.** The list round writes it (`ptimeStr`/`pubtimeStr`, see the bullet above); the fulltext round must **not** replace it, because `get_policy_fulltext`'s `date` is the detail page's 成文日期 (routinely weeks-to-months earlier). `GovCnSource.fulltext_date_is_publish = False` makes `_fetch_fulltext` pass `None`, so `update_policy_from_fulltext`'s `COALESCE` keeps the list-round value; `html_list` sources declare the default `True` (their detail-page date *is* the published one). Letting 成文日期 win misfiled New-Year-spanning documents — the year filter and the year histogram both run on `EXTRACT(YEAR FROM publish_date)` — and made a doc look "out of window" against the dates its run was configured with. 成文日期 is **not** discarded: it is re-parsed out of the archived fulltext into `FulltextMeta.signed_date` and shown as its own line on the library detail page.
+- **No date anywhere comes from the model.** `ExtractionPayload` (facts/info/knowledge) has no date field; time-related content is free text inside `facts` (label `时间`) and never leaves the extraction payload. `publish_date` is written only by deterministic code: the list round (`normalized.date`) and, for sources declaring `fulltext_date_is_publish`, `_fetch_fulltext` — a plain parse of what the source reports, not model output.
 
 ### Ingest judge (`app/pipeline/judge.py`, httpx)
 
@@ -74,7 +76,7 @@ Candidates the judge keeps get their fulltext fetched (concurrency `pipeline_pre
 
 ## Extraction (`app/pipeline/extract.py`)
 
-`extract_policy()` truncates the body to `pipeline_max_body_chars`, tries a structured tool call (`_extract_via_tool`, deliberately **without** a forced `tool_choice` — see [chat-agent.md](chat-agent.md) → *No forced tool_choice*), and falls back to a lenient JSON parse. Output is 事实/信息/知识 (facts / info{summary,points} / knowledge{concepts,fields,extension}).
+`extract_policy()` truncates the body to `pipeline_max_body_chars`, tries a structured tool call (`_extract_via_tool`, deliberately **without** a forced `tool_choice` — see [chat-agent.md](chat-agent.md) → *No forced tool_choice*), and falls back to a lenient JSON parse. Output is 事实/信息/知识 (facts / info{summary,points} / knowledge{concepts,fields,extension}) — **no date field**; see *gov.cn search quirks* above for where the policy date actually comes from.
 
 ## Business API (`app/api/routes/tasks.py`, `policies.py`)
 

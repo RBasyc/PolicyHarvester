@@ -47,7 +47,9 @@ class FulltextResult:
     """`fetch_fulltext` 的产物：一篇政策的全文与元信息。
 
     `body` 是**未清洗**的原文（清洗 `split_fulltext` 是流水线的事）；
-    `date` 已解析成 `date`（解析不了为 None）。
+    `date` 已解析成 `date`（解析不了为 None）。它是不是**发布日期**由来源声明
+    （`PolicySource.fulltext_date_is_publish`）——流水线只把发布日期写进 `publish_date`，
+    成文日期走归档全文解析（`FulltextMeta.signed_date`），两者不互相顶替。
 
     `attachments` 是本页附带的原始文件清单（`{"url","name","ext"}`），元素形态由各源自行
     填充、消费方按 dict 取值——gov.cn 侧没有这项，配置化来源才产出。它只是**发现结果**：
@@ -70,6 +72,13 @@ class PolicySource:
     label: str = ""
     doc_types: tuple[str, ...] = ()  # 文种白名单（gov.cn 检索 pcodeJiguan 参数的可选值）
     fetched_by: str = ""  # 落库 `fetched_by` 列的来源标识
+    # `fetch_fulltext` 报的 `date` 是不是**发布日期**。默认是——配置化来源的详情页上标的
+    # 就是站点点名的那一天。gov.cn 是例外：全文接口报的是元信息表里的**成文日期**
+    # （见 tools/China-Central-Policy-MCP/src/tools/getPolicyFulltext.ts），而成文日期
+    # 常比发布日期早几周到几个月。流水线据此决定要不要拿它回填 `publish_date`：
+    # 不区分的话，成文日期会顶掉列表轮写进去的发布日期，跨年文件被分错年份、成果库的
+    # 日期在抓完全文后凭空变一天，用户按「我选的日期窗口」核对时看着像越界。
+    fulltext_date_is_publish: bool = True
 
     def search_plan(
         self,
@@ -116,6 +125,22 @@ class PolicySource:
     def fulltext_available(self) -> bool:
         """全文工具是否已加载（fail-open 预检用：没加载就整段跳过，不阻断检索）。"""
         return True
+
+    def filter_capabilities(self) -> dict[str, Any]:
+        """这个来源的**筛选能力**（`filters` 接口据此决定前端隐藏什么、怎么解释）。
+
+        默认值 = 「服务端全支持」：基类只服务于 gov.cn 那种带检索接口的来源，
+        新引擎必须**显式覆盖**它——不覆盖就是默认声称「筛选都在服务端生效」，
+        而那正是最容易被用户当成事实的谎话。字段含义见
+        `app/sources/config.capability_summary`。
+        """
+        return {
+            "keyword": "server",
+            "date": "server",
+            "agency": "server",
+            "doc_type": "server",
+            "search_entrypoints": [],
+        }
 
     def normalize_item(self, raw: dict[str, Any]) -> PolicyItem | None:
         """原始 dict → `PolicyItem`；标题/链接缺失返回 None（由调用方丢弃）。"""

@@ -39,8 +39,13 @@ from urllib.parse import urlsplit
 from app.config import get_settings
 from app.sources import net
 from app.sources.analyze import analyze_page
-from app.sources.config import SourceConfig, validate_source_config
-from app.sources.html_source import HtmlListSource, build_list_url, parse_list_page
+from app.sources.config import SEARCH_PROBE_KEYWORD, SourceConfig, validate_source_config
+from app.sources.html_source import (
+    HtmlListSource,
+    build_entry_url,
+    build_list_url,
+    parse_list_page,
+)
 from app.sources.registry import get, get_by_label, register_configured, unregister
 from app.sources.util import parse_date
 
@@ -580,7 +585,7 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
     row["sent_enders"] = enders
     row["body_ok"] = cjk >= 100 and enders >= _MIN_SENT_ENDERS
     if not body:
-        row["warnings"].append("正文为空（容器选择器未命中）")
+        row["warnings"].append("正文为空（容器选择器未命中，启发式兜底也未找到达标正文）")
     return row
 
 
@@ -733,8 +738,18 @@ async def dry_run_ingestion(
             "error": search_error,
         }
 
+    # 检索型入口的探测关键词：优先用本次试运行给的关键词（就是要抓的那些词），
+    # 没给就用一个通用词——**只为验证「检索页取回来能解析出条目」**，与内容相关性无关。
+    search_entries = [ep for ep in config.entrypoints if ep.is_search]
+    given_keyword = next((k.strip() for k in (keywords or []) if (k or "").strip()), None)
+    probe_keyword = given_keyword or (SEARCH_PROBE_KEYWORD if search_entries else None)
+    report["search_entrypoints"] = [ep.name for ep in search_entries]
+    report["probe_keyword"] = probe_keyword
+
     # ---- 判据 1：列表发现（每入口第 1 页都能取到条目） ----
-    per_entry, entry_errors = await _probe_entries(config, date_from, date_to)
+    per_entry, entry_errors = await _probe_entries(
+        config, date_from, date_to, keyword=probe_keyword
+    )
 
     # 全部入口都失败，且失败原因是「访问控制 / 安全策略」→ 报受阻而不是失败：
     # 这类问题不是配置写错，而是站点不允许，按接入规范不绕过（第七节硬要求）。
@@ -760,17 +775,50 @@ async def dry_run_ingestion(
             )
             return {**report, "ok": False, "kind": "blocked", "run_id": run_id, "error": blocked}
 
-    min_items = min((row["items"] for row in per_entry), default=0)
-    criteria.append(
-        _criterion(
-            "列表发现",
-            f"每个入口第 1 页 ≥ 1 条（共 {len(config.entrypoints)} 个入口）",
-            f"最少 {min_items} 条",
-            passed=bool(per_entry) and min_items >= 1,
-            hard=True,
-            note="；".join(entry_errors) or None,
+    # 栏目入口与检索型入口分开算：检索入口的条数取决于探测关键词在站点索引里的命中数，
+    # 拿它一起去 min 会让一个 0 命中的检索入口把判据 1「栏目列表都取到条目」判成失败。
+    list_rows = [row for row in per_entry if row.get("kind") != "search"]
+    search_rows = [row for row in per_entry if row.get("kind") == "search"]
+    min_items = min((row["items"] for row in list_rows), default=0)
+    if list_rows:
+        criteria.append(
+            _criterion(
+                "列表发现",
+                f"每个栏目入口第 1 页 ≥ 1 条（共 {len(list_rows)} 个栏目入口）",
+                f"最少 {min_items} 条",
+                passed=min_items >= 1,
+                hard=True,
+                note="；".join(entry_errors) or None,
+            )
         )
-    )
+    else:
+        untested.append("列表发现（这份配置只有检索型入口，没有栏目列表页可探）")
+
+    # 检索型入口单独判：它取回来的条数取决于**探测关键词在站点索引里有多少命中**，
+    # 所以「有条目」才算这个入口是活的。用本次试运行自己的关键词探测时是硬判据
+    # （用户就是要用这些词抓）；用通用探测词时是软判据——那个词在站点里可能本来就 0 命中。
+    if search_rows:
+        worst = min(row["items"] for row in search_rows)
+        criteria.append(
+            _criterion(
+                "站内检索入口",
+                f"检索型入口用关键词探测时第 1 页 ≥ 1 条（共 {len(search_rows)} 个）",
+                f"最少 {worst} 条（探测关键词「{probe_keyword}」）",
+                passed=worst >= 1,
+                hard=bool(given_keyword),
+                note=(
+                    "；".join(
+                        f"{row['name']}：{row['error']}" for row in search_rows if row.get("error")
+                    )
+                    or "关键词确实送进了站点检索接口（URL 见 entrypoints[].url）"
+                ),
+            )
+        )
+        if not given_keyword:
+            untested.append(
+                f"站内检索入口只用通用探测词「{probe_keyword}」验证过，"
+                "未用你实际要抓的关键词跑一遍（正式抓取时才会用）"
+            )
 
     # ---- 判据 2：检索链路产出（扇出 + 条目标过滤 + 去重后） ----
     criteria.append(
@@ -814,6 +862,15 @@ async def dry_run_ingestion(
     # ---- 判据 4：元信息命中率（软判据：取不到就如实报低，不算失败） ----
     date_hit = sum(1 for row in details if row["date"]) / max(1, len(details))
     agency_hit = sum(1 for row in details if row["agency"]) / max(1, len(details))
+    # 抽样日期**值**恒定 = 假命中：日期候选多半取到了页脚/模板里那个固定日期，命中率再高也没用
+    # （2026-10-15 用户报的「其他来源的日期一直是 3 月 20 日」就是这样一路绿灯进来的）。
+    sampled_dates = sorted({str(row["date"]) for row in details if row["date"]})
+    same_date_note = (
+        f"⚠ 抽样 {len(details)} 篇的发布日期**全部相同**（{sampled_dates[0]}）：疑似取到了"
+        "页脚/模板元素，命中率高不代表取对了——请逐篇核对 detail.date_selectors"
+        if len(details) >= 2 and len(sampled_dates) == 1
+        else None
+    )
     criteria.append(
         _criterion(
             "详情页日期命中率",
@@ -821,9 +878,14 @@ async def dry_run_ingestion(
             f"{date_hit:.0%}",
             passed=date_hit >= _DATE_HIT_RATIO,
             hard=False,
-            note="缺日期的条目在时间窗口生效时会按配置决定去留（drop_undated_when_windowed）",
+            note=(
+                same_date_note
+                or "缺日期的条目在时间窗口生效时会按配置决定去留（drop_undated_when_windowed）"
+            ),
         )
     )
+    if same_date_note:
+        limits.append(same_date_note)
     criteria.append(
         _criterion(
             "详情页机构命中率",
@@ -840,7 +902,7 @@ async def dry_run_ingestion(
     if not paginated:
         untested.append("翻页（配置为单页模式，未声明翻页规则）")
     else:
-        page2 = await _probe_page2(config, date_from, date_to)
+        page2 = await _probe_page2(config, date_from, date_to, keyword=probe_keyword)
         criteria.append(
             _criterion(
                 "翻页可用性",
@@ -979,39 +1041,78 @@ def _cleanup_draft(key: str, *, passed: bool) -> None:
 
 
 async def _probe_entries(
-    config: SourceConfig, date_from: date | None, date_to: date | None
+    config: SourceConfig,
+    date_from: date | None,
+    date_to: date | None,
+    *,
+    keyword: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """逐入口取第 1 页，核对列表解析是否真的出条目（并记录每页取数错误）。"""
+    """逐入口取第 1 页，核对列表解析是否真的出条目（并记录每页取数错误）。
+
+    入口分两类，**探测方式不同**（口径见 `build_entry_url`）：
+
+    - 栏目型入口：取入口地址本身（`keyword=None`，即「栏目怎么翻」这一路）；
+    - 检索型入口：把 `keyword` 拼进站内检索地址——检索页没有关键词参数时返回的通常是
+      空结果页，拿它去探测只会得出「这个入口坏了」的错误结论。
+
+    `keyword` 为 None 时检索型入口**如实记为未探测**，不伪装成 0 条。
+    """
     source = HtmlListSource(config)
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     for entry in config.entrypoints:
-        url = build_list_url(entry, 1)
+        kind = "search" if entry.is_search else "list"
+        url = build_entry_url(
+            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=1
+        )
         if url is None:
-            rows.append({"name": entry.name, "url": entry.url, "items": 0, "error": "第 1 页地址为空"})
+            if entry.is_search:
+                rows.append(
+                    {
+                        "name": entry.name,
+                        "kind": kind,
+                        "url": entry.url,
+                        "items": 0,
+                        "probe_keyword": None,
+                        "error": "本次探测没有可用关键词，检索型入口未探测",
+                    }
+                )
+                continue
+            rows.append(
+                {"name": entry.name, "kind": kind, "url": entry.url, "items": 0,
+                 "error": "第 1 页地址为空"}
+            )
             continue
         try:
             fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
         except (net.FetchError, net.UnsafeURLError) as exc:
             errors.append(f"{entry.name}：{exc}")
-            rows.append({"name": entry.name, "url": url, "items": 0, "error": str(exc)})
+            rows.append({"name": entry.name, "kind": kind, "url": url, "items": 0, "error": str(exc)})
             continue
         items = parse_list_page(
             fetched.text, entry, fetched.url, limit=config.scope.max_items_per_entry
         )
+        # 检索型入口按探测关键词复核（站内检索同样会分词命中，这里量的是「取回来还能剩几条」）；
+        # 栏目型入口不复核关键词——那一路量的是「这个栏目本身有多少条」。
         kept = [
             item
             for item in items
             if source.validate_item(
-                item, keyword=None, date_from=date_from, date_to=date_to, facet_active=False
+                item,
+                keyword=keyword if entry.is_search else None,
+                date_from=date_from,
+                date_to=date_to,
+                facet_active=False,
             )
         ]
         rows.append(
             {
                 "name": entry.name,
+                "kind": kind,
                 "url": url,
                 "items": len(items),
                 "kept_after_filter": len(kept),
+                "probe_keyword": keyword if entry.is_search else None,
                 "sample_titles": [item["title"][:40] for item in items[:3]],
             }
         )
@@ -1019,14 +1120,22 @@ async def _probe_entries(
 
 
 async def _probe_page2(
-    config: SourceConfig, date_from: date | None, date_to: date | None
+    config: SourceConfig,
+    date_from: date | None,
+    date_to: date | None,
+    *,
+    keyword: str | None = None,
 ) -> dict[str, Any]:
     """取声明了翻页的入口的第 2 页，核对「确实翻得动」。"""
     source = HtmlListSource(config)
     for entry in config.entrypoints:
         if entry.pagination.kind == "none":
             continue
-        url = build_list_url(entry, 2)
+        if entry.is_search and not (keyword or "").strip():
+            continue  # 检索型入口没有关键词就没有可翻的第 2 页（见 build_search_url）
+        url = build_entry_url(
+            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=2
+        )
         if url is None:
             return {"passed": False, "detail": "第 2 页地址为空（max_pages=1？）", "note": None}
         try:
@@ -1040,7 +1149,9 @@ async def _probe_page2(
                 "detail": "第 2 页无条目",
                 "note": f"翻页规则 kind={entry.pagination.kind} 可能与该站不符",
             }
-        page1 = build_list_url(entry, 1)
+        page1 = build_entry_url(
+            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=1
+        )
         try:
             first = await net.fetch_text(str(page1), allowed_domains=config.scope.allowed_domains)
             items1 = parse_list_page(first.text, entry, first.url)
@@ -1239,10 +1350,7 @@ async def register_source(
         if not verification["verified"] and not force:
             return {
                 "ok": False,
-                "error": (
-                    "拒绝启用：没有指纹一致的通过试运行。请先跑 dry_run_ingestion；"
-                    "如确需人工拍板放行，用 force=true（会记录变更说明）。"
-                ),
+                "error": _enable_refusal(verification),
                 "verification": verification,
             }
         if not verification["verified"] and force:
@@ -1296,29 +1404,66 @@ async def register_source(
     }
 
 
+def _enable_refusal(verification: dict[str, Any]) -> str:
+    """把「拒绝启用」的原因写成**一句人话**——三种「没通过」分开说，见 `_latest_passing_run`。
+
+    口径只许住在这里：`register_source` 与 `manage_source(action="enable")` 是同一道闸的
+    两个入口，各写一份文案就会漂成两种说法（同一个来源，页面说一套、Agent 说另一套）。
+    """
+    if verification.get("db_error"):
+        # 设备坏了 ≠ 配置没验收过：把库连不上写成「没有通过试运行」，会让人去重跑一次
+        # 根本不会改变结论的试运行。
+        reason = f"拒绝启用：无法核对验收凭据（{verification['db_error']}）。"
+    else:
+        reason = "拒绝启用：没有指纹一致的通过试运行。" + str(verification.get("hint") or "")
+    return reason + "请先跑 dry_run_ingestion；如确需人工拍板放行，用 force=true（会记录变更说明）。"
+
+
 async def _latest_passing_run(config: SourceConfig) -> dict[str, Any]:
-    """找指纹一致的通过试运行记录（注册启用前的验收凭据）。"""
+    """找指纹一致的通过试运行记录（注册启用前的验收凭据）。
+
+    **按指纹在全表里找，不设条数窗口**：凭据是既成事实（那份配置真的被跑过一次并通过
+    了），同一来源之后又勘察过多少回、失败过多少次，都不该让它失效。2026-10-15 用户报的
+    「手动停用的项目无法再次启用」就是窗口造出来的——列表页按指纹全表找、徽标显示
+    「已验收」，闸门却只看「该来源最近 20 条记录」，凭据被挤出窗口后同一个来源两边各说
+    各话（按钮说能启用，点了被拒）。判定口径住在 `repo._PASSING_DRY_RUN_SQL` 一处，
+    这里（和列表页那次批量查询）都不许再抄一遍。
+    """
     from app.db import repositories as repo
 
+    fingerprint = config.config_fingerprint()
     try:
-        runs = await repo.list_onboarding_runs(source_key=config.key, limit=20)
-    except Exception as exc:  # noqa: BLE001
-        return {"fingerprint": config.config_fingerprint(), "verified": False, "error": str(exc)}
-    for row in runs:
-        if row.get("kind") != "dry_run" or row.get("status") != _STATUS_PASSED:
-            continue
-        report = row.get("report") or {}
-        if report.get("fingerprint") == config.config_fingerprint():
+        row = await repo.fetch_latest_passing_run(fingerprint=fingerprint)
+        if row is not None:
             return {
-                "fingerprint": config.config_fingerprint(),
+                "fingerprint": fingerprint,
                 "verified": True,
                 "run_id": row["id"],
                 "verified_at": str(row.get("finished_at") or row.get("started_at")),
             }
+        # 没找到：再说清是**哪一种**「没有」。改过配置（要重跑验收）与压根没跑过（要先跑），
+        # 用户要做的事不一样，不能都只丢一句「没有指纹一致的」让人去猜。
+        older = await repo.fetch_latest_passing_run(source_key=config.key)
+    except Exception as exc:  # noqa: BLE001
+        # 查不动（库不可用/表没建）≠ 没验收过：`db_error` 让 `_enable_refusal` 把两者分开说
+        return {
+            "fingerprint": fingerprint,
+            "verified": False,
+            "db_error": str(exc),
+            "error": f"无法核对验收记录：{exc}",
+        }
+    old_fp = ((older or {}).get("report") or {}).get("fingerprint")
+    hint = (
+        f"该来源最近一次通过的试运行用的是指纹 {old_fp}（当前配置 {fingerprint}）——"
+        "说明配置在验收之后改过。"
+        if old_fp and old_fp != fingerprint
+        else None
+    )
     return {
-        "fingerprint": config.config_fingerprint(),
+        "fingerprint": fingerprint,
         "verified": False,
-        "error": "没有指纹一致的通过试运行记录",
+        "hint": hint,
+        "error": "没有指纹一致的通过试运行记录" + (f"：{hint}" if hint else ""),
     }
 
 
@@ -1428,7 +1573,7 @@ async def manage_source(
             if not verification["verified"]:
                 return {
                     "ok": False,
-                    "error": "拒绝启用：该配置没有指纹一致的通过试运行，请先跑 dry_run_ingestion",
+                    "error": _enable_refusal(verification),
                     "verification": verification,
                 }
         updated = await repo.set_content_source_status(row["id"], status)
@@ -1459,8 +1604,21 @@ async def manage_source(
             return {"ok": False, "error": f"配置无法解析：{exc}"}
         checked = []
         for entry in config.entrypoints:
+            if entry.is_search:
+                # 健康检查不猜关键词：检索页在没有关键词参数时返回的是空结果页，
+                # 取回来只会得出「0 条」这种看着像故障、实际是探测方式不对的结论。
+                checked.append(
+                    {
+                        "name": entry.name,
+                        "kind": "search",
+                        "url": entry.url,
+                        "reachable": None,
+                        "note": "检索型入口需要关键词才有结果，健康检查不取数；正式抓取时才带关键词",
+                    }
+                )
+                continue
             url = build_list_url(entry, 1)
-            status = {"name": entry.name, "url": url, "reachable": False}
+            status = {"name": entry.name, "kind": "list", "url": url, "reachable": False}
             try:
                 fetched = await net.fetch_text(str(url), allowed_domains=config.scope.allowed_domains)
                 status.update(
@@ -1474,8 +1632,10 @@ async def manage_source(
             except (net.FetchError, net.UnsafeURLError) as exc:
                 status["error"] = str(exc)
             checked.append(status)
+        probed = [item for item in checked if item.get("reachable") is not None]
         return {
-            "ok": all(item["reachable"] for item in checked),
+            # 一个入口都没探到时**不报健康**：全检索型入口的配置本来就没被检查过
+            "ok": bool(probed) and all(item["reachable"] for item in probed),
             "key": row["key"],
             "loaded": get(row["key"]) is not None,
             "entrypoints": checked,

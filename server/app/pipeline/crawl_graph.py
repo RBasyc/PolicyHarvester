@@ -45,7 +45,6 @@ from app.pipeline.extract import extract_policy
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
-from app.sources.util import parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +127,7 @@ async def fetch_node(state: PipelineState) -> dict:
     lib_rows = [r for r in rows if r["source_url"] in library_urls][:cap]
 
     if not keep_rows and not tagged_rows and not lib_rows:
-        return {
-            "error": "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试",
-        }
+        return {"error": _empty_result_message(state)}
 
     await repo.insert_policies(task_id, keep_rows + tagged_rows + lib_rows)
     await repo.refresh_task_counts(task_id)
@@ -207,6 +204,27 @@ async def await_confirm_node(state: PipelineState) -> dict:
         tone="active",
     )
     return {}
+
+
+def _empty_result_message(state: dict[str, Any]) -> str:
+    """0 结果时的用户文案。**来源不同，话不一样**：
+
+    配了站内检索入口的来源，关键词为空时那个入口根本不取数（检索页没有关键词参数时
+    返回的是空结果页，见 `build_search_url`）——只说「调整关键词」会让人以为是自己筛得太严。
+    """
+    message = "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试"
+    try:
+        source = get_by_label(state.get("source"))
+        search_names = source.filter_capabilities().get("search_entrypoints") or []
+    except Exception:  # noqa: BLE001 - 文案补充失败不该让任务报错
+        return message
+    if search_names and not [k for k in (state.get("keywords") or []) if str(k or "").strip()]:
+        return (
+            message
+            + f"（提示：来源「{source.label}」的关键词由站内检索入口执行"
+            f"（{'、'.join(search_names)}），本轮没有填关键词，该入口没有取数）"
+        )
+    return message
 
 
 async def _search_policies(
@@ -573,11 +591,17 @@ async def _fetch_fulltext(
     meta, clean_body = split_fulltext(result.body)
     body = clean_body or result.body
 
+    # `publish_date` 只放**发布日期**，所以这里要按来源判断全文接口报的日期算不算数
+    # （见 `PolicySource.fulltext_date_is_publish`）。gov.cn 报的是成文日期——拿它覆盖会把
+    # 跨年文件分错年份（年份筛选/直方图都按 `EXTRACT(YEAR FROM publish_date)`），也会和抓取时
+    # 按发布日期判的日期窗口对不上。成文日期没有丢：它照样从归档全文解析出来，详情页单独展示
+    # （`FulltextMeta.signed_date`）。列表轮没给日期时这里传 None，那一行就诚实地留空，
+    # 不拿另一个语义的日期顶上（`update_policy_from_fulltext` 的 COALESCE 只在非空时覆盖）。
     await repo.update_policy_from_fulltext(
         policy_id,
         agency=(result.issuer or "").strip() or (meta.agency or ""),
         doc_no=(result.doc_no or "").strip() or (meta.doc_no or ""),
-        publish_date=result.date or parse_date(meta.signed_date),
+        publish_date=result.date if source.fulltext_date_is_publish else None,
         fulltext=body.strip(),
     )
     return {

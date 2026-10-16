@@ -217,6 +217,10 @@ export interface FacetOption {
 export interface FacetSupports {
   agencies: boolean
   doc_types: boolean
+  /** 关键词是否送进站点检索：false = 只在已翻到的列表页里比对标题（召回受翻页深度限制） */
+  keyword_server_side: boolean
+  /** 时间范围是否由站点过滤：false = 取回后复核（翻页范围内的条目才能被筛到） */
+  date_server_side: boolean
   /** 口径说明（配置化来源：「发布机构 = 站点栏目（入口）名」这类），可直接展示 */
   note: string | null
 }
@@ -375,9 +379,15 @@ export interface SourceDTO {
   version: number
   /** 是否存在指纹一致的通过试运行（启用闸门就是它） */
   verified: boolean
-  /** 入口（栏目）名；同时是「发布机构」筛选的可选值 */
+  /** 入口（栏目）名；同时是「发布机构」筛选的可选值（不含检索型入口） */
   entrypoints: string[]
   supports_doc_types: boolean
+  /** 关键词是否由站点检索接口执行（false = 只在已翻到的列表页里比对标题） */
+  keyword_server_side: boolean
+  /** 时间范围是否由站点过滤（false = 取回后复核） */
+  date_server_side: boolean
+  /** 站内检索入口名（空 = 没有检索入口）；用于给用户解释关键词在哪一层生效 */
+  search_entrypoints: string[]
   notes: string | null
 }
 

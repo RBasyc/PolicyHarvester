@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -37,6 +38,12 @@ SourceEngine = Literal["html_list"]
 #                                  ↘ disabled（人工停用，可再启用）
 SourceStatus = Literal["draft", "validated", "active", "disabled"]
 
+# 探测试运行检索型入口的**兜底关键词**：没有用户关键词时用它验证「检索页取回后能不能解析
+# 出条目」。选「通知」是因为它在政务站几乎必然有命中——这一步量的是**检索页的结构**，
+# 与内容相关性无关，所以它命中什么内容都无所谓；报告与日志里都会如实写明用的是它。
+# 页面导入（`services/source_import.py`）与试运行验收（`services/onboarding.py`）共用同一个，
+# 两处口径必须一致，否则「导入时试通了、验收时又不通」会变成一场没有结论的排查。
+SEARCH_PROBE_KEYWORD = "通知"
 
 class PaginationConfig(BaseModel):
     """列表页翻页规则。
@@ -65,11 +72,69 @@ class PaginationConfig(BaseModel):
         return self
 
 
+class SearchConfig(BaseModel):
+    """把入口声明成**站内检索**入口（而不是栏目列表页）。
+
+    这是「关键词/日期筛选能否在服务端生效」的唯一开关：栏目列表页给不了检索能力，
+    一个关键词只能靠翻遍栏目页 + 本地比对标题来碰运气（召回受翻页深度限制）；
+    而站内检索页接受 `?关键词=…&起始日期=…`，召回由**站点自己的索引**决定。
+
+    - `keyword_param` 是检索页接收关键词的参数名（`keyword` / `searchword` / `q` / `key`…），
+      **实测得到，不猜**：`analyze.search_forms()` 会把页面里 GET 表单的 action 与
+      input 名一并报出来，照着填。
+    - `date_from_param` / `date_to_param` 只在站点检索页确实接受日期参数时才填；
+      不填 = 该站检索页不支持按日期收窄，日期仍由 `validate_item` 在取回后复核。
+    - `fixed_params` 是检索页的固定参数（TRS 系常见的 `channelid` / `siteid`，
+      多半以隐藏 input 的形式躺在表单里）——它们决定「在哪批内容里检索」。
+    - **无关键词时不走检索入口**：检索页在没有关键词参数时返回的通常是空结果页或首页，
+      不是一条可浏览的路径。关键词为空的那一轮，检索入口会被跳过（`build_search_url`).
+    """
+
+    keyword_param: str = Field("keyword", min_length=1, max_length=40)
+    date_from_param: str | None = Field(None, max_length=40)
+    date_to_param: str | None = Field(None, max_length=40)
+    # 日期参数的写法（strftime 格式）；站点各写各的，实测后填
+    date_format: str = "%Y-%m-%d"
+    # 检索页上的固定参数（隐藏 input / 约定参数），如 {"channelid": "36021"}
+    fixed_params: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("keyword_param")
+    @classmethod
+    def _clean_keyword_param(cls, value: str) -> str:
+        # 全是空格的参数名会拼出 `?%20%20=通知`——地址看着正常、检索页永远不命中，
+        # 是最难查的一类错，所以在入口上就拦下（照 `search_forms[].field` 填实测值）。
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise ValueError("keyword_param 不能为空：照检索报告的 search_forms[].field 填实测参数名")
+        return cleaned
+
+    @field_validator("date_from_param", "date_to_param")
+    @classmethod
+    def _clean_param(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    @model_validator(mode="after")
+    def _check(self) -> "SearchConfig":
+        # date_format 必须在真实日期上产出「年/月/日」三样。strftime 对写错的指令是
+        # **原样输出**而不是报错，所以拿一个确定的日期渲染一遍、认输出比认格式串可靠。
+        rendered = date(2000, 1, 2).strftime(self.date_format)
+        if not all(token in rendered for token in ("2000", "01", "02")):
+            raise ValueError(
+                f"date_format「{self.date_format}」渲染 2000-01-02 得到「{rendered}」，"
+                "看不出年月日——站点要求的写法要实测后填（如 %Y-%m-%d / %Y%m%d）"
+            )
+        return self
+
+
 class EntrypointConfig(BaseModel):
     """一个内容入口（栏目列表页 / 检索结果页）。
 
     `name` 同时是「发布机构分类」筛选的匹配值：用户在抓取配置里选 `agencies` 时，
-    与入口名一致的那些入口才会被取数（见 `HtmlListSource.search`）。
+    与入口名一致的那些入口才会被取数（见 `HtmlListSource.search`）。检索型入口
+    （`search` 非空）不出现在机构筛选名单里——它不是机构（见 `capability_summary`）。
+
+    `search` 是**可选**的：填了它，这个入口就是站内检索入口，关键词/日期会送进站点
+    自己的检索接口；不填就是原来的栏目列表页（关键词与日期只能取回后本地过滤）。
     """
 
     name: str = Field(..., min_length=1, max_length=60)
@@ -80,15 +145,22 @@ class EntrypointConfig(BaseModel):
     title_selector: str | None = None  # 不填 = 用链接文本
     date_selector: str | None = None  # 不填 = 不取日期（详情页再补）
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
+    search: SearchConfig | None = None  # 非空 = 站内检索入口（关键词/日期进服务端）
     notes: str | None = None
+
+    @property
+    def is_search(self) -> bool:
+        return self.search is not None
 
 
 class DetailConfig(BaseModel):
     """详情页解析规则。
 
     `container_selectors` 是**候选链**：按顺序取第一个命中的容器；命中多个同类容器时
-    取文本最长的一个（政务站常见「正文 + 打印版副本」两份）。全部落空 = 该页解析失败，
-    记入验收报告的失败项（**不**退回整页文本——那会把导航/脚本当成正文）。
+    取文本最长的一个（政务站常见「正文 + 打印版副本」两份）。全部落空时**先用结构
+    启发式兜底挑一块**（`html_source._fallback_container`，会在 `warnings` 里标明
+    「未经确认」），兜底也挑不出达标正文才判该页解析失败。两条路径都**不**退回整页
+    文本——那会把导航/脚本当成正文。
     """
 
     container_selectors: list[str] = Field(default_factory=list)
@@ -173,6 +245,10 @@ class SourceConfig(BaseModel):
     def entrypoint_urls(self) -> list[str]:
         return [ep.url for ep in self.entrypoints]
 
+    def capabilities(self) -> dict[str, Any]:
+        """这份配置的筛选能力（见 `capability_summary`）。"""
+        return capability_summary(self.model_dump())
+
     def config_fingerprint(self) -> str:
         """配置内容指纹（去掉自由文本的展示/许可字段，只看会影响取数的部分）。
 
@@ -193,7 +269,10 @@ class SourceConfig(BaseModel):
             "engine": self.engine,
             "domains": self.scope.allowed_domains,
             "entrypoints": [{"name": ep.name, "url": ep.url} for ep in self.entrypoints],
+            # 检索型入口单列：它们不在「发布机构」筛选名单里（不是机构）
+            "search_entrypoints": [ep.name for ep in self.entrypoints if ep.is_search],
             "pagination": sorted({ep.pagination.kind for ep in self.entrypoints}),
+            "filters": capability_summary(self.model_dump()),
             "attachments": bool(self.detail.attachment_selector) or "扩展名启发式",
             "fingerprint": self.config_fingerprint(),
         }
@@ -253,6 +332,39 @@ def validate_source_config(config: SourceConfig) -> list[str]:
             "（先跑 analyze_content_structure 取得候选选择器）"
         )
     return problems
+
+
+def capability_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """这份来源的**筛选能力**：哪些筛选项在服务端生效、哪些只是取回后的本地过滤。
+
+    存在的理由：两种来源的筛选语义**不一样**，而差别不会自己浮出来——
+
+    - gov.cn 有检索接口，关键词、日期、机构、文种都由服务端执行，召回由索引决定；
+    - 配一个栏目列表页当来源时（`engine=html_list` 且入口没有 `search`），栏目页给不了
+      检索能力，关键词只能拿翻到的那些列表页**逐条比对标题**、日期只能拿列表页上那个
+      日期**逐条比对**。召回上限 = 翻页深度 × 每页条数，深处的、更早的文件永远碰不到。
+
+    第二种情况前端必须说出来（否则用户以为「筛过了」），所以这里把口径做成数据。
+    `entrypoints[].search` 非空的入口算服务端检索——**站内检索页是能把关键词和日期
+    推回站点的唯一途径**（见 `SearchConfig`）。
+
+    按原始 dict（`content_source.config` 列）计算，不做 Pydantic 校验：来源列表接口
+    会拿历史行直接调它，一个字段不合规不该让整张列表 500。
+    """
+    entries = [e for e in (config.get("entrypoints") or []) if isinstance(e, dict)]
+    search_entries = [e for e in entries if isinstance(e.get("search"), dict)]
+    has_date_param = any(
+        (e["search"].get("date_from_param") or e["search"].get("date_to_param"))
+        for e in search_entries
+    )
+    return {
+        "keyword": "server" if search_entries else "client_scan",
+        "date": "server" if has_date_param else "client",
+        "agency": "entry",  # 机构筛选 = 只取同名的入口（见 EntrypointConfig.name）
+        "doc_type": "patterns" if config.get("doc_type_patterns") else "none",
+        # 检索型入口不参与「发布机构」筛选（它不是机构），故单列出来
+        "search_entrypoints": [str(e.get("name") or "") for e in search_entries if e.get("name")],
+    }
 
 
 def config_from_row(row: dict[str, Any]) -> SourceConfig:

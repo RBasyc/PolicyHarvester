@@ -26,12 +26,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from app.config import get_settings
 from app.sources import net
 from app.sources.base import FulltextResult, PolicyItem, PolicySource
-from app.sources.config import DetailConfig, EntrypointConfig, SourceConfig
+from app.sources.config import DetailConfig, EntrypointConfig, PaginationConfig, SourceConfig
 from app.sources.htmlparse import Node, parse_html, select, select_one
 from app.sources.util import parse_date
 
@@ -52,7 +52,68 @@ def _strip_label(text: str) -> str:
     return _META_LABEL_RE.sub("", (text or "").strip()).strip()
 
 
-# ---------- 纯函数：列表页解析 ----------
+def _usable_href(node: Node) -> str | None:
+    """节点上可用于跳转的 href；占位符 / 非 http 的一律不算。"""
+    href = (node.get("href") or "").strip()
+    if not href or href.startswith(("javascript:", "mailto:", "#", "tel:")):
+        return None
+    return href
+
+
+def _pick_item_link(container: Node, link_selector: str, title: str) -> Node | None:
+    """在条目容器里挑出「那一个」条目链接。
+
+    一个 `<li>` 里常常不止一个 `<a>`（标题 + 缩略图 +「更多」）。取第一个命中的是碰
+    运气：缩略图或「更多」排在前面，条目就指到错的地方去了。这里按可靠性排序——
+
+    1. 文本与已解析出的标题一致的链接（最可靠；配了 `title_selector` 时几乎必中）；
+    2. 否则取文本最长的那个：标题链接几乎总是条目里最长的一段文字，而缩略图链接
+       没有文本、「更多」只有两个字。
+
+    同一口径下按文档序取第一个（`max` 返回首个最大值），结果稳定可复现。
+    """
+    candidates = select(container, link_selector) if link_selector else []
+    if container.tag == "a":
+        # 条目容器本身就是一个 <a>：`select` 只遍历子孙、不含自己，得手动补进来
+        candidates.insert(0, container)
+    usable = [(node, _usable_href(node)) for node in candidates]
+    usable = [(node, href) for node, href in usable if href]
+    if not usable:
+        return None
+    if title:
+        want = " ".join(title.split())
+        for node, _ in usable:
+            if " ".join(node.text_content().split()) == want:
+                return node
+    return max(usable, key=lambda pair: len(" ".join(pair[0].text_content().split())))[0]
+
+
+# ---------- 纯函数：列表页 URL 构造 ----------
+
+
+def _merge_query(url: str, params: list[tuple[str, str]]) -> str:
+    """把 `params` 并进 `url` 的查询串：同名参数**替换**，其余保留。"""
+    parts = urlsplit(url)
+    pairs = [p for p in parts.query.split("&") if p] if parts.query else []
+    names = {name for name, _ in params}
+    kept = [p for p in pairs if p.split("=", 1)[0] not in names]
+    added = [f"{quote(str(name), safe='')}={quote(str(value), safe='')}" for name, value in params]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "&".join([*kept, *added]), parts.fragment))
+
+
+def _paginate(url: str, pagination: PaginationConfig, page: int) -> str:
+    """在**已经带上检索参数**的地址上套翻页规则（第 2 页起）。"""
+    value = pagination.start + (page - 1) * pagination.step
+    if pagination.kind == "path_index":
+        template = pagination.path_template or "{page}"
+        return urljoin(url, template.format(page=value))
+    # query_param：保留原查询串（含关键词与日期参数），替换/追加分页参数
+    parts = urlsplit(url)
+    new_query = f"{pagination.param}={value}"
+    if parts.query:
+        kept = [pair for pair in parts.query.split("&") if not pair.startswith(f"{pagination.param}=")]
+        new_query = "&".join([*kept, new_query]) if kept else new_query
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
 def build_list_url(entry: EntrypointConfig, page: int) -> str | None:
@@ -75,18 +136,69 @@ def build_list_url(entry: EntrypointConfig, page: int) -> str | None:
         return entry.url
     if pagination.kind == "none":
         return None
-    value = pagination.start + (page - 1) * pagination.step
-    if pagination.kind == "path_index":
-        template = pagination.path_template or "{page}"
-        return urljoin(entry.url, template.format(page=value))
-    # query_param：保留原查询串，替换/追加分页参数
-    parts = urlsplit(entry.url)
-    query = parts.query
-    new_query = f"{pagination.param}={value}"
-    if query:
-        kept = [pair for pair in query.split("&") if not pair.startswith(f"{pagination.param}=")]
-        new_query = "&".join([*kept, new_query]) if kept else new_query
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+    return _paginate(entry.url, pagination, page)
+
+
+def build_search_url(
+    entry: EntrypointConfig,
+    *,
+    keyword: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    page: int,
+) -> str | None:
+    """检索型入口的第 `page` 页地址：把关键词/日期按 `entry.search` 的约定拼进查询串。
+
+    返回值 None 有三种含义，调用方一视同仁（这一轮该入口不取数）：
+
+    - **没给关键词**：检索页在没有关键词参数时返回的通常是空结果页或首页，不是可浏览的
+      路径，所以无关键词的那一轮直接跳过检索入口（栏目入口照旧翻）；
+    - 页码越界（该入口翻到底）；
+    - **单页检索**（`pagination.kind == "none"`）的第 2 页起：与 `build_list_url` 同一口径。
+      不加这条守卫的话，第 2 页会拼出一个站点根本不认的 `page=2`——站点忽略它、把第 1 页
+      原样回一遍，取回来的全是重复 URL（被 `seen` 滤掉），组合永远不进「翻到底」，
+      白白把检索预算耗在同一张页面上。
+
+    日期只在站点检索页**确实接受**该参数时才拼（未配 `date_from_param` / `date_to_param`
+    = 该站检索页不支持按日期收窄，日期仍由 `validate_item` 取回后复核）。
+    """
+    search = entry.search
+    if search is None or page < 1 or page > entry.pagination.max_pages:
+        return None
+    if page > 1 and entry.pagination.kind == "none":
+        return None
+    if not (keyword or "").strip():
+        return None
+    params: list[tuple[str, str]] = [(str(k), str(v)) for k, v in search.fixed_params.items()]
+    params.append((search.keyword_param, keyword.strip()))
+    if date_from and search.date_from_param:
+        params.append((search.date_from_param, date_from.strftime(search.date_format)))
+    if date_to and search.date_to_param:
+        params.append((search.date_to_param, date_to.strftime(search.date_format)))
+    base = _merge_query(entry.url, params)
+    if page == 1:
+        return base
+    return _paginate(base, entry.pagination, page)
+
+
+def build_entry_url(
+    entry: EntrypointConfig,
+    *,
+    keyword: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    page: int,
+) -> str | None:
+    """入口第 `page` 页的地址，**唯一的取数入口**（检索型 / 栏目型都在这里分流）。
+
+    试运行和正式抓取都走它，两边口径才一致：`services/onboarding.py` 的入口探测
+    也必须用同一个函数，否则「试运行过了、正式抓取取不到」这种分歧迟早出现。
+    """
+    if entry.is_search:
+        return build_search_url(
+            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=page
+        )
+    return build_list_url(entry, page)
 
 
 def parse_list_page(
@@ -105,23 +217,21 @@ def parse_list_page(
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     for container in containers:
-        link = select_one(container, entry.link_selector) if entry.link_selector else None
-        if link is None and container.tag == "a":
-            link = container  # 条目容器本身就是一个 <a>
-        if link is None:
-            continue
-        href = (link.get("href") or "").strip()
-        if not href or href.startswith(("javascript:", "mailto:", "#")):
-            continue
-        url = urljoin(base_url, href)
-        if not urlsplit(url).scheme.startswith("http") or url in seen:
-            continue
-
+        # 标题先定：配了 `title_selector` 就用它，取不到留给链接文本兜底。先定标题也是
+        # 为了让 `_pick_item_link` 能用「文本 == 标题」把真正的条目链接挑出来。
         title = ""
         if entry.title_selector:
             title_node = select_one(container, entry.title_selector)
             if title_node is not None:
                 title = title_node.text_content()
+
+        link = _pick_item_link(container, entry.link_selector, title)
+        if link is None:
+            continue
+        url = urljoin(base_url, _usable_href(link) or "")
+        if not urlsplit(url).scheme.startswith("http") or url in seen:
+            continue
+
         if not title:
             title = link.text_content()
         if not title:
@@ -200,6 +310,32 @@ def _pick_container(root: Node, selectors: list[str]) -> tuple[Node | None, str 
     return None, None
 
 
+# 启发式兜底的最低正文长度。低于它更可能是侧栏 / 相关阅读块而不是政策正文；
+# 200 与 `DetailConfig.min_body_chars` 的默认值同口径（试运行判定「正文过短」的那条线）。
+_FALLBACK_MIN_CHARS = 200
+
+
+def _fallback_container(root: Node) -> tuple[Node | None, str | None]:
+    """配置的选择器全落空时的兜底：用结构打分挑一块最像正文的节点。
+
+    复用 `analyze.detail_candidates`（文本量为主、常见正文 id/class 加权、链接密度过高
+    降权）。它**在候选阶段就排除了 `<html>` / `<body>`**，所以这仍然不是「退化成整页
+    文本」——是打分选出的具体一块，且必须在 `warnings` 里标明未经确认。
+
+    宁可失败也不给错内容：不达 `_FALLBACK_MIN_CHARS` 一律当兜底失败。
+    """
+    # 局部导入：解析热路径只在「配置的选择器全落空」时才付出这份开销
+    from app.sources.analyze import detail_candidates
+
+    for candidate in detail_candidates(root, limit=5):
+        if candidate.node is None:
+            continue
+        if int(candidate.evidence.get("text_len") or 0) < _FALLBACK_MIN_CHARS:
+            continue
+        return candidate.node, candidate.selector
+    return None, None
+
+
 def _text_of(root: Node, selectors: list[str]) -> str | None:
     for selector in selectors:
         node = select_one(root, selector)
@@ -208,6 +344,22 @@ def _text_of(root: Node, selectors: list[str]) -> str | None:
             if text:
                 return text
     return None
+
+
+def date_texts_by_selector(html: str, selectors: list[str]) -> dict[str, str | None]:
+    """一页 HTML × 一串日期候选 → **每个候选各自**的取值（与运行时同一口径）。
+
+    `parse_detail_page` 只留下「第一个取到非空文本的候选」的结果，取不到的候选是看不见的；
+    接入流程要用**跨页比对**认出「在每一篇样本上都取到同一个日期」的候选（那是页脚/模板
+    元素，不是文章自己的日期），就必须把每个候选分别量一遍。所以这里逐个跑
+    `select_one` → `_strip_label`，与 `result.date_text = _strip_label(_text_of(...))`
+    完全相同的一条链——比对口径与线上取值口径一旦不同，这个核对就没有意义。
+    """
+    root = parse_html(html)
+    out: dict[str, str | None] = {}
+    for selector in selectors:
+        out[selector] = _strip_label(_text_of(root, [selector]) or "") or None
+    return out
 
 
 def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult:
@@ -221,11 +373,21 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
 
     container, matched_selector = _pick_container(root, detail.container_selectors)
     if container is None:
-        result.warnings.append(
-            "正文容器候选全部落空（选择器：%s）——该页正文解析失败"
-            % ("、".join(detail.container_selectors) or "（未配置）")
-        )
-        return result
+        # 兜底：配置的选择器一个都没命中时，用结构打分挑一块，而不是直接判失败。
+        # 但必须留痕——这段正文是**未经确认**的，验收报告里要看得见。
+        container, matched_selector = _fallback_container(root)
+        if container is not None:
+            result.warnings.append(
+                "配置的正文容器候选全部落空（选择器：%s），已用结构启发式兜底选中「%s」；"
+                "该段正文未经确认，建议人工核对后写进 container_selectors"
+                % ("、".join(detail.container_selectors) or "（未配置）", matched_selector)
+            )
+        else:
+            result.warnings.append(
+                "正文容器候选全部落空（选择器：%s），启发式兜底也没找到达标正文——该页正文解析失败"
+                % ("、".join(detail.container_selectors) or "（未配置）")
+            )
+            return result
     result.container_selector = matched_selector
 
     # 附件清单**先扫**，再摘掉 drop_selectors：附件区（`div.attach` 之类）通常要
@@ -311,9 +473,13 @@ class HtmlListSource(PolicySource):
 
         items: list[dict[str, Any]] = []
         for entry in entries:
-            url = build_list_url(entry, page)
+            # 检索型入口在这里把关键词/日期拼进站点检索页的查询串；栏目型入口照旧翻页。
+            # 检索型入口在**没给关键词**时返回 None → 跳过（见 build_search_url）。
+            url = build_entry_url(
+                entry, keyword=keyword, date_from=date_from, date_to=date_to, page=page
+            )
             if url is None:
-                continue  # 该入口翻到底（等价于 gov.cn 越界页回空列表）
+                continue  # 该入口翻到底 / 检索入口本轮无关键词（等价于越界页回空列表）
             try:
                 html = await self._get_text(url, timeout)
             except net.UnsafeURLError:
@@ -360,8 +526,14 @@ class HtmlListSource(PolicySource):
         )
         detail = parse_detail_page(text, self.config.detail, url)
         if not detail.body:
-            # 容器全落空 = 解析失败。**不退化成整页文本**（那会把导航/脚本当正文入库）
+            # 容器全落空且兜底也不达标 = 解析失败。**不退化成整页文本**（那会把导航/脚本当正文入库）
             raise ValueError("；".join(detail.warnings) or "正文解析失败（容器选择器未命中）")
+        if detail.warnings:
+            # 走启发式兜底（选择器全落空但挑出了正文）才会到这里：不阻断链路，但必须留痕，
+            # 否则「已降级」这件事在真正的抓取链路上完全不可见（接入报告那条路才带 warnings）
+            logger.warning(
+                "来源「%s」详情页解析告警（%s）：%s", self.label, url, "；".join(detail.warnings)
+            )
         return FulltextResult(
             body=detail.body,
             title=detail.title,
@@ -375,6 +547,10 @@ class HtmlListSource(PolicySource):
     def fulltext_available(self) -> bool:
         # 配置化来源只需要 HTTP，不依赖 MCP 是否加载
         return True
+
+    def filter_capabilities(self) -> dict[str, Any]:
+        """筛选能力：取决于入口里有没有**站内检索**入口（见 `config.capability_summary`）。"""
+        return self.config.capabilities()
 
     def normalize_item(self, raw: dict[str, Any]) -> PolicyItem | None:
         # 局部导入：fulltext_clean 经 schemas 反向依赖 sources，顶层导入会成环

@@ -45,6 +45,7 @@ from app.services.onboarding import (
     manage_source,
     register_source,
 )
+from app.sources.config import capability_summary
 from app.sources.registry import get_default
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
@@ -97,6 +98,7 @@ def _row_to_dto(row: dict, *, verified: bool) -> SourceDTO:
         except json.JSONDecodeError:
             config = {}
     entrypoints = [str(e.get("name")) for e in (config.get("entrypoints") or []) if e.get("name")]
+    caps = capability_summary(config)
     return SourceDTO(
         id=row["id"],
         key=row["key"],
@@ -109,6 +111,9 @@ def _row_to_dto(row: dict, *, verified: bool) -> SourceDTO:
         verified=verified,
         entrypoints=entrypoints,
         supports_doc_types=bool(config.get("doc_type_patterns")),
+        keyword_server_side=caps["keyword"] == "server",
+        date_server_side=caps["date"] == "server",
+        search_entrypoints=list(caps["search_entrypoints"]),
         notes=row.get("notes"),
     )
 
@@ -450,6 +455,10 @@ async def enable_source(source_id: int, payload: SourceEnableRequest | None = No
     """启用来源（人工确认那一下）。
 
     **没有指纹一致的通过验收就拒绝**——与 Agent 工具同一道门（`register_source`）。
+    凭据按指纹在 `source_onboarding_run` **全表**里找（不设条数窗口，见
+    `db/repositories._PASSING_DRY_RUN_SQL`），与列表页的「已验收」徽标是同一条判定——
+    2026-10-15 修的正是两者漂开的那次：闸门原来只看「该来源最近 20 条记录」，
+    凭据被后来的勘察/失败试运行挤出窗口后，「停用 → 再启用」会被误拒。
     `force=true` 是人工拍板放行，会把「未经验收强制启用」写进变更说明：用了 force 就是
     **明确承担了「未经试运行验证」的风险**，变更历史里查得到。
     """

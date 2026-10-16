@@ -233,10 +233,17 @@ class FacetSupports(BaseModel):
     不隐藏的后果是**静默的空结果**：配置化来源（`HtmlListSource`）没有「文种」概念，
     选了文种服务端就把所有条目都过滤掉，用户看到「没有相关内容」却看不出为什么——
     这种 bug 极难排查，所以在来源这一层就把「有没有这个筛选项」说清楚。
+
+    `keyword_server_side` / `date_server_side` 是**另一类**信息：这些筛选项不是「没有」，
+    而是「有，但只在取回来的那几页里生效」。栏目列表页给不了检索能力，关键词只能逐条比对
+    翻到的标题、日期只能逐条比对列表页上那个日期，召回上限 = 翻页深度。前端必须说出来，
+    否则用户会以为「筛过了 = 筛全了」——那是这个仓里最贵的一类误解。
     """
 
     agencies: bool = True
     doc_types: bool = True
+    keyword_server_side: bool = True
+    date_server_side: bool = True
     note: str | None = None
 
 

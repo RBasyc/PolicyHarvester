@@ -35,8 +35,10 @@ from test_source_onboarding import (  # noqa: E402
     FAILED,
     LIST_PAGE_1,
     PASSED,
+    SEARCH_PROBE_KEYWORD,
     SKIPPED,
     build_demo_site,
+    build_search_site,
     check,
     install_fake_judge,
     install_fake_network,
@@ -297,6 +299,147 @@ async def test_rerun_without_base() -> None:
     si.JOBS.pop(job.job_id, None)
 
 
+# ---------- 6. 站内检索入口：真出条目才加进配置 ----------
+
+
+async def _run_import(site, job_id: str, *, limit: int = 3, pages: int = 1):
+    install_fake_network(site)
+    install_fake_judge()
+    url = site.url("/col/index.html")
+    request = si.SourceImportRequest(url=url, limit=limit, pages=pages)
+    job = si.ImportJob(job_id=job_id, url=url)
+    si.JOBS[job.job_id] = job
+    await si.run_import_job(job, request)
+    return job, url
+
+
+async def test_search_entrypoint_added() -> None:
+    print("\n=== 6. 站内检索入口：GET 表单真出条目才加进配置 ===")
+
+    site = build_search_site()
+    job, _ = await _run_import(site, "import-search-test")
+    try:
+        entrypoints = (job.config or {}).get("entrypoints") or []
+        search_eps = [ep for ep in entrypoints if ep.get("search")]
+        check(
+            "作业跑完且配置通过校验",
+            job.status == "done" and job.config is not None,
+            f"status={job.status} error={job.error}",
+        )
+        check(
+            "配置里多出一个检索型入口（原栏目入口保留）",
+            len(entrypoints) == 2 and len(search_eps) == 1,
+            str([(ep.get("name"), bool(ep.get("search"))) for ep in entrypoints]),
+        )
+        if search_eps:
+            ep = search_eps[0]
+            check("入口名是「站内检索」", ep.get("name") == "站内检索", str(ep.get("name")))
+            check(
+                "地址是**实测取过**的那个（不是猜的 /search）",
+                ep.get("url") == site.url("/search.html"),
+                str(ep.get("url")),
+            )
+            check(
+                "关键词参数名照表单填（keyword）",
+                (ep.get("search") or {}).get("keyword_param") == "keyword",
+                str(ep.get("search")),
+            )
+            check(
+                "表单里的隐藏参数一并带上（channelid）",
+                (ep.get("search") or {}).get("fixed_params") == {"channelid": "36021"},
+                str((ep.get("search") or {}).get("fixed_params")),
+            )
+            check(
+                "用的是检索结果页自己的列表结构（栏目页的 ul.news-list 在这页取不到东西）",
+                "result-list" in str(ep.get("list_selector")),
+                str(ep.get("list_selector")),
+            )
+            check(
+                "备注写明「探测后采纳」，参数名与条数可回溯",
+                "探测" in str(ep.get("notes")) and "keyword" in str(ep.get("notes")),
+                str(ep.get("notes"))[:80],
+            )
+        check(
+            "日志写清关键词送去了哪个地址",
+            any("站内检索入口" in row["message"] for row in job.logs),
+            str([row["message"] for row in job.logs][-3:]),
+        )
+
+        # 能力声明必须与配置事实一致（前端「筛选在哪一层生效」读的就是它）
+        from app.sources.config import SourceConfig
+
+        caps = SourceConfig.model_validate(job.config).capabilities()
+        check(
+            "能力声明：关键词=服务端、日期=客户端（没配日期参数就不谎报）",
+            caps["keyword"] == "server" and caps["date"] == "client",
+            str(caps),
+        )
+        check(
+            "能力声明：检索入口名单与配置一致",
+            caps["search_entrypoints"] == ["站内检索"],
+            str(caps["search_entrypoints"]),
+        )
+
+        report = job.report or {}
+        names = [row["name"] for row in report.get("criteria") or []]
+        check(
+            "试运行通过了，且报告里有「站内检索入口」这条判据",
+            report.get("status") == "passed" and "站内检索入口" in names,
+            f"status={report.get('status')} criteria={names}",
+        )
+        check(
+            "判据 1b 用的是探测词，并把它写进了实测值",
+            SEARCH_PROBE_KEYWORD in str(
+                next((r.get("actual") for r in report.get("criteria") or [] if r["name"] == "站内检索入口"), "")
+            ),
+            str(next((r.get("actual") for r in report.get("criteria") or [] if r["name"] == "站内检索入口"), "")),
+        )
+    finally:
+        si.JOBS.pop(job.job_id, None)
+
+
+# ---------- 7. 接不了的检索框：如实跳过，不硬配 ----------
+
+
+async def test_search_entrypoint_skipped() -> None:
+    print("\n=== 7. 接不了的检索框 / 0 命中的检索页：如实跳过 ===")
+
+    from app.sources.config import SourceConfig
+
+    cases = [
+        ("post", "POST", "method='post' 的表单：当前引擎只支持 GET"),
+        ("bare", "没有 form 提交地址", "只有输入框、地址由 JS 拼：不猜 /search"),
+        ("empty", "都没取回条目", "检索页取回了但解析不出条目：不采纳"),
+    ]
+    for index, (variant, needle, why) in enumerate(cases):
+        kwargs = {"result": "empty"} if variant == "empty" else {"method": variant}
+        site = build_search_site(**kwargs)
+        job, _ = await _run_import(site, f"import-search-skip-{variant}-{index}")
+        try:
+            entrypoints = (job.config or {}).get("entrypoints") or []
+            check(
+                f"[{variant}] 不加检索入口（{why}）",
+                job.status == "done"
+                and job.config is not None
+                and not any(ep.get("search") for ep in entrypoints),
+                str([(ep.get("name"), bool(ep.get("search"))) for ep in entrypoints]) or job.error,
+            )
+            check(
+                f"[{variant}] 日志写清为什么没加（「没试」与「试了不行」分得清）",
+                any(needle in row["message"] for row in job.logs),
+                str([row["message"] for row in job.logs][-2:]),
+            )
+            if job.config is not None:
+                caps = SourceConfig.model_validate(job.config).capabilities()
+                check(
+                    f"[{variant}] 能力声明如实说关键词只能在客户端比（召回受翻页深度限制）",
+                    caps["keyword"] == "client_scan" and caps["search_entrypoints"] == [],
+                    str(caps),
+                )
+        finally:
+            si.JOBS.pop(job.job_id, None)
+
+
 async def main() -> int:
     # 与 test_source_onboarding 同一套做法：假站点不需要礼貌限频，产物落到测试目录
     from app.config import get_settings
@@ -311,6 +454,8 @@ async def main() -> int:
         test_url_guard()
         await test_pick_real_list()
         await test_rerun_without_base()
+        await test_search_entrypoint_added()
+        await test_search_entrypoint_skipped()
     finally:
         net.set_resolver(None)
 

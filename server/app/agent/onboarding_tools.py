@@ -395,7 +395,8 @@ async def generate_source_config(config_json: str) -> str:
             organization、source_type、engine（html_list）、
             scope{allowed_domains, start_urls, max_items_per_entry}、
             entrypoints[{name, url, list_selector, link_selector, title_selector,
-                         date_selector, pagination{kind,param,path_template,start,step,max_pages}}]、
+                         date_selector, pagination{kind,param,path_template,start,step,max_pages},
+                         search{keyword_param,date_from_param,date_to_param,date_format,fixed_params}}]、
             detail{container_selectors, title_selectors, date_selectors, agency_selectors,
                    doc_no_selectors, drop_selectors, min_body_chars}。
             例：{"key":"zj_gov","label":"浙江省人民政府门户","level":"province",
@@ -404,8 +405,22 @@ async def generate_source_config(config_json: str) -> str:
                                  "list_selector":"ul.news-list > li","link_selector":"a",
                                  "date_selector":"span.date",
                                  "pagination":{"kind":"path_index","path_template":"index_{page}.html",
-                                               "start":1,"step":1,"max_pages":3}}],
+                                               "start":1,"step":1,"max_pages":3}},
+                                {"name":"站内检索",
+                                 "url":"https://www.zj.gov.cn/search.html",
+                                 "list_selector":"ul.result-list > li",
+                                 "search":{"keyword_param":"keyword","date_from_param":"startdate",
+                                           "date_to_param":"enddate","date_format":"%Y-%m-%d",
+                                           "fixed_params":{"channelid":"36021"}}}],
                  "detail":{"container_selectors":["div#zoom"],"drop_selectors":["div.attach"]}}
+
+            **`entrypoints[].search` 是筛选能力的关键开关**：栏目列表页给不了检索能力，配它之前
+            关键词与时间范围只能拿翻到的列表页逐条比对（召回上限 = 翻页深度）。填了它，这个入口
+            就走站内检索页，关键词/日期由站点执行。它是可选字段——不加就是原来的栏目入口。
+            两个硬性要求：① `url` 是**实测取过**的检索页地址（不是猜出来的 `/search`），
+            ② 参数名照 `inspect_source` 报告的 `search_forms`（`field` / `params` / `method`）填，
+            别猜；`method` 是 post 的表单当前引擎不支持，只能用 GET。无关键词的那一轮检索入口
+            不取数（检索页没有关键词参数时返回空结果页），这是设计如此、不是缺陷。
 
     Returns:
         JSON 文本：`ok`（能否执行）、`problems`（不可执行的原因，逐条给出修复指引）、

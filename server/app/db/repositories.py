@@ -1182,23 +1182,84 @@ async def list_onboarding_runs(
             return list(await cur.fetchall())
 
 
-async def list_passing_dry_run_fingerprints() -> set[str]:
-    """全部「通过的试运行」报告里的配置指纹集合（`verified` 标志的批量口径）。
+# ---------- 验收凭据：通过的试运行 ----------
 
-    与 `onboarding._latest_passing_run` 的单条判定同一条规则（kind='dry_run' +
-    status='passed' + report.fingerprint），只是 set 化给列表页一次算完、消 N+1。
-    判定规则只许住在 `onboarding.verify_source_config` 和这里，别处不许再抄。
+# 「通过的试运行」的**唯一**判定口径。启用闸门（`onboarding._latest_passing_run`）与
+# 列表页的 `verified` 标志（下面那个 list_*）都必须拼这一条 SQL：两处各写一份就会漂，
+# 而漂出来的分歧正是 2026-10-15 用户报的「手动停用的项目无法再次启用」——
+# 列表页按指纹在**全表**里找、显示「已验收」，闸门却只在「该来源最近 20 条记录」里找，
+# 凭据被后来的勘察/失败试运行挤出窗口后，两边就各说各话（按钮说能启用，点了被拒）。
+_PASSING_DRY_RUN_SQL = "kind = 'dry_run' AND status = 'passed' AND report IS NOT NULL"
+
+
+async def fetch_latest_passing_run(
+    *, fingerprint: str | None = None, source_key: str | None = None
+) -> Row | None:
+    """最近一条**通过的试运行**（= 验收凭据），按时间倒序取第一条；没有则 None。
+
+    两个条件都可选，但用途不同，语义也不同：
+
+    - `fingerprint`：**启用闸门用的那个**。指纹是配置内容的哈希
+      （`SourceConfig.config_fingerprint`），所以「指纹一致」就等于「这份配置被真跑过、
+      并且通过了」——与它多久以前跑的无、与同一来源之后又写了多少条记录无关。
+      **这里绝不能加条数窗口**（`ORDER BY … LIMIT 20` 那种写法）：凭据是既成事实，
+      不该被后来的记录挤出视野，否则「已验收」会随时间自己退化成「没验收」。
+    - `source_key`：只为**把失败原因说清楚**（不传 fingerprint = 该来源到底验收过没有）。
+      用来区分「配置改过了」与「压根没跑过」——这两种情况要用户做的事不一样。
+    """
+    conditions = [_PASSING_DRY_RUN_SQL]
+    params: list[Any] = []
+    if fingerprint is not None:
+        conditions.append("report->>'fingerprint' = %s")
+        params.append(fingerprint)
+    if source_key is not None:
+        conditions.append("source_key = %s")
+        params.append(source_key)
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"SELECT * FROM source_onboarding_run WHERE {' AND '.join(conditions)} "
+                "ORDER BY started_at DESC LIMIT 1",
+                tuple(params),
+            )
+            return await cur.fetchone()
+
+
+async def list_passing_dry_run_fingerprints() -> set[str]:
+    """全部「通过的试运行」报告里的配置指纹集合（列表页 `verified` 标志的批量口径）。
+
+    与 `fetch_latest_passing_run` 共用 `_PASSING_DRY_RUN_SQL` 那一条判定口径，只是这里
+    set 化、给列表页一次算完、消 N+1。**判定规则只许住在这两处**（都靠那个常量），
+    别处不许再抄——抄一份就多一份「列表说已验收、闸门说没有」的机会。
     """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT DISTINCT report->>'fingerprint' AS fingerprint
                 FROM source_onboarding_run
-                WHERE kind = 'dry_run' AND status = 'passed' AND report IS NOT NULL
+                WHERE {_PASSING_DRY_RUN_SQL}
                 """
             )
             return {r["fingerprint"] for r in await cur.fetchall() if r.get("fingerprint")}
+
+
+async def delete_onboarding_runs(source_keys: list[str]) -> int:
+    """删掉这些 key 的接入记录，返回删除条数——**只给测试收尾用**。
+
+    用例建的来源行被删掉后，附着在它上面的勘察/试运行记录就成了没有来源的孤儿，
+    留着只会在「接入记录」里刷屏。生产数据上没有任何代码该调它：**验收凭据就住在
+    这些行里**，删掉等于把「这份配置验收过」这件事从历史里抹了。
+    """
+    if not source_keys:
+        return 0
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM source_onboarding_run WHERE source_key = ANY(%s) RETURNING id",
+                (list(source_keys),),
+            )
+            return len(await cur.fetchall())
 
 
 async def insert_source_artifact(

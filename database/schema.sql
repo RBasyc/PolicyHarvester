@@ -308,6 +308,10 @@ CREATE INDEX IF NOT EXISTS idx_content_source_status    ON content_source(status
 CREATE INDEX IF NOT EXISTS idx_source_revision_source   ON content_source_revision(source_id, version DESC);
 CREATE INDEX IF NOT EXISTS idx_onboarding_run_source    ON source_onboarding_run(source_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_onboarding_run_key       ON source_onboarding_run(source_key, started_at DESC);
+-- 验收凭据（启用闸门 + 列表页 verified 标志）按报告里的指纹在**全表**里找通过试运行，
+-- 不带条数窗口（见 repositories._PASSING_DRY_RUN_SQL）：这条部分索引专门服务那次查询
+CREATE INDEX IF NOT EXISTS idx_onboarding_run_passing_fp ON source_onboarding_run((report->>'fingerprint'))
+    WHERE kind = 'dry_run' AND status = 'passed';
 CREATE INDEX IF NOT EXISTS idx_source_artifact_run      ON source_artifact(run_id);
 CREATE INDEX IF NOT EXISTS idx_source_artifact_url      ON source_artifact(url);
 

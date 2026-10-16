@@ -31,14 +31,32 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.sources import net  # noqa: E402
 from app.sources.analyze import analyze_page  # noqa: E402
-from app.sources.config import SourceConfig, validate_source_config  # noqa: E402
-from app.sources.html_source import build_list_url, parse_detail_page, parse_list_page  # noqa: E402
-from app.sources.htmlparse import decode_html, parse_html, select, selector_supported  # noqa: E402
+from app.sources.config import (  # noqa: E402
+    SEARCH_PROBE_KEYWORD,
+    SourceConfig,
+    capability_summary,
+    validate_source_config,
+)
+from app.sources.html_source import (  # noqa: E402
+    build_entry_url,
+    build_list_url,
+    build_search_url,
+    parse_detail_page,
+    parse_list_page,
+)
+from app.sources.htmlparse import (  # noqa: E402
+    decode_html,
+    parse_html,
+    select,
+    select_one,
+    selector_supported,
+)
 
 PASSED: list[str] = []
 FAILED: list[str] = []
@@ -153,11 +171,20 @@ class FakeSite:
     def __init__(self, base: str = BASE) -> None:
         self.base = base
         self.pages: dict[str, str] = {}
+        self.query_pages: dict[str, str] = {}  # 检索页：按**路径**分派，查询串是参数
         self.binaries: dict[str, bytes] = {}
         self.failures: dict[str, str] = {}
 
     def add(self, path: str, html: str) -> None:
         self.pages[self.base + path] = html
+
+    def add_query(self, path: str, html: str) -> None:
+        """注册一个**检索接口**：路径固定，查询串（关键词/日期）由站点自己解释。
+
+        真实检索页就是这样——`/search?keyword=x` 与 `/search?keyword=y` 是同一个处理程序，
+        不该因为查询串不同就 404。关键词到底有没有拼进去由地址生成函数的用例单独断言。
+        """
+        self.query_pages[path] = html
 
     def add_binary(self, path: str, payload: bytes) -> None:
         self.binaries[self.base + path] = payload
@@ -182,6 +209,68 @@ def build_demo_site() -> FakeSite:
     return site
 
 
+# 站内检索：GET 表单（隐藏参数 channelid 是 TRS 系的典型形状）+ 检索结果页。
+# 结果页的列表结构**故意与栏目页不同**（`ul.result-list` 而不是 `ul.news-list`）——
+# 拿栏目页的选择器去解析检索结果一条都取不到，考的就是「用结果页自己的结构」。
+# `method` 可换成 post：那种表单当前引擎支持不了，只能如实跳过（见 source_import 的日志）。
+SEARCH_FORM_BLOCK = """<div class="search-box">
+  <form action="/search.html" method="get">
+    <input type="hidden" name="channelid" value="36021">
+    <input type="text" name="keyword" placeholder="请输入关键词">
+    <input type="submit" value="检索">
+  </form>
+</div>"""
+
+# JS 拼地址的检索框：页面里只有输入框、没有 <form>。地址没法确定，不许猜。
+SEARCH_BARE_INPUT_BLOCK = """<div class="search-box">
+  <input type="search" name="keyword" placeholder="请输入关键词">
+</div>"""
+
+SEARCH_RESULT_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>站内检索 - 浙江省人民政府门户网站</title></head>
+<body>
+<div class="header"><ul class="nav"><li><a href="/">首页</a></li></ul></div>
+<div id="search-result">
+  <p class="result-tip">以下是检索结果</p>
+  <ul class="result-list">
+    <li><a href="/col/art2.html">浙江省人民政府办公厅关于印发数字经济发展三年行动计划的通知</a><span class="date">2026-09-08</span></li>
+    <li><a href="/col/art4.html">浙江省人民政府关于印发数据要素市场建设方案的通知</a><span class="date">2026-08-21</span></li>
+    <li><a href="/col/art5.html">浙江省人民政府关于支持中小企业数字化转型的通知</a><span class="date">2026-07-15</span></li>
+    <li><a href="/col/art6.html">浙江省关于加强科技创新平台建设的实施意见</a><span class="date">2026-07-02</span></li>
+  </ul>
+</div>
+</body></html>"""
+
+
+SEARCH_EMPTY_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>站内检索 - 浙江省人民政府门户网站</title></head>
+<body>
+<div class="header"><ul class="nav"><li><a href="/">首页</a></li></ul></div>
+<div id="search-result"><p class="result-tip">没有找到与检索条件相符的内容</p></div>
+</body></html>"""
+
+
+def build_search_site(*, method: str = "get", result: str = "items") -> FakeSite:
+    """标准假站点 + 一个站内检索表单 + 检索结果页（`/search.html`，按路径分派）。
+
+    `method="post"` / `method="bare"`（只有输入框、没有 form）时注册的是引擎**接不了**
+    的形状，用来验证「接不了就如实跳过，不硬配」。
+
+    `result="empty"`（检索页就是「没找到内容」）用来验证：**一个 0 命中的检索入口
+    不能把「栏目列表都取到条目」那条判据一起判死**——两件事分开算。
+    """
+    site = build_demo_site()
+    if method == "get":
+        block = SEARCH_FORM_BLOCK
+    elif method == "post":
+        block = SEARCH_FORM_BLOCK.replace('method="get"', 'method="post"')
+    else:
+        block = SEARCH_BARE_INPUT_BLOCK
+    site.add("/col/index.html", LIST_PAGE_1.replace("</body>", block + "</body>"))
+    site.add_query("/search.html", SEARCH_RESULT_PAGE if result == "items" else SEARCH_EMPTY_PAGE)
+    return site
+
+
 def install_fake_network(site: FakeSite, *, robots_allowed: bool = True) -> None:
     """把网络出口换成本地假站点；安全校验 / 编码解码 / 解析仍是真实实现。"""
     import ipaddress
@@ -194,6 +283,9 @@ def install_fake_network(site: FakeSite, *, robots_allowed: bool = True) -> None
         if url in site.failures:
             raise net.FetchError(site.failures[url])
         html = site.pages.get(url)
+        if html is None:
+            # 检索接口按路径分派（查询串 = 关键词/日期参数，不参与查找）
+            html = site.query_pages.get(urlsplit(url).path)
         if html is None:
             raise net.FetchError(f"HTTP 404：{url}")
         return net.FetchResult(
@@ -247,7 +339,7 @@ async def db_available() -> bool:
 # 用例会注册/落库的来源 key（--db 结束时按这份清单清理，不留脏数据）
 _DEMO_KEYS = (
     "zj_demo", "zj_thin", "demo_unverified", "demo_forced", "demo_draft", "another_key",
-    "zj_tool_blocked", "zj_tool_dup_label", "demo_tool",
+    "zj_tool_blocked", "zj_tool_dup_label", "demo_tool", "demo_gate_window",
 )
 
 # --db-scratch 用的临时库名（用完即删，绝不动 agent_demo）
@@ -298,7 +390,13 @@ def drop_scratch_db(base_url: str, name: str = _SCRATCH_DB) -> str:
 
 
 async def cleanup_demo_sources() -> list[str]:
-    """删掉本次用例建出来的来源行（`content_source` 会级联删版本记录）。"""
+    """删掉本次用例建出来的来源行（`content_source` 会级联删版本记录）。
+
+    接入记录 `source_onboarding_run` **没有级联删除**（`source_id` 是 SET NULL），
+    所以另外按 key 清一遍：来源行都没了，这些过程记录只是孤儿，留着只会在「接入记录」
+    里刷屏。清理**只对测试用的 demo key 生效**——生产的验收凭据就住在同一张表里
+    （`repo._PASSING_DRY_RUN_SQL`），不能顺手删掉。
+    """
     from app.db import repositories as repo
     from app.sources.registry import get, unregister
 
@@ -312,6 +410,10 @@ async def cleanup_demo_sources() -> list[str]:
             pass
         if get(key) is not None:
             unregister(key)
+    try:
+        await repo.delete_onboarding_runs(list(_DEMO_KEYS))
+    except Exception:  # noqa: BLE001 - 同上：清理失败不该让测试结果失真
+        pass
     return removed
 
 
@@ -357,6 +459,26 @@ def demo_config_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+def _search_entry_config(**entry_overrides) -> SourceConfig:
+    """一份只有检索型入口的最小配置（离线用例用；真取数的端到端用例在假站点上跑）。"""
+    entry = {
+        "name": "站内检索",
+        "url": f"{BASE}/search.html",
+        "list_selector": "ul.result-list > li",
+        "search": {"keyword_param": "keyword", "fixed_params": {"channelid": "36021"}},
+    }
+    entry.update(entry_overrides)
+    return SourceConfig.model_validate(
+        {
+            "key": "zj_search_demo",
+            "label": "检索演示（演示）",
+            "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+            "entrypoints": [entry],
+            "detail": {"container_selectors": ["div#zoom"]},
+        }
+    )
 
 
 # ---------- 1. 解析与安全底座 ----------
@@ -414,10 +536,97 @@ def test_parser_and_security() -> None:
     check("列表解析：相对链接转绝对", items[0]["url"] == f"{BASE}/col/art1.html", items[0]["url"])
     check("列表解析：日期字段", items[0]["date"] == "2026-09-12", str(items[0]["date"]))
 
+    # 条目里不止一个链接时不能取「第一个」：缩略图 /「更多」排在前面会把条目整个丢掉
+    multi_link = (
+        '<html><body><ul class="news-list"><li>'
+        '<a href="./art1.html"><img src="./thumb1.png"></a>'
+        f'<a href="./art1.html">{DETAIL_TITLES[1][0]}</a>'
+        "</li></ul></body></html>"
+    )
+    picked = parse_list_page(multi_link, entry, f"{BASE}/col/index.html")
+    check("多条链接：仍能取到条目（取第一个链接的旧逻辑会丢掉）", len(picked) == 1, str(picked))
+    check(
+        "多条链接：选中标题链接而非缩略图链接",
+        bool(picked)
+        and picked[0]["title"] == DETAIL_TITLES[1][0]
+        and picked[0]["url"] == f"{BASE}/col/art1.html",
+        str(picked[:1]),
+    )
+
     # 翻页地址
     check("翻页：第 1 页", build_list_url(entry, 1) == entry.url)
     check("翻页：第 2 页", build_list_url(entry, 2) == f"{BASE}/col/index_2.html", str(build_list_url(entry, 2)))
     check("翻页：超出 max_pages 返回 None", build_list_url(entry, 4) is None)
+
+    # 检索型入口：关键词/日期拼进站点自己的检索页（栏目列表页给不了检索能力）
+    search_entry = _search_entry_config().entrypoints[0]
+    built = build_search_url(
+        search_entry,
+        keyword="人工智能",
+        date_from=date(2026, 1, 1),
+        date_to=date(2026, 6, 30),
+        page=1,
+    )
+    check(
+        "检索地址：固定参数与关键词都拼上（中文按 UTF-8 百分号编码）",
+        built == f"{BASE}/search.html?channelid=36021&keyword=%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD",
+        str(built),
+    )
+    check(
+        "检索地址：没配日期参数就不拼日期（不猜参数名）",
+        "2026" not in (built or ""),
+        str(built),
+    )
+    check(
+        "检索地址：无关键词 → None（空关键词的检索页不是可浏览路径）",
+        build_search_url(search_entry, keyword="  ", date_from=None, date_to=None, page=1) is None,
+    )
+    check(
+        "检索地址：单页检索（kind=none）的第 2 页 → None（不拼站点不认的 page=2）",
+        build_search_url(search_entry, keyword="通知", date_from=None, date_to=None, page=2) is None,
+        str(build_search_url(search_entry, keyword="通知", date_from=None, date_to=None, page=2)),
+    )
+    paged_entry = _search_entry_config(
+        pagination={"kind": "query_param", "param": "page", "max_pages": 3}
+    ).entrypoints[0]
+    check(
+        "检索地址：声明了翻页时第 2 页保留关键词与固定参数，只替换分页参数",
+        build_search_url(paged_entry, keyword="通知", date_from=None, date_to=None, page=2)
+        == f"{BASE}/search.html?channelid=36021&keyword=%E9%80%9A%E7%9F%A5&page=2",
+        str(build_search_url(paged_entry, keyword="通知", date_from=None, date_to=None, page=2)),
+    )
+    dated_entry = _search_entry_config(
+        search={
+            "keyword_param": "keyword",
+            "date_from_param": "startdate",
+            "date_to_param": "enddate",
+            "date_format": "%Y-%m-%d",
+        }
+    ).entrypoints[0]
+    check(
+        "检索地址：站点确实接受日期参数时才拼（按 date_format 渲染）",
+        build_search_url(
+            dated_entry, keyword="通知", date_from=date(2026, 1, 1), date_to=date(2026, 6, 30), page=1
+        )
+        == f"{BASE}/search.html?keyword=%E9%80%9A%E7%9F%A5&startdate=2026-01-01&enddate=2026-06-30",
+        str(
+            build_search_url(
+                dated_entry, keyword="通知", date_from=date(2026, 1, 1), date_to=date(2026, 6, 30), page=1
+            )
+        ),
+    )
+    check(
+        "build_entry_url 是唯一分流口：检索型走检索地址 / 栏目型走列表地址",
+        build_entry_url(search_entry, keyword="通知", date_from=None, date_to=None, page=1)
+        == f"{BASE}/search.html?channelid=36021&keyword=%E9%80%9A%E7%9F%A5"
+        and build_entry_url(entry, keyword="通知", date_from=None, date_to=None, page=1) == entry.url,
+    )
+
+    check(
+        "build_entry_url：栏目入口不因给没给关键词而变（关键词由 validate_item 复核）",
+        build_entry_url(entry, keyword=None, date_from=None, date_to=None, page=2)
+        == build_list_url(entry, 2),
+    )
 
     # 详情解析
     detail = SourceConfig.model_validate(demo_config_payload()).detail
@@ -431,9 +640,37 @@ def test_parser_and_security() -> None:
     check("详情解析：日期", parsed.date_text == "2026-09-12", str(parsed.date_text))
     check("详情解析：附件发现 2 个", len(parsed.attachments) == 2, str([a.ext for a in parsed.attachments]))
 
-    # 容器全落空 → 明确失败，不退化成整页文本
+    # 表格：单元格之间用制表符、行之间用换行（否则附表会糊成一竖列）
+    table_text = select_one(
+        parse_html(
+            "<html><body><div id='zoom'><table><tr><th>序号</th><th>项目</th></tr>"
+            "<tr><td>1</td><td>人工智能产业园</td></tr></table></div></body></html>"
+        ),
+        "#zoom",
+    ).text_content()
+    check(
+        "表格：同行单元格制表符分隔、行间换行",
+        "序号\t项目\n1\t人工智能产业园" in table_text,
+        repr(table_text[:60]),
+    )
+
+    # 容器全落空：先启发式兜底，兜底也不达标才判失败——两条路都不退化成整页文本
     empty = parse_detail_page("<html><body><div class='nope'>导航</div></body></html>", detail, "https://demo.example.gov.cn/x.html")
-    check("正文容器全落空 → 正文为空且有告警", empty.body == "" and bool(empty.warnings))
+    check("容器全落空且兜底不达标 → 正文为空且有告警", empty.body == "" and bool(empty.warnings))
+
+    # 兜底路径：配置的选择器全部落空，但页面上另有一块够长的正文 → 选中并在 warnings 里留痕
+    missing = SourceConfig.model_validate(
+        demo_config_payload(
+            detail={**demo_config_payload()["detail"], "container_selectors": ["div#gone", "div.article-gone"]}
+        )
+    ).detail
+    salvaged = parse_detail_page(detail_page(1, *DETAIL_TITLES[1]), missing, f"{BASE}/col/art1.html")
+    check("容器全落空但页面有正文 → 兜底选中", len(salvaged.body) > 200, f"{len(salvaged.body)} 字")
+    check(
+        "兜底结果带「未经确认」告警",
+        any("启发式" in w for w in salvaged.warnings),
+        str(salvaged.warnings),
+    )
 
     # SSRF / 白名单
     net.set_resolver(lambda host: [__import__("ipaddress").ip_address("93.184.216.34")])
@@ -538,6 +775,81 @@ def test_config() -> None:
     check("指纹：备注变化不影响指纹", config_a.config_fingerprint() == config_b.config_fingerprint())
     check("指纹：取数规则变化改变指纹", config_a.config_fingerprint() != config_c.config_fingerprint())
 
+    # --- 检索型入口（`entrypoints[].search`）：D 的机读口径 ---
+    search_config = _search_entry_config()
+    check(
+        "检索型入口被识别（is_search），栏目型不会误判",
+        search_config.entrypoints[0].is_search and not config_a.entrypoints[0].is_search,
+    )
+    for bad_format, why in (("%Y-%m-%d %H:%M", "看不出年月日的写法"), ("%Y-%m", "渲染不出「日」")):
+        try:
+            _search_entry_config(
+                search={"keyword_param": "keyword", "date_format": bad_format}
+            )
+            check(f"日期写法校验：{why} → 拦下", False, f"{bad_format} 居然通过了")
+        except ValueError:
+            check(f"日期写法校验：{why} → 拦下", True)
+    try:
+        _search_entry_config(search={"keyword_param": "   "})
+        check("关键词参数名为空 → 拦下", False, "居然通过了")
+    except ValueError:
+        check("关键词参数名为空 → 拦下", True)
+
+    caps_list = config_a.capabilities()
+    check(
+        "能力声明：纯栏目入口 = 关键词/日期都在客户端（翻到的页里比对）",
+        caps_list["keyword"] == "client_scan" and caps_list["date"] == "client" and caps_list["agency"] == "entry",
+        str(caps_list),
+    )
+    caps_search = search_config.capabilities()
+    check(
+        "能力声明：配了检索入口 → 关键词进服务端；没配日期参数 → 日期仍是客户端",
+        caps_search["keyword"] == "server" and caps_search["date"] == "client",
+        str(caps_search),
+    )
+    dates_on_server = _search_entry_config(
+        search={"keyword_param": "keyword", "date_from_param": "startdate", "date_to_param": "enddate"}
+    ).capabilities()
+    check(
+        "能力声明：配了日期参数 → 日期也进服务端",
+        dates_on_server["date"] == "server",
+        str(dates_on_server),
+    )
+    check(
+        "能力声明：检索入口名一并给出（前端要告诉用户关键词去哪了）",
+        caps_search["search_entrypoints"] == ["站内检索"],
+        str(caps_search["search_entrypoints"]),
+    )
+    # 落库的旧配置里没有 search 字段 / 结构可能不同 —— 能力声明不能因此 500
+    legacy = capability_summary(
+        {
+            "entrypoints": [
+                {"name": "政策文件", "url": f"{BASE}/col/index.html", "list_selector": "li"},
+                {"name": "坏行", "url": "not-a-dict-row", "list_selector": None},
+                {"name": "检索", "search": None},
+            ]
+        }
+    )
+    check(
+        "能力声明：结构不全的旧配置也能算（不抛异常）",
+        legacy["keyword"] == "client_scan" and legacy["search_entrypoints"] == [],
+        str(legacy),
+    )
+    check(
+        "能力声明：文种归类取决于有没有 doc_type_patterns",
+        config_a.capabilities()["doc_type"] == "none"
+        and SourceConfig.model_validate(
+            demo_config_payload(doc_type_patterns={"浙政发": "浙政发"})
+        ).capabilities()["doc_type"]
+        == "patterns",
+    )
+    check(
+        "摘要里带上能力声明（页面导入 / 工具返回都读它）",
+        search_config.summary().get("filters", {}).get("keyword") == "server"
+        and "search_entrypoints" in search_config.summary(),
+        str(search_config.summary().get("filters")),
+    )
+
 
 # ---------- 4. 试运行与注册（假站点上跑真实链路） ----------
 
@@ -618,8 +930,13 @@ async def test_dry_run() -> None:
     refused = await register_source(
         demo_config_payload(key="demo_unverified", label="未验收来源（演示）"), approved=True
     )
-    check("人工确认：无验收记录时拒绝启用", not refused["ok"] and "试运行" in str(refused.get("error")),
-          str(refused.get("error"))[:80])
+    # 断言只认「两个环境下都成立」的东西：拒绝启用 + 指明下一步（dry_run_ingestion）。
+    # 离线跑时库不可用，文案是「无法核对验收凭据」；连库跑且确实没有记录时，才是
+    # 「没有指纹一致的通过试运行」——把库坏了写成没验收过是错的，两者必须分开说。
+    check("人工确认：无验收记录时拒绝启用",
+          not refused["ok"] and "拒绝启用" in str(refused.get("error"))
+          and "dry_run_ingestion" in str(refused.get("error")),
+          str(refused.get("error"))[:100])
 
     # --- 注册表：key / label 冲突必须拒绝（抓取任务按 label 解析来源，撞名 = 抓错站点） ---
     # 从干净状态开始：前面的失败试运行会把临时装载的草案摘掉（_cleanup_draft），
@@ -651,6 +968,7 @@ async def test_dry_run() -> None:
         skip("人工确认：force 明确拍板才放行", reason)
         skip("人工确认：未确认时注册为草案（draft）", reason)
         skip("启动装载：active 来源可被 load_configured_from_db 装载", reason)
+        skip("启用闸门：凭据被更晚的记录埋住后仍能启用", reason)
     else:
         forced = await register_source(
             demo_config_payload(key="demo_forced", label="强制启用来源（演示）"),
@@ -669,6 +987,132 @@ async def test_dry_run() -> None:
         loaded, load_failures = await load_configured_from_db()
         check("启动装载：active 来源可被 load_configured_from_db 装载",
               forced.get("key") in loaded and not load_failures, f"装载 {loaded}／失败 {load_failures}")
+
+        # 回归（2026-10-15 用户报「手动停用的项目无法再次启用」）：**验收凭据的查询不带窗口**。
+        # 报障的形状是：来源反复导入/重跑后，通过的那一次试运行被更晚的记录埋住，于是同一个
+        # 来源「列表页徽标说已验收、点启用却被闸门拒」。下面故意灌 20 条更晚的 inspect 记录
+        # （旧实现只看该来源最近 20 条），闸门必须照旧认那份凭据。
+        from app.db import repositories as repo
+
+        window_key = "demo_gate_window"
+        window_label = "验收窗口回归（演示）"
+        windowed = await dry_run_ingestion(
+            demo_config_payload(key=window_key, label=window_label), limit=3, pages=2
+        )
+        check("启用闸门：先跑出一次通过的试运行（凭据）",
+              windowed.get("status") == "passed", str(windowed.get("error"))[:80])
+        for _ in range(20):
+            await repo.create_onboarding_run(
+                kind="inspect", source_key=window_key, input={"url": f"{BASE}/col/index.html"}
+            )
+        still_ok = await register_source(
+            demo_config_payload(key=window_key, label=window_label), approved=True
+        )
+        check("启用闸门：凭据被 20 条更晚的记录埋住后仍能启用（不再受条数窗口影响）",
+              still_ok.get("ok") is True, str(still_ok.get("error"))[:120])
+
+
+async def test_search_entrypoint() -> None:
+    """检索型入口（`entrypoints[].search`）：关键词进站点自己的检索页，报告如实分层。
+
+    两件事必须分开：**栏目入口取不到条目**（配置/选择器错，硬判据）与
+    **检索入口用探测词 0 命中**（那个词在站点里本来可能就没内容，软判据）——
+    拿后者把前者一起判死，就会让人去改一份其实是对的配置。
+    """
+    print("\n=== 4b. 检索型入口（站内检索 · 假站点假检索接口） ===")
+    from app.services.onboarding import dry_run_ingestion
+
+    column_entry = demo_config_payload()["entrypoints"][0]
+    search_entry = {
+        "name": "站内检索",
+        "url": f"{BASE}/search.html",
+        "list_selector": "ul.result-list > li",
+        "search": {"keyword_param": "keyword", "fixed_params": {"channelid": "36021"}},
+    }
+
+    def payload(key: str) -> dict:
+        return demo_config_payload(
+            key=key, label=f"带站内检索的演示站（{key}）", entrypoints=[column_entry, search_entry]
+        )
+
+    # --- 检索页真出条目 ---
+    install_fake_network(build_search_site())
+    install_fake_judge()
+    report = await dry_run_ingestion(payload("zj_search_demo"), limit=3, pages=1)
+    checks = {row["name"]: row for row in report.get("criteria", [])}
+    rows = {row["name"]: row for row in report.get("entrypoints", [])}
+
+    check("检索入口：验收通过", report.get("status") == "passed", str(report.get("error")))
+    check(
+        "检索入口：报告带上入口名与探测词",
+        report.get("search_entrypoints") == ["站内检索"]
+        and report.get("probe_keyword") == SEARCH_PROBE_KEYWORD,
+        f"{report.get('search_entrypoints')} / {report.get('probe_keyword')}",
+    )
+    check(
+        "检索入口：探测地址真带上了关键词（不是拿入口地址空跑一轮）",
+        "keyword=" in str(rows.get("站内检索", {}).get("url")),
+        str(rows.get("站内检索", {}).get("url")),
+    )
+    check(
+        "检索入口：判据 1b 通过，实测值给出探测词与条数",
+        checks.get("站内检索入口", {}).get("passed") is True
+        and SEARCH_PROBE_KEYWORD in str(checks.get("站内检索入口", {}).get("actual")),
+        str(checks.get("站内检索入口", {}).get("actual")),
+    )
+    check(
+        "检索入口：只用兜底探测词时判据 1b 是软的（不拿通用词判死配置）",
+        checks.get("站内检索入口", {}).get("hard") is False,
+        str(checks.get("站内检索入口", {}).get("hard")),
+    )
+    check(
+        "检索入口：只用兜底词验证过这件事写进未测试项",
+        any("实际要抓的关键词" in item for item in report.get("untested", [])),
+        str(report.get("untested")),
+    )
+    check(
+        "检索入口：站内检索也会分词命中 → 取回后仍按关键词复核（kept 如实记录）",
+        int(rows.get("站内检索", {}).get("kept_after_filter") or 0)
+        < int(rows.get("站内检索", {}).get("items") or 0),
+        f"取回 {rows.get('站内检索', {}).get('items')} 条／复核后 "
+        f"{rows.get('站内检索', {}).get('kept_after_filter')} 条",
+    )
+
+    # --- 用户真给了关键词：判据 1b 这时是硬的 ---
+    hard_report = await dry_run_ingestion(payload("zj_search_kw"), limit=3, pages=1, keywords=["通知"])
+    hard_checks = {row["name"]: row for row in hard_report.get("criteria", [])}
+    check(
+        "检索入口：给了用户关键词时判据 1b 变硬且通过",
+        hard_checks.get("站内检索入口", {}).get("hard") is True
+        and hard_checks.get("站内检索入口", {}).get("passed") is True,
+        str(hard_checks.get("站内检索入口", {})),
+    )
+    check(
+        "检索入口：用了用户关键词就不再有「未验证」那条未测试项",
+        not any("实际要抓的关键词" in item for item in hard_report.get("untested", [])),
+        str(hard_report.get("untested")),
+    )
+
+    # --- 检索页 0 命中：软判据如实报不过，但不得连累「栏目列表」那条硬判据 ---
+    install_fake_network(build_search_site(result="empty"))
+    empty_report = await dry_run_ingestion(payload("zj_search_empty"), limit=3, pages=1)
+    empty_checks = {row["name"]: row for row in empty_report.get("criteria", [])}
+    check(
+        "检索页 0 命中：判据 1「列表发现」照常通过（两个入口分开算，不一起判死）",
+        empty_checks.get("列表发现", {}).get("passed") is True,
+        str(empty_checks.get("列表发现", {}).get("actual")),
+    )
+    check(
+        "检索页 0 命中：判据 1b 如实报不过（软，不把整次试运行判失败）",
+        empty_checks.get("站内检索入口", {}).get("passed") is False
+        and empty_checks.get("站内检索入口", {}).get("hard") is False,
+        str(empty_checks.get("站内检索入口", {})),
+    )
+    check(
+        "检索页 0 命中：整体仍判通过（软判据只报低，不判失败）",
+        empty_report.get("status") == "passed",
+        f"status={empty_report.get('status')} error={empty_report.get('error')}",
+    )
 
 
 async def test_tools() -> None:
@@ -763,8 +1207,10 @@ async def test_tools() -> None:
         approved=True,
     )
     check("工具 register_source：没有通过验收就拒绝启用",
-          payload is not None and payload.get("ok") is False and "试运行" in str(payload.get("error")),
-          raw[:120])
+          payload is not None and payload.get("ok") is False
+          and "拒绝启用" in str(payload.get("error"))
+          and "dry_run_ingestion" in str(payload.get("error")),
+          raw[:160])
 
     payload, raw = await call("manage_ingestion_job", action="list")
     check("工具 manage_ingestion_job：返回可读结果（库不可用时是可读错误，不抛异常）",
@@ -844,6 +1290,7 @@ async def main() -> int:
         test_analysis()
         test_config()
         await test_dry_run()
+        await test_search_entrypoint()
         await test_tools()
         if args.live:
             await test_live(args.live)

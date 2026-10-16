@@ -27,6 +27,11 @@ class GovCnSource(PolicySource):
     # 文种白名单（gov.cn 检索 pcodeJiguan 参数的可选值）
     doc_types = ("国令", "国发", "国函", "国办发", "国办函")
     fetched_by = "China-Central-Policy-MCP"
+    # 全文接口的 `date` 取的是详情页元信息表的「成文日期」（getPolicyFulltext.ts 的
+    # 优先级：成文日期 → <time datetime> → .date → 正文首个日期），**不是**发布日期。
+    # 列表/检索接口给的 `ptimeStr`/`pubtimeStr` 才是发布日期，那一轮已经写在
+    # `publish_date` 上了，这里必须声明成 False，别让成文日期把它顶掉。
+    fulltext_date_is_publish = False
 
     def search_plan(
         self,

@@ -300,11 +300,27 @@ _SPACE_RE = re.compile(r"[ \t 　]+")
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
 
 
+# 表格单元格分隔。**不能直接往 parts 里塞 `\t`**：空白收敛会把制表符并成空格，
+# 行列结构就又没了。这里先塞 US（unit separator，0x1F）占位——它不是空白字符，
+# 能安全穿过空白收敛与 `str.strip()`——最后一步再换回 `\t`。
+_CELL_SEP = "\x1f"
+_CELL_TAGS = {"td", "th"}
+
+
 def node_text(node: Node) -> str:
-    """块级感知的纯文本：`<br>` 与块级标签收尾补换行，空白收敛但不改写文字本身。"""
+    """块级感知的纯文本：块级标签收尾补换行，**同一行的单元格之间补制表符**。
+
+    空白收敛但不改写文字本身。表格单独照顾：`<td>`/`<th>` 若按块级处理会各自成行，
+    政策附表的「序号 / 项目 / 金额」就糊成一竖列、行列关系全丢，所以单元格之间用
+    `\\t`、行之间才用 `\\n`；单元格内部再出现的块级标签不再补换行（`<td><p>a</p></td>`
+    仍然算一个单元格）。
+
+    仍不还原 CSS 布局（跨行/跨列、嵌套表的对齐不保证），与 `pipeline/fulltext_clean`
+    的行式清洗配套。
+    """
     parts: list[str] = []
 
-    def walk(current: Node) -> None:
+    def walk(current: Node, in_cell: bool = False) -> None:
         if current.tag in _SKIP_TAGS:
             return
         if current.tag == "#text":
@@ -314,15 +330,19 @@ def node_text(node: Node) -> str:
             parts.append("\n")
             return
         for child in current.children:
-            walk(child)
-        if current.tag in _BLOCK_TAGS:
+            walk(child, in_cell or current.tag in _CELL_TAGS)
+        if current.tag in _CELL_TAGS:
+            parts.append(_CELL_SEP)
+        elif current.tag in _BLOCK_TAGS and not in_cell:
             parts.append("\n")
 
     walk(node)
     text = "".join(parts)
     text = _SPACE_RE.sub(" ", text)
-    lines = [line.strip() for line in text.split("\n")]
-    return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
+    # 行尾多出来的分隔符是 `<td>` 收尾时补的（每行最后一个单元格也会补），一并去掉
+    lines = [line.strip().rstrip(_CELL_SEP) for line in text.split("\n")]
+    out = _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
+    return out.replace(_CELL_SEP, "\t").strip()
 
 
 # ---------- CSS 选择器子集 ----------

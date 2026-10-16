@@ -64,6 +64,9 @@ _COLUMN_HINTS = (
 # 明显不是内容栏目的链接（导航/工具）
 _COLUMN_DENY = ("登录", "注册", "english", "无障碍", "网站地图", "sitemap", "rss", "邮箱", "微信", "微博")
 
+# 「这个输入框是关键词框吧」的名字特征（表单不在 form 里时，只报事实、不猜提交地址）
+_SEARCH_FIELD_HINTS = ("keyword", "searchword", "search", "q", "query", "wd", "key", "keywordvalue")
+
 
 # ---------- 数据结构 ----------
 
@@ -76,6 +79,11 @@ class Candidate:
     selector: str | None
     score: float = 0.0
     evidence: dict[str, Any] = field(default_factory=dict)
+    # 命中的节点本身，仅供同类调用方复用（如 `html_source` 的正文兜底）——
+    # 选择器引擎不支持伪类，而 `describe_selector` 可能生成 `:nth-of-type`，
+    # 拿选择器回头再查可能落空，所以把节点一并带出来。**不进 `as_dict`**：
+    # 报告是给模型/人看的 JSON，不该塞进整棵子树。
+    node: Node | None = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"kind": self.kind, "score": round(self.score, 1)}
@@ -188,6 +196,7 @@ def detail_candidates(root: Node, *, limit: int = 6, min_chars: int = 80) -> lis
                 kind="detail",
                 selector=selector,
                 score=score,
+                node=node,
                 evidence={
                     "text_len": text_len,
                     "text_ratio": round(text_len / page_text_len, 2),
@@ -397,18 +406,54 @@ def feeds_and_sitemaps(root: Node, base_url: str) -> dict[str, list[str]]:
     return {"feeds": sorted(set(feeds))[:5], "sitemaps": sorted(set(sitemaps))[:5]}
 
 
-def search_forms(root: Node, base_url: str) -> list[dict[str, str]]:
-    """站内检索入口候选（有的话可以走检索而不是翻栏目，覆盖更全）。"""
-    out: list[dict[str, str]] = []
+def search_forms(root: Node, base_url: str) -> list[dict[str, Any]]:
+    """站内检索入口候选（有的话可以走检索而不是翻栏目，覆盖更全）。
+
+    每项：`action`（提交地址；`None` = 页面里有检索输入框但没有 form，提交地址得另找
+    ——比如看 JS 或浏览器的网络面板）、`field`（关键词参数名）、`method`（**post 当前
+    引擎不支持**，只能如实报出来）、`params`（表单里的隐藏参数与下拉框首选项，TRS 系的
+    `channelid` 就在这里；不填 = 页面没给可复用参数）。
+
+    这些拼起来就是一个可试的检索地址——`SearchConfig` 的字段正是照它填的，所以它必须
+    **报实测值**，不能替站点猜参数名。`params` 里的下拉首选项是启发式：填错了会在
+    「按这个地址真取一页」那一步暴露出来（取不到条目就不采纳），不会静默进配置。
+    """
+    out: list[dict[str, Any]] = []
     for form in select(root, "form"):
         action = (form.get("action") or "").strip()
+        method = (form.get("method") or "get").strip().lower() or "get"
+        params: dict[str, str] = {}
+        for hidden in select(form, "input"):
+            input_type = (hidden.get("type") or "text").lower()
+            name = (hidden.get("name") or "").strip()
+            if input_type == "hidden" and name:
+                params[name] = (hidden.get("value") or "").strip()
+        for select_node in select(form, "select"):
+            name = (select_node.get("name") or "").strip()
+            first = select_one(select_node, "option")
+            if name and first is not None:
+                value = (first.get("value") or first.text_content() or "").strip()
+                if value:
+                    params[name] = value
         for field_node in select(form, "input"):
             name = (field_node.get("name") or "").strip()
             input_type = (field_node.get("type") or "text").lower()
             if input_type in ("text", "search") and name:
-                row = {"action": urljoin(base_url, action) if action else base_url, "field": name}
+                row = {
+                    "action": urljoin(base_url, action) if action else base_url,
+                    "field": name,
+                    "method": method,
+                    "params": params,
+                }
                 if row not in out:
                     out.append(row)
+    if not out:
+        # 现代站点常见「输入框不在 <form> 里、提交由 JS 拼地址」：这里如实报出输入框存在，
+        # 但**不猜**提交地址（猜一个 /search 只会制造一条看着能用、实际取不到数的入口）。
+        for field_node in select(root, 'input[type="search"], input[type="text"]'):
+            name = (field_node.get("name") or "").strip()
+            if name and name.lower() in _SEARCH_FIELD_HINTS:
+                out.append({"action": None, "field": name, "method": None, "params": {}})
     return out[:5]
 
 

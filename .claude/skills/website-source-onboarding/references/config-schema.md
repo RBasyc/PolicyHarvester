@@ -23,7 +23,7 @@
 | `entrypoints` | array | **是** | — | ≥1 个内容入口，入口名不能重复 |
 | `detail` | object | 否 | 见下 | 详情页解析规则 |
 | `doc_type_patterns` | object | 否 | `{}` | 文号前缀 → 文种，如 `{"浙政发": "浙政发"}`；空 = 不做文种归类 |
-| `keyword_match` | enum | 否 | `substring` | 列表页关键词复核口径：`substring`（标题须含完整关键词）/ `any_char`（至少共享一个字） |
+| `keyword_match` | enum | 否 | `substring` | 关键词**复核**口径：`substring`（标题须含完整关键词）/ `any_char`（至少共享一个字）。检索型入口（`entrypoints[].search`）也要过这道复核——站内检索同样分词，不复核会漏进无关条目；没有检索入口时它就是唯一的过滤手段 |
 | `drop_undated_when_windowed` | bool | 否 | `false` | 时间窗口内**缺日期**的条目是否丢弃。栏目列表页常不显示日期（日期在详情页），故默认保留 |
 | `governance` | object | 否 | 见下 | 治理口径 |
 | `notes` | str | 否 | `null` | 自由备注。**不进指纹**，不影响版本判定 |
@@ -48,7 +48,34 @@
 | `title_selector` | str | 否 | `null` | 标题选择器；不填 = 用链接文本 |
 | `date_selector` | str | 否 | `null` | 列表页日期选择器；不填 = 列表不取日期（详情页再补） |
 | `pagination` | object | 否 | `{"kind":"none"}` | 翻页规则，见下 |
+| `search` | object | 否 | `null` | **站内检索入口**：填了它，这个入口的关键词/日期送进站点自己的检索页（见下）。不填 = 普通栏目列表页 |
 | `notes` | str | 否 | `null` | 备注 |
+
+### `search` —— 检索型入口（可选，但决定筛选能不能在服务端生效）
+
+**为什么值得配**：栏目列表页给不了检索能力。没有 `search` 的入口，关键词只能拿已经翻到的
+那些列表页**逐条比对标题**、时间范围只能**逐条比对列表页上那个日期**，召回上限 =
+翻页深度 × 每页条数——更早的、更深处的文件永远碰不到。配了 `search`，关键词送进站点
+自己的索引，召回由站点决定。口径的机读版本在 `sources/config.capability_summary()`。
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `keyword_param` | str | `keyword` | 检索页接收关键词的参数名（`keyword` / `searchword` / `q` / `key`…）。**照 `inspect_source` 报告的 `search_forms[].field` 填，实测，不猜** |
+| `date_from_param` | str | `null` | 起始日期参数名；**站点检索页确实接受日期参数时才填**。不填 = 日期仍由 `validate_item` 取回后复核 |
+| `date_to_param` | str | `null` | 截止日期参数名，同上 |
+| `date_format` | str | `%Y-%m-%d` | 日期参数的写法（strftime）。校验会拿 2000-01-02 渲染一遍，看不出年月日的写法直接拦下 |
+| `fixed_params` | object | `{}` | 检索页的固定参数，如 TRS 系的 `{"channelid":"36021"}`（多半躺在表单的隐藏 input 里，报告里的 `search_forms[].params`） |
+
+两条硬规矩：
+
+- `url` 必须是**实测取过、确实出条目**的检索页地址。拼错的检索地址常常返回首页——
+  解析出来的「条目」其实是导航链接，页面上看着像列表、内容全是错的。
+- 无关键词的那一轮**检索入口不取数**（检索页没有关键词参数时返回空结果页，不是浏览路径）。
+  关键词为空的任务只走栏目入口，这是设计如此。
+
+页面「导入网址」会**自动**做这件事：发现页面里有 GET 检索表单 → 用探测关键词真取一页 →
+解析出条目就自动加一个名为「站内检索」的入口（试不出来就不加，原因写进日志）。
+Agent 侧则照 `search_forms` 报告自己填（`config-schema.md` 这里给的就是那个形状）。
 
 ### `pagination`
 
@@ -67,9 +94,9 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `container_selectors` | array | `[]` | **候选链**：按序取第一个命中的容器；同类多个时取文本最长的（政务站常见「正文 + 打印版副本」）。全部落空 = 该页解析失败并记入失败项，**不退回整页文本**（那会把导航/脚本当正文）。名单为空 = 配置不可执行，校验直接拦下 |
+| `container_selectors` | array | `[]` | **候选链**：按序取第一个命中的容器；同类多个时取文本最长的（政务站常见「正文 + 打印版副本」）。全部落空时先**用结构启发式兜底**挑一块（会在该页 `warnings` 里标明「未经确认」），兜底也挑不出达标正文才判解析失败并记入失败项；两条路径都**不退回整页文本**（那会把导航/脚本当正文）。名单为空 = 配置不可执行，校验直接拦下 |
 | `title_selectors` | array | `[]` | 标题候选链 |
-| `date_selectors` | array | `[]` | 发布日期候选链 |
+| `date_selectors` | array | `[]` | 发布日期候选链。**只有「第一个取到非空文本」的候选算数**（`_text_of`），所以链内顺序有意义：取得到文本却 `parse_date` 不了的候选会挡住后面的好候选。页面导入组装这条链时会**跨 3 篇样本页核对**：每篇都取到同一个值 → 当页脚/模板元素丢弃（结果可能为空数组，日志里会说明是哪个选择器、值是什么）；能解析出真实日期的候选自动提到前面（见 `source_import._verify_date_selectors`） |
 | `agency_selectors` | array | `[]` | 发布机构候选链 |
 | `doc_no_selectors` | array | `[]` | 文号候选链 |
 | `drop_selectors` | array | `[]` | 正文内要剔除的节点（分享条 / 相关阅读 / 打印提示）。**附件清单在剔除之前扫描**——把 `div.attach` 放这里不会导致附件丢失 |
@@ -132,6 +159,20 @@
         "step": 1,
         "max_pages": 3
       }
+    },
+    {
+      "name": "站内检索",
+      "url": "https://demo.example.gov.cn/search.html",
+      "list_selector": "ul.result-list > li",
+      "link_selector": "a",
+      "pagination": { "kind": "query_param", "param": "page", "max_pages": 3 },
+      "search": {
+        "keyword_param": "keyword",
+        "date_from_param": "startdate",
+        "date_to_param": "enddate",
+        "date_format": "%Y-%m-%d",
+        "fixed_params": { "channelid": "36021" }
+      }
     }
   ],
   "detail": {
@@ -179,7 +220,8 @@ draft ──试运行通过──▶ validated ──启用──▶ active
 - `draft`：刚注册，仅供试运行。不带 `approved=true` 的 `register_source` 默认落这里。
 - `validated`：试运行通过、尚未启用。
 - `active`：**服务启动时会自动装进来源注册表**（`load_configured_from_db`），抓取页的来源下拉与流水线才认得它。
-- `disabled`：人工停用，可再启用；停用后不装载。
+- `disabled`：人工停用，**可再启用**（凭据按指纹全表查，不因停用/时间/后续勘察次数失效，
+  见 [acceptance-criteria.md](acceptance-criteria.md) 第 6 节）；停用后不装载。
 
 改配置 → 指纹变 → 回到「需重新验收」的状态（变更历史在
 `manage_ingestion_job(action="detail")` 里按版本可查）。

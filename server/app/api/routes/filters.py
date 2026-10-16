@@ -7,6 +7,9 @@
 - **`source`（抓取源 label）给的是配置化站点来源时走另一条口径**：发布机构 = 该来源的
   栏目（入口）名，没有可筛的文种。响应里的 `supports` 告诉前端该隐藏哪些筛选项——
   不隐藏就是静默的空结果（详见 `FacetSupports` 的注释）。
+- `supports` 还回答**筛选在哪一层生效**：配置化来源若有站内检索入口，关键词进服务端；
+  没有则关键词/日期都只是「取回后在已翻到的列表页里过滤」，召回受翻页深度限制。
+  口径见 `sources/config.capability_summary`，前端必须把这件事说出来。
 """
 
 from __future__ import annotations
@@ -49,8 +52,31 @@ def _configured_facets(source) -> FacetList:
     前端把入口名当机构展示，用户选哪个就只抓那个栏目——口径正好对得上。
     文种在配置化来源上只能从文号解析出来（`doc_type_patterns`），**不能作为筛选项**：
     栏目标列表页给不了文种，`HtmlListSource.search_plan` 会告警并忽略传入的文种。
+
+    **检索型入口不进机构名单**（它不是机构），但它的存在决定了关键词筛选在哪一层生效，
+    所以要在 `supports` 里说清楚——见 `capability_summary`。
     """
-    entrypoints = [ep.name for ep in source.config.entrypoints if ep.name]
+    caps = source.filter_capabilities()
+    search_names = list(caps.get("search_entrypoints") or [])
+    entrypoints = [
+        ep.name for ep in source.config.entrypoints if ep.name and not ep.is_search
+    ]
+    notes = [
+        f"来源「{source.label}」是配置化站点来源：发布机构 = 站点栏目（入口）名；"
+        "文种只能从文号解析，不能作为筛选项"
+    ]
+    if caps.get("keyword") == "server":
+        notes.append(
+            f"不选发布机构时，关键词会送进该站点的站内检索入口（{'、'.join(search_names)}），"
+            "召回由站点自己的索引决定；一旦选了发布机构，就只在该栏目内做标题匹配"
+        )
+    else:
+        notes.append(
+            "该来源没有站内检索入口：关键词与时间范围都是**取回后在已翻到的列表页里过滤**，"
+            "召回受翻页深度限制（深处、更早的文件抓不到）"
+        )
+    if caps.get("date") == "client":
+        notes.append("时间范围没有服务端参数，只在取回的条目上复核")
     return FacetList(
         agencies=[FacetOption(name=name, count=0) for name in entrypoints],
         doc_types=[],
@@ -58,10 +84,9 @@ def _configured_facets(source) -> FacetList:
         supports=FacetSupports(
             agencies=bool(entrypoints),
             doc_types=False,
-            note=(
-                f"来源「{source.label}」是配置化站点来源：发布机构 = 站点栏目（入口）名；"
-                "文种只能从文号解析，不能作为筛选项"
-            ),
+            keyword_server_side=caps.get("keyword") == "server",
+            date_server_side=caps.get("date") == "server",
+            note="；".join(notes),
         ),
         source_label=source.label,
     )

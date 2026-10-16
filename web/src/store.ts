@@ -96,7 +96,13 @@ export const facets = ref<FacetList>({
   doc_types: [],
   source: 'fallback',
   // 初始按「支持全部筛选项」渲染，拉到真实名单后以后端为准
-  supports: { agencies: true, doc_types: true, note: null },
+  supports: {
+    agencies: true,
+    doc_types: true,
+    keyword_server_side: true,
+    date_server_side: true,
+    note: null,
+  },
   source_label: null,
 })
 export const facetsLoading = ref(false)
@@ -126,6 +132,35 @@ export const currentSource = computed(() =>
 export const sourceSupportsDocTypes = computed(
   () => facets.value.supports.doc_types && currentSource.value?.supports_doc_types !== false,
 )
+
+/**
+ * 当前来源的**筛选口径提示**（配置化来源才需要），null = 无需提示（内置 gov.cn 由接口执行）。
+ *
+ * 为什么非要说出来：栏目列表页给不了检索能力，关键词只能逐条比对已翻到的标题、
+ * 时间范围只能逐条比对列表页上那个日期，**召回上限 = 翻页深度 × 每页条数**。
+ * 不说的话用户会把「筛过了」当成「筛全了」——那是这个仓里最贵的一类误解。
+ * 口径的来源在后端（`sources/config.capability_summary`），这里只负责翻译成人话。
+ */
+export const sourceFilterNote = computed(() => {
+  const source = currentSource.value
+  if (!source || source.builtin) return null
+  const bits: string[] = []
+  if (source.keyword_server_side) {
+    const names = source.search_entrypoints.join('、')
+    bits.push(
+      `关键词送进该站点的站内检索入口（${names}），召回由站点索引决定；` +
+        '一旦选了发布机构，就只在该栏目内做标题匹配',
+    )
+  } else {
+    bits.push('该来源没有站内检索入口：关键词只在已翻到的列表页里比对标题')
+  }
+  bits.push(
+    source.date_server_side
+      ? '时间范围由站点过滤'
+      : '时间范围在取回后复核，翻页范围内的条目才能被筛到',
+  )
+  return `「${source.label}」的筛选口径：${bits.join('；')}。翻页深度决定召回上限。`
+})
 
 // ---------- 定时入库（Phase 11） ----------
 

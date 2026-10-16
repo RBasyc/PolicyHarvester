@@ -213,6 +213,11 @@ class SourceDTO(BaseModel):
     `entrypoints` 是入口名列表——同时就是「发布机构」筛选的可选值（配置化来源没有
     gov.cn 那样的机构 facet，口径就是入口名）。`supports_doc_types` 为 False 时
     前端必须隐藏「文种」筛选，否则会筛出一个静默的空结果。
+
+    `keyword_server_side` / `date_server_side` / `search_entrypoints` 说明**筛选在哪一层
+    生效**（口径见 `sources/config.capability_summary`）：为 False 表示这两个筛选项是
+    「取回后在已翻到的列表页里过滤」，召回受翻页深度限制，前端要如实告知用户；
+    `search_entrypoints` 是吃关键词的站内检索入口名（空 = 没有检索入口）。
     """
 
     id: int | None = None
@@ -226,6 +231,9 @@ class SourceDTO(BaseModel):
     verified: bool = False
     entrypoints: list[str] = Field(default_factory=list)
     supports_doc_types: bool = False
+    keyword_server_side: bool = True
+    date_server_side: bool = True
+    search_entrypoints: list[str] = Field(default_factory=list)
     notes: str | None = None
 
 

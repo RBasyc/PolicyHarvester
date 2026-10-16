@@ -54,9 +54,16 @@ from app.schemas.source import (
     SourceImportRequest,
 )
 from app.sources import net
-from app.sources.config import DetailConfig, config_from_row
-from app.sources.html_source import parse_detail_page
+from app.sources.config import (
+    SEARCH_PROBE_KEYWORD,
+    DetailConfig,
+    EntrypointConfig,
+    config_from_row,
+)
+from app.sources.net import domain_allowed
+from app.sources.html_source import date_texts_by_selector, parse_detail_page, parse_list_page
 from app.sources.htmlparse import selector_supported, strip_nth_of_type
+from app.sources.util import parse_date
 from app.sources.registry import get, register_configured, unregister
 
 logger = logging.getLogger(__name__)
@@ -94,11 +101,19 @@ _PAGINATION_MAX_PAGES = 10
 _DETAIL_CONTAINER_LIMIT = 3
 _DETAIL_META_LIMIT = 2
 
+# 自动加进来的检索型入口的固定名（重名时后面补序号，见 `_unique_entry_name`）
+_SEARCH_ENTRY_NAME = "站内检索"
+
 # 「这条样本到底是不是一篇正文」的最低门槛，与 `onboarding.sample_content` 判 body_ok 的
 # 口径一致（CJK ≥ 100 且句末 ≥ 2）。**故意比验收标准松**（验收看详情的 min_body_chars，
 # 默认 200）：这里只用来在选候选时挡掉页脚/导航这类同签名链接块，
 # 真实的正文质量交由后面的试运行判据去裁判。
 _SAMPLE_MIN_CJK = 100
+
+# 跨页核对日期候选时比几篇样本（见 `_verify_date_selectors`）：1 篇时模板日期与真日期长得
+# 一模一样（这正是那个 bug 的成因）；3 篇既是「全都取到同一个值才算恒定」的判定门槛，
+# 也是「每次导入多抓几页」的上限。样本比不满 3 篇就不做判定，只如实报数。
+_DATE_CHECK_SAMPLES = 3
 
 
 @dataclass
@@ -520,6 +535,11 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
             _log(job, f"候选逐个试过都不行：{error}", "error")
             return _fail(job, f"没有可用的列表容器候选（{error}）。{_STATIC_ONLY_HINT}", "failed")
 
+        # 顺手看一眼站点有没有**自己的检索页**：有就多配一个检索型入口，关键词从「只在本页
+        # 已翻到的条目里比对标题」变成「送进站点检索」。这一步是**真取一页**验证的，
+        # 试不出来就不加（也可能页面里根本没说）——绝不猜一个 /search 塞进配置。
+        await _maybe_add_search_entry(job, payload, domains, request)
+
     _mark_selected(job.candidates, payload)
 
     _set_phase(job, "generate", "生成接入配置（校验选择器语法、域名边界、正文容器）")
@@ -871,6 +891,93 @@ def _meta_selectors(
     return out
 
 
+def _verify_date_selectors(pages: list[str], selectors: list[str]) -> tuple[list[str], list[str]]:
+    """跨页核对日期候选链：**恒定值**的候选当模板元素丢掉，能解析出日期的提到前面。
+
+    返回 `(保留的选择器, 说明)`；说明会进作业日志与样本指标（`dropped_selectors`），
+    因为「少了一个日期候选」是能力边界，不能是「悄悄没了」。
+
+    **为什么非要跨页**：导入来源的列表轮不给日期（`entrypoints[].date_selector` 不填），
+    `publish_date` 于是完全由详情页这条候选链决定，而链子是在**一页**上扫出来的
+    （`analyze.meta_candidates`：文档顺序、不打分）——页脚/模板里那个固定日期与文章自己的
+    日期，在那一页上长得一模一样。跟着栏目翻下去，它就会把同一个日期写进该来源的**每一篇**
+    （2026-10-15 用户报的「其他来源进来的日期一直都是 3 月 20 日」就是这个）。错的日期比
+    没有日期更糟：年份筛选、时间窗口核对、成果库排序都会跟着错，所以宁可留空。
+
+    **判定门槛故意保守**：只有**每一篇**核对样本都取到同一个值才算恒定（`len(pages) ==
+    _DATE_CHECK_SAMPLES` 篇全中）。两篇相同不算——同一个栏目同一天发两条通知很常见，
+    拿它当模板元素会把**正确**的日期也丢掉。「这一轮判不出来」比「判错了」好，判定不了的
+    情形留给试运行（`dry_run_ingestion` 会在日期值恒定时明确提示人工核对）。
+    """
+    if len(pages) < _DATE_CHECK_SAMPLES or not selectors:
+        return list(selectors), []
+
+    rows = [date_texts_by_selector(html, selectors) for html in pages]
+    kept: list[str] = []
+    notes: list[str] = []
+    for selector in selectors:
+        seen = [row[selector] for row in rows if row.get(selector)]
+        if len(seen) >= _DATE_CHECK_SAMPLES and len(set(seen)) == 1:
+            notes.append(
+                f"日期候选「{selector}」在所比 {len(seen)} 篇样本里恒为「{seen[0]}」——"
+                "与页脚/模板元素无法区分，已按「宁可缺失也不写错」丢弃；"
+                "若确认它就是该站的发布日期，请把该选择器手工写回 detail.date_selectors"
+            )
+            continue
+        kept.append(selector)
+
+    # 能解析出真实日期的排前面：`_text_of` 只认「第一个取到非空文本」的候选，
+    # 一个取得到文本却 `parse_date` 不了的候选会挡住后面的好候选。
+    parseable = [s for s in kept if any(parse_date(row.get(s)) for row in rows)]
+    if parseable and parseable != kept:
+        notes.append("日期候选链已重排（能解析出真实日期的候选提到前面）：" + "、".join(parseable))
+    return parseable + [s for s in kept if s not in parseable], notes
+
+
+async def _sibling_detail_pages(
+    job: ImportJob, candidate: dict[str, Any], domains: list[str], *, limit: int
+) -> list[str]:
+    """回候选自己的列表页再挑几篇同栏目条目，抓回来做跨页核对（**尽力而为**）。
+
+    取不到就少比几篇：只记日志、不失败——核对样本少不代表这次导入有问题，
+    但日志里必须看得见「只比了几篇」，否则「已核对」会被当成本该如此。
+
+    复用候选自己的 `page_url` + `list_selector`（不新增任何字段）：这两样正是正式抓取
+    列表时用的同一对，所以这里挑到的条目就是那份配置将来会抓到的条目。
+    """
+    pages: list[str] = []
+    page_url = str(candidate.get("page_url") or "")
+    list_selector = str(candidate.get("list_selector") or "")
+    if not page_url or not list_selector:
+        return pages
+    try:
+        listing = await net.fetch_text(page_url, allowed_domains=domains)
+        entry = EntrypointConfig(
+            name=str(candidate.get("name") or "样本"),
+            url=listing.url,
+            list_selector=list_selector,
+            link_selector="a",
+        )
+        items = parse_list_page(listing.text, entry, listing.url, limit=limit + 2)
+    except Exception as exc:  # noqa: BLE001 - 核对取不到只是少比几篇，不该让整次导入失败
+        _log(job, f"跨页核对日期候选：列表页取不到（{exc}），本次只比 1 篇样本", "warn")
+        return pages
+
+    for item in items:
+        if len(pages) >= limit:
+            break
+        url = str(item.get("url") or "")
+        if not url or url == candidate.get("sample_url"):
+            continue  # 这一篇的 HTML 调用方已经有了，不重复抓
+        try:
+            fetched = await net.fetch_text(url, allowed_domains=domains)
+        except (net.FetchError, net.UnsafeURLError) as exc:
+            _log(job, f"跨页核对日期候选：样本条目「{url}」取回失败（{exc}）", "warn")
+            continue
+        pages.append(fetched.text)
+    return pages
+
+
 def _detail_from_analysis(analysis: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """样本详情页的结构分析 → `DetailConfig` 草案（每个字段都是候选里的最高分）。
 
@@ -902,8 +1009,13 @@ def _detail_from_analysis(analysis: dict[str, Any]) -> tuple[dict[str, Any], lis
 
 async def _sample_detail_analysis(
     job: ImportJob, candidate: dict[str, Any], domains: list[str]
-) -> tuple[dict[str, Any] | None, str | None]:
-    """抓一个候选自己那条样本详情页：结构分析 + 当场量一下正文指标。
+) -> tuple[dict[str, Any] | None, list[str], str | None]:
+    """抓一个候选自己那条样本详情页：结构分析 → 正文规则草案 + 跨页核对日期候选。
+
+    返回 `(detail, dropped, error)`：`detail` 是**已经核过日期候选**的 `DetailConfig` 草案，
+    调用方直接拿去用、并用同一个 `dropped` 写日志。为什么把 `detail` 从里面交出来而不是让
+    调用方自己再 `_detail_from_analysis(analysis)` 一次：那样会把跨页核对的结果丢掉
+    （核对只发生在这里），拿到的日期候选就还是原来那条「第一页上看着没毛病」的链子。
 
     取不到就**如实报错**，不拿列表页的候选凑数——列表页的「正文容器」是整块列表，
     塞进配置会把导航和条目全当正文。
@@ -922,32 +1034,53 @@ async def _sample_detail_analysis(
     try:
         fetched = await net.fetch_text(sample_url, allowed_domains=domains)
     except (net.FetchError, net.UnsafeURLError) as exc:
-        return None, f"样本条目「{title}」取回失败：{exc}（{sample_url}）"
+        return None, [], f"样本条目「{title}」取回失败：{exc}（{sample_url}）"
     analysis = await analyze_structure(html=fetched.text, url=fetched.url, listed_as="sample_detail")
     if not (analysis.get("detail_candidates") or []):
-        return None, f"样本条目「{title}」页面里没有找到正文容器候选（{sample_url}）"
+        return None, [], f"样本条目「{title}」页面里没有找到正文容器候选（{sample_url}）"
 
     detail, dropped = _detail_from_analysis(analysis)
     parsed = parse_detail_page(strip_zero_width(fetched.text), DetailConfig(**detail), fetched.url)
     cjk, enders = body_metrics(parsed.body)
-    analysis["sample_metrics"] = {
-        "cjk": cjk,
-        "enders": enders,
-        "container_selector": parsed.container_selector,
-        "dropped_selectors": dropped,
-    }
     _log(
         job,
         f"样本条目「{title}」：正文容器 {parsed.container_selector or '（未命中）'}，"
         f"中文 {cjk} 字、句末 {enders}",
     )
     if cjk < _SAMPLE_MIN_CJK or enders < _MIN_SENT_ENDERS:
+        # 这一条候选不是正文（页脚/导航/下载页）：不合格就地退回，**不做**跨页核对
+        # ——多抓的那两篇是给「会采用的候选」花的钱，被否掉的候选一分都不该多花。
         return (
             None,
+            dropped,
             f"样本条目「{title}」不像一篇正文（中文 {cjk} 字、句末 {enders}）"
             f"——该候选多半是页脚/导航/下载页这类同签名链接块，不是内容列表",
         )
-    return analysis, None
+
+    # 日期候选跨页核对：第一页就是刚抓到的这一篇，再回候选自己的列表页挑同栏目条目做对照
+    siblings = await _sibling_detail_pages(job, candidate, domains, limit=_DATE_CHECK_SAMPLES - 1)
+    detail["date_selectors"], date_notes = _verify_date_selectors(
+        [fetched.text, *siblings], detail.get("date_selectors") or []
+    )
+    dropped.extend(date_notes)
+    _log(
+        job,
+        f"日期候选跨页核对：比了 {1 + len(siblings)} 篇样本"
+        + (
+            f"，有 {len(date_notes)} 条候选被丢弃或重排（原因见「正文规则」那条）"
+            if date_notes
+            else "，未发现恒定值"
+        ),
+        "warn" if date_notes else "info",
+    )
+    analysis["sample_metrics"] = {
+        "cjk": cjk,
+        "enders": enders,
+        "container_selector": parsed.container_selector,
+        "dropped_selectors": dropped,
+        "date_samples": 1 + len(siblings),
+    }
+    return detail, dropped, None
 
 
 def _log_detail_rule(job: ImportJob, detail: dict[str, Any], dropped: list[str]) -> None:
@@ -975,10 +1108,9 @@ async def _build_payload_from_candidate(
     if not candidate.get("sample_url"):
         return None, "该候选没有样本条目链接，取不到样本详情页"
 
-    analysis, error = await _sample_detail_analysis(job, candidate, domains)
-    if analysis is None:
+    detail, dropped, error = await _sample_detail_analysis(job, candidate, domains)
+    if detail is None:
         return None, error
-    detail, dropped = _detail_from_analysis(analysis)
     candidate["detail"] = detail
     _log_detail_rule(job, detail, dropped)
 
@@ -1065,16 +1197,25 @@ async def _rebuild_from_candidate(
 
     base["scope"] = {**(base.get("scope") or {}), "allowed_domains": domains}
     entry = _entrypoint(candidate, 0)
-    base["entrypoints"] = [entry]
+    # 检索型入口与「选了哪个栏目候选」无关：重跑只换栏目入口，检索入口原样留着，
+    # 否则用户每换一次候选就要丢一次站内检索能力（还得靠人工改配置加回来）。
+    kept_search = [
+        row
+        for row in (base.get("entrypoints") or [])
+        if isinstance(row, dict) and isinstance(row.get("search"), dict)
+    ]
+    entry_name = str(entry.get("name") or "").strip()
+    if entry_name:
+        entry["name"] = _unique_entry_name(entry_name, kept_search)
+    base["entrypoints"] = [entry, *kept_search]
 
     detail = candidate.get("detail")
     if not detail:
         if not candidate.get("sample_url"):
             return None, [], "该候选没有样本条目链接，无法生成正文规则"
-        analysis, error = await _sample_detail_analysis(job, candidate, domains)
-        if analysis is None:
+        detail, dropped, error = await _sample_detail_analysis(job, candidate, domains)
+        if detail is None:
             return None, [], error
-        detail, dropped = _detail_from_analysis(analysis)
         _log_detail_rule(job, detail, dropped)
     candidate["detail"] = detail
     base["detail"] = {**(base.get("detail") or {}), **detail}
@@ -1127,3 +1268,186 @@ def _entrypoint(candidate: dict[str, Any], index: int) -> dict[str, Any]:
         "link_selector": "a",
         "pagination": _simplify_pagination(candidate.get("pagination") or {}),
     }
+
+
+# ---------- 检索型入口（站内检索） ----------
+
+
+def _search_form_candidates(job: ImportJob) -> list[dict[str, Any]]:
+    """勘察页与内容发现各页里看到的检索表单（按 (action, field) 去重的**候选**）。
+
+    这些只是「页面上有个检索框，参数名是这个」，是不是真能出条目要试过才知道
+    （见 `_maybe_add_search_entry`）。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    pages: list[dict[str, Any]] = []
+    inspect = job.stage_reports.get("inspect") or {}
+    if inspect.get("search_forms"):
+        pages.append({"search_forms": inspect["search_forms"]})
+    pages.extend((job.stage_reports.get("discover") or {}).get("pages") or [])
+    for page in pages:
+        for form in page.get("search_forms") or []:
+            field = str(form.get("field") or "").strip()
+            action = str(form.get("action") or "").strip()
+            if not field or (action, field) in seen:
+                continue
+            seen.add((action, field))
+            out.append(form)
+    return out
+
+
+def _unique_entry_name(base: str, existing: list[dict[str, Any]]) -> str:
+    names = {str(row.get("name") or "").strip() for row in existing}
+    if base not in names:
+        return base
+    for suffix in range(2, 10):
+        if f"{base}{suffix}" not in names:
+            return f"{base}{suffix}"
+    return base
+
+
+async def _probe_search_entry(
+    job: ImportJob, form: dict[str, Any], domains: list[str], probe_keyword: str
+) -> tuple[dict[str, Any] | None, int]:
+    """把一个检索表单**真试一次**：拼出检索地址、取回、按结果页自己的结构解出条目。
+
+    返回 `(入口配置, 取回条目数)`；试不出来返回 `(None, 0)` 并把原因写进日志。
+    地址用运行时同一个 `build_search_url` 拼——试的是哪条 URL，正式抓取就是哪条
+    （自己拼一遍的话，两处一旦漂移，就会出现「试运行过了、抓取取不到」这种最难查的错）。
+    """
+    from app.sources.analyze import analyze_page
+    from app.sources.config import EntrypointConfig, SearchConfig
+    from app.sources.html_source import build_search_url, parse_list_page
+
+    action = str(form.get("action") or "").strip()
+    field = str(form.get("field") or "").strip()
+    params = {str(k): str(v) for k, v in (form.get("params") or {}).items()}
+    search = SearchConfig(keyword_param=field, fixed_params=params)
+    probe_entry = EntrypointConfig(
+        name="probe", url=action, list_selector="body", search=search
+    )
+    url = build_search_url(probe_entry, keyword=probe_keyword, date_from=None, date_to=None, page=1)
+    if url is None:
+        return None, 0
+    try:
+        fetched = await net.fetch_text(
+            url, allowed_domains=domains, timeout=float(get_settings().source_fetch_timeout)
+        )
+    except (net.FetchError, net.UnsafeURLError) as exc:
+        _log(job, f"站内检索入口取回失败（{field} → {action}）：{exc}", "warn")
+        return None, 0
+
+    analysis = analyze_page(fetched.text, fetched.url, listed_as="search_probe")
+    for candidate in analysis.get("list_candidates") or []:
+        dropped: list[str] = []
+        selector = _usable_selector(candidate.get("selector"), dropped, "search.list_selector")
+        if selector is None:
+            continue
+        entry = EntrypointConfig(
+            name="probe", url=action, list_selector=selector, search=search
+        )
+        items = parse_list_page(fetched.text, entry, fetched.url, limit=5)
+        if items:
+            return (
+                {
+                    "name": _SEARCH_ENTRY_NAME,  # 由调用方去重后覆盖
+                    "url": action,
+                    "list_selector": selector,
+                    "link_selector": "a",
+                    "pagination": _simplify_pagination(analysis.get("pagination") or {}),
+                    "search": search.model_dump(),
+                    "notes": (
+                        f"站内检索入口（导入时真取一页探测：关键词「{probe_keyword}」"
+                        f"取回 {len(items)} 条后采纳；参数名 {field}"
+                        + (f"，固定参数 {params}" if params else "")
+                        + "）"
+                    ),
+                },
+                len(items),
+            )
+    _log(
+        job,
+        f"站内检索入口取回了页面但解析不出条目（{field} → {action}）："
+        f"该页的列表结构没有被识别，本次不加检索入口",
+        "warn",
+    )
+    return None, 0
+
+
+async def _maybe_add_search_entry(
+    job: ImportJob, payload: dict[str, Any], domains: list[str], request: SourceImportRequest
+) -> None:
+    """站点自己的检索页真能用 → 给配置补一个**检索型入口**（关键词/日期进服务端）。
+
+    为什么值得多花一次取数：没有它，关键词只能拿已经翻到的那几页逐条比对标题，
+    召回上限 = 翻页深度 × 每页条数；有它，关键词送进站点自己的索引
+    （口径与前后端说明见 `sources/config.capability_summary`）。
+
+    **只有真取回条目才加**。地址拼错的典型症状是取回首页——解析出来的「条目」其实是导航
+    链接，只看页面像什么就会把导航当内容列表配进来源。所以这里按「解析不出条目就不采纳」
+    处理，并且把每一次失败原因都写进日志：「这站没有检索入口」和「有、但没试出来」是
+    两件事，页面与日志都要分得清。
+    """
+    forms = _search_form_candidates(job)
+    if not forms:
+        _log(
+            job,
+            "页面里没有发现站内检索表单：关键词与时间范围将在已翻到的列表页内过滤"
+            "（召回受翻页深度限制）",
+            "info",
+        )
+        return
+
+    keyword = next((k.strip() for k in (request.keywords or []) if (k or "").strip()), None)
+    probe_keyword = keyword or SEARCH_PROBE_KEYWORD
+    _log(
+        job,
+        f"发现 {len(forms)} 个站内检索表单候选，逐个真取一页试抓"
+        f"（探测关键词「{probe_keyword}」"
+        + ("，取自你填的关键词）" if keyword else "，通用探测词，只验证检索页结构）"),
+    )
+
+    for form in forms:
+        action = str(form.get("action") or "").strip()
+        field = str(form.get("field") or "").strip()
+        if not action:
+            _log(
+                job,
+                f"检索框「{field}」没有 form 提交地址（页面用 JS 拼地址）："
+                "地址没法确定，本次不猜、不加检索入口",
+                "warn",
+            )
+            continue
+        if (form.get("method") or "get").lower() != "get":
+            _log(job, f"检索表单「{field}」是 POST 提交，当前引擎只支持 GET，跳过", "warn")
+            continue
+        host = (urlsplit(action).hostname or "").lower()
+        if not host or not domain_allowed(host, domains):
+            _log(
+                job,
+                f"检索入口在 {host or '未知主机'}，不在来源边界（{'、'.join(domains)}）内，跳过；"
+                "要收录它得先人工把该主机加进 allowed_domains",
+                "warn",
+            )
+            continue
+        entry, count = await _probe_search_entry(job, form, domains, probe_keyword)
+        if entry is None:
+            continue
+        existing = list(payload.get("entrypoints") or [])
+        entry["name"] = _unique_entry_name(_SEARCH_ENTRY_NAME, existing)
+        payload["entrypoints"] = [*existing, entry]
+        _log(
+            job,
+            f"已加入站内检索入口「{entry['name']}」：关键词送进 {action}"
+            f"（探测关键词「{probe_keyword}」取回 {count} 条）——"
+            "不选发布机构时，关键词由该站自己的检索接口执行",
+        )
+        return
+
+    _log(
+        job,
+        "试过的站内检索入口都没取回条目：本次不加检索入口，"
+        "关键词与时间范围仍在已翻到的列表页内过滤",
+        "warn",
+    )

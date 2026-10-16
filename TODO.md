@@ -22,7 +22,7 @@
 | 1 | 后端数据访问层（地基） | 🟨 进行中（代码完成，待实机验收） | — |
 | 2 | 只读查询 API | 🟨 进行中（代码完成，待实机验收） | — |
 | 3 | 写操作与动作 API | 🟨 进行中（代码完成，待实机验收） | — |
-| 4 | 抓取 + 提取流水线（核心） | 🟨 进行中（代码完成，待实机验收） | — |
+| 4 | 抓取 + 提取流水线（核心） | 🟨 进行中（代码完成，待实机验收；2026-10-15 明确 `publish_date` **只放发布日期**——成文日期不再顶掉它，见下方变更块） | — |
 | 5 | 进度实时推送（SSE） | 🟨 进行中（代码完成，待实机验收） | — |
 | 6 | 前端接入 | 🟨 进行中（代码完成，待实机验收） | — |
 | 7 | 端到端验收与文档 | 🟨 进行中（文档已对齐，端到端验收待用户执行） | — |
@@ -32,8 +32,8 @@
 | 11 | 定时自动入库（调度器 + 弹窗管理） | 🟨 进行中（代码完成，待实机验收） | — |
 | 12 | 提取模型可选（高级设置下拉 + DeepSeek 接入） | 🟨 进行中（代码完成，待实机验收） | — |
 | 13 | 检索全库去重/续抓 + 入库判别（judge）+ 定时防重入 | 🟨 进行中（代码完成，待实机验收） | — |
-| 14 | 网站来源接入（配置化来源 + 接入 Skill 与工具） | 🟨 进行中（离线 + 落库用例已跑通；2026-10-15 修掉 `decode_html` 三处整页乱码缺陷，见下方变更，待实机验收） | — |
-| 15 | 页面内「导入网址」入口 + 来源下拉（确定性版） | 🟨 进行中（后端完成；2026-10-15 修复两个系统性缺陷后已在真实站点跑通验收，前端待 `pnpm build`） | — |
+| 14 | 网站来源接入（配置化来源 + 接入 Skill 与工具） | 🟨 进行中（离线 + 落库用例已跑通；2026-10-15 修掉 `decode_html` 三处整页乱码缺陷、改进正文解析三项、新增检索型入口与能力声明、试运行的日期命中率判据补「值恒定 = 假命中」提示，见下方变更，待实机验收） | — |
+| 15 | 页面内「导入网址」入口 + 来源下拉（确定性版） | 🟨 进行中（后端完成；2026-10-15 修复两个系统性缺陷后已在真实站点跑通验收，同日增量：自动探测站内检索 + 筛选能力声明 + 日期候选跨页核对 + 启用闸门凭据改按指纹全表查（「已停用 → 再启用」不再被误拒），见下方变更块；前端待 `pnpm build`） | — |
 | 16 | vue-router 全站迁移 + 来源管理独立页面（含批量导入） | 🟨 进行中（代码完成，待实机验收；离线字段核对已过，前端待 `pnpm build`） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
@@ -129,7 +129,7 @@ uv run python scripts/test_db.py
 
 ## Phase 4 — 抓取 + 提取流水线（核心）
 
-**状态**：🟨 进行中（代码完成，待实机验收） ｜ **目标**：真实抓取 gov.cn 并结构化提取「事实/信息/知识」
+**状态**：🟨 进行中（代码完成，待实机验收；2026-10-15 明确 `publish_date` 的语义，见下方变更块） ｜ **目标**：真实抓取 gov.cn 并结构化提取「事实/信息/知识」
 
 - [x] 新增 `server/app/pipeline/crawl_graph.py`（`prepare → fetch → extract → summarize`，失败走 `fail`）
 - [x] 新增 `server/app/pipeline/extract.py`（结构化输出 schema，复用 `_build_llm()`）
@@ -145,6 +145,17 @@ uv run python scripts/test_db.py
 - 单篇提取：`reset_extraction()`（干净起点、可重复执行）→ 写 stage/日志 → `get_policy_fulltext` → `extract_policy()`（正文按 `pipeline_max_body_chars` 截断；先试**不强制 `tool_choice`** 的工具调用，失败回退宽松 JSON 解析）→ `save_extraction()`（单事务写三栏 + 事实明细）→ 成功/失败日志 → `finally` 里 `refresh_task_counts()`。
 - 失败文案（设计稿口径）：MCP 不可用/超时 → `抓取失败：连接 China-Central-Policy-MCP 超时或异常（…），请确认本地服务已启动后重试`；检索为空 → `未检索到匹配的政策原文，请调整关键词或时间范围后重试`。
 - **知识区语义（用户裁定，2026-10-12）**：知识**不是**读懂这篇文件所需的背景知识（术语解释、概念科普、政策沿革），而是**从该文件里可沉淀、能指导下一步行动的知识**——政策划了哪些线、开了哪些口子、窗口期多长、钱和资源往哪投、什么主体在什么条件下能拿到什么。提示词与 Pydantic 字段描述已按此改写；抽屉三块标题相应改为「知识点 / 适用领域 / 行动建议」。**字段键名与 jsonb 列名不变**（仍是 `concepts[{term,desc}]` / `fields` / `extension` 与 `knowledge_concepts/…`），只是语义变成「标题 / 说明」，故无需改表、无需重跑 `init.sh`。
+
+**2026-10-15 变更（用户问「现在的日期是模型提取之后生成的吗，怎么感觉不准」）**：
+
+- **答复：不是模型产的。** `ExtractionPayload`（facts / info / knowledge）里根本没有日期字段；`facts` 的「时间」是自由文本，留在提取结果里，不回写 `policy_document`。
+- **根因：同一个 `publish_date` 被两个语义不同的日期先后写过一遍。** 列表/检索轮写**发布日期**（gov.cn 的 `ptimeStr`/`pubtimeStr`；`html_list` 的列表页 `date_selector`），抓全文那轮写 `result.date or parse_date(meta.signed_date)`——而 gov.cn 全文接口的 `date` 取的是详情页元信息表的**成文日期**（`getPolicyFulltext.ts`：成文日期 → `<time datetime>` → `.date` → 正文首个日期）。成文日期常比发布日期早几周到几个月，于是**顶掉**了列表轮的值：跨年文件被分错年份（年份筛选与年份直方图都跑在 `EXTRACT(YEAR FROM publish_date)` 上）、成果库日期在「抓完全文」前后**凭空变一天**（用户拿自己配置的日期窗口核对时看着像越界——抓取时窗口是按发布日期判的）、`ORDER BY publish_date DESC` 的排序也跟着动。
+- **改法（用户裁定：`publish_date` 只放发布日期）**：`PolicySource` 新增类属性 `fulltext_date_is_publish`（默认 `True`）声明「`fetch_fulltext` 报的 `date` 算不算发布日期」，`GovCnSource` 覆写为 `False`；`_fetch_fulltext` 据此取 `result.date if source.fulltext_date_is_publish else None`，并去掉 `or parse_date(meta.signed_date)` 这个成文日期兜底。传 `None` 时 `update_policy_from_fulltext` 的 `COALESCE(%s, publish_date)` 保持原值——列表轮没给日期的行**诚实地留空**，不拿另一个语义的日期顶上。顺带删掉 `crawl_graph.py` 里因此不再使用的 `parse_date` 导入。`html_list` 来源不用改：它的详情页日期就是发布日期，默认 `True` 即对，「列表页没印日期、日期在详情页」的兜底原样保留。
+- **成文日期没有丢**：仍由 `fulltext_clean` 从归档全文解析成 `FulltextMeta.signed_date`，详情页已单列展示（`LibraryDetailPage.vue`「成文日期」）。
+- **前端文案同步**：`ConfirmPanel.vue` 页脚原写「（提取时会用原文回填）」——改后不再成立，改为「此处日期为检索结果给的**发布日期**，入库后保持不变；原文里的成文日期是另一个字段，在成果库详情页单独展示」。
+- **镜像/文档**：`docs/architecture/data-pipeline.md`（gov.cn 段新增 `publish_date` 语义条 + 提取段点明「无日期字段」）、`docs/guides/extending.md`（新 `engine` 须声明 `fulltext_date_is_publish`）。
+- **⛔ 历史数据不会自动订正**：受影响的行已把成文日期写进 `publish_date`，而**发布日期在库里没有第二份留档**（`policy_document` 不存它），无法用 SQL 反推；`insert_policies` 是 `ON CONFLICT (task_id, source_url) DO NOTHING`，重跑同一个任务也不会改写已存在的行。补救两条，均须用户执行：① 对关心的来源**建新任务重抓**（新行会拿到正确的发布日期）；② 接受旧行口径不一致，或人工订正。本次不改历史数据、不写订正脚本。
+- **待实机验收**（我未运行，按仓库约定）：重启服务后跑一次 gov.cn 抓取 → 成果库详情页「发布于 X」应等于检索结果里的发布日期、不再被成文日期顶掉；同一页「成文日期」一行仍照常单独显示。
 
 **计数一致性（硬约束，已实现）**：`refresh_task_counts()` 用 `UPDATE crawl_task ... FROM (SELECT COUNT(...) FILTER (...))` **从实际行数聚合派生**计数，不做自增：
 
@@ -495,7 +506,7 @@ cd ../server && uv run python scripts/test_judge.py     # 判别契约实测（�
 
 ## Phase 14 — 网站来源接入（配置化来源 + 接入 Skill 与工具）
 
-**状态**：🟨 进行中（离线 + 落库用例已跑通 91/0/0；2026-10-15 修掉 `decode_html` 三处整页乱码缺陷，见下方变更，待实机验收） ｜ **目标**：新增一个网站来源变成**一次可配置、可验证、可追溯的接入任务**，而不是每次从零写爬虫——Agent 能自己勘察站点、取样、生成配置、试运行验收、注册启用
+**状态**：🟨 进行中（离线 + 落库用例已跑通 91/0/0；2026-10-15 修掉 `decode_html` 三处整页乱码缺陷、改进正文解析三项（条目链接 / 容器兜底 / 表格），并新增 `entrypoints[].search` 检索型入口 + 能力声明，同日又给试运行的日期命中率判据补上「抽样值恒定 = 假命中」的提示，见下方变更，待实机验收） ｜ **目标**：新增一个网站来源变成**一次可配置、可验证、可追溯的接入任务**，而不是每次从零写爬虫——Agent 能自己勘察站点、取样、生成配置、试运行验收、注册启用
 
 **交付物**（对应需求方列出的 6 项）：
 
@@ -566,11 +577,23 @@ uv run python scripts/test_source_onboarding.py --live
 - **未跑构建 / 未连库**（按约定由用户运行）→ **待实机验收**：`cd server && python scripts/test_source_onboarding.py`（首段离线，其余段需 DB / 联网）；并重抓此前乱码的那篇 html_list 文章，正文应为正常中文。
 - **已知未修**（与本次报修无关，仅记录）：node 侧 MCP `tools/China-Central-Policy-MCP/src/tools/getPolicyFulltext.ts` 的 axios 取数没有 charset 处理，只影响 gov.cn 路径；实测 gov.cn 全站（含 2008/2010/2014 年旧页与 `http://` 公报）均为 UTF-8、0 处 U+FFFD，故**不是**本次乱码的成因。如需补，改后须 `npm run build`（否则是静默空操作）。
 
+**2026-10-15 变更（正文解析三项改进：条目链接 / 容器兜底 / 表格）**：
+
+- **背景**：上一轮修的是「整页乱码」（正确性），本轮处理**内容不全 / 不齐**的三处（用户指定做这三项）。
+- **① 列表条目不再取「第一个链接」**（`html_source._pick_item_link`）：一个 `<li>` 里常不止一个 `<a>`（标题 + 缩略图 +「更多」），旧逻辑取文档序第一个——缩略图链接没有文本、`title_selector` 也命中它 → 标题为空 → **整条被静默丢掉**。新口径按可靠性排序：先取「文本 == 已解析标题」的链接，否则取文本最长者（标题链接几乎总是最长的一段文字，缩略图链接无文本、「更多」只有两字）；同口径下按文档序取第一个，结果稳定可复现。
+- **② 正文容器全落空时改用结构打分兜底**（`html_source._fallback_container`）：旧行为是直接判该页失败（`DetailResult.body` 为空 → `fetch_fulltext` 抛错、整页 0 结果）。改为复用 `analyze.detail_candidates` 打分挑一块——该候选链**已在候选阶段排除 `<html>` / `<body>`**，所以这仍**不是**「退化成整页文本」（那条铁律没破），只是把「零结果」变成「有结果但标注未经确认」。门槛 `_FALLBACK_MIN_CHARS = 200`（与 `DetailConfig.min_body_chars` 同口径），不达标仍旧判失败。**留痕**：`DetailResult.warnings` 写明「已用结构启发式兜底选中「X」，该段正文未经确认」；接入报告（`sample_content` 行的 `warnings`）**本来就带**该字段，另在 `HtmlListSource.fetch_fulltext` 补一条 `logger.warning`——否则「已降级」在正式抓取链路上完全不可见（成功路径此前不上报 warnings）。
+- **③ 表格单元格不再各占一行**（`htmlparse.node_text`）：`<td>`/`<th>` 属块级，旧逻辑给每个单元格补 `\n`，`<tr><td>序号</td><td>项目</td></tr>` 出来是「序号\n项目」→ 政策附表的行列关系全丢。改为单元格之间补 `\t`、行之间才补 `\n`；单元格内部再出现的块级标签不再补换行（`<td><p>a</p></td>` 仍算一个单元格）。**实现细节**：不能直接塞 `\t`——`_SPACE_RE` 会把制表符并成空格，所以先用 US（`\x1f`）占位穿过空白收敛与 `str.strip()`，最后一步再换回 `\t`。
+- **配套**：`analyze.Candidate` 增加 `node` 字段（`repr=False, compare=False`，**不进 `as_dict`**）——兜底需要拿到节点本身，因为 `describe_selector` 可能生成 `:nth-of-type`，而选择器引擎不支持伪类、拿选择器回头再查会落空。镜像同步：`config.py` 的 `DetailConfig` docstring、`.claude/skills/website-source-onboarding/references/config-schema.md`；`services/onboarding.py` 的空正文告警文案补上「启发式兜底也未找到达标正文」。
+- **回归用例**（`server/scripts/test_source_onboarding.py`，新增 5 项 + 改写 1 项）：多条链接仍取到条目、且选中的是标题链接（2 项）；表格同行制表符 / 行间换行（1 项）；容器全落空但页面另有一块足够长的正文 → 兜底选中（1 项）且带「未经确认」告警（1 项）；原「容器全落空 → 正文为空」改写为「落空且兜底不达标 → 仍为空」，以贴合新语义。
+- **未跑构建 / 未连库**（按约定由用户运行）→ **待实机验收**：`cd server && python scripts/test_source_onboarding.py`。
+
+**已知边界（本轮未做）**：① **容器命中即定稿**——配置的选择器若命中一块短侧栏（非空但很短），仍会采信、不会继续试后面的候选；本轮只处理「全部选择器都落空」这一种情形；② `_clean_body` 的行式 junk 过滤会把「含 `(` 且无中文句末标点的表格行」整行丢弃，这是**既有**行为，本轮未动（改动会波及已校准的入库预检）；③ 附件（PDF / DOCX）仍只登记不抽正文，正文为空时不会回落到附件。
+
 ---
 
 ## Phase 15 — 页面内「导入网址」入口 + 来源下拉（确定性版）
 
-**状态**：🟨 进行中（后端完成；**2026-10-15 修掉两个让入口「完全用不了」的系统性缺陷后，已在真实站点上跑通**；前端代码完成，`pnpm build` 待用户执行） ｜ **目标**：页面**不经过对话**就能把一个新网站接进来——输入栏目地址 → 后台跑「勘察 → 内容发现 → 生成配置 → 试运行验收」并流式推进度 → 摊开验收报告 → 人工点「启用」；启用后该来源出现在抓取页的来源下拉里，可当流水线的源
+**状态**：🟨 进行中（后端完成；**2026-10-15 修掉两个让入口「完全用不了」的系统性缺陷后，已在真实站点上跑通**；同日增量：导入时**自动探测站内检索**（GET 表单真出条目才加检索型入口）+ 筛选能力声明 + **日期候选跨页核对**（恒定值当页脚/模板元素丢弃）+ **启用闸门的验收凭据改为按指纹全表查**（原来只在「该来源最近 20 条记录」里找，「已停用 → 再启用」会被误拒，见下方变更块）；前端代码完成，`pnpm build` 待用户执行） ｜ **目标**：页面**不经过对话**就能把一个新网站接进来——输入栏目地址 → 后台跑「勘察 → 内容发现 → 生成配置 → 试运行验收」并流式推进度 → 摊开验收报告 → 人工点「启用」；启用后该来源出现在抓取页的来源下拉里，可当流水线的源
 
 **范围决定**（用户已确认）：先做**确定性入口**（不经过大模型，取勘察报告里得分最高的候选组装配置），把手工流程跑通，Agent 驱动的接入面板留到后面接；候选可切换重跑；进度用后台作业 + SSE；本次一起做后端 API + 前端向导 + 来源下拉。
 
@@ -644,6 +667,47 @@ pnpm dev
 
 **新增回归用例**：`server/scripts/test_source_import.py`（离线，**29 项**，与 `test_source_onboarding.py` 共用假站点设施）——覆盖「选择器收敛」「详情规则组装不被伪类整份否掉」「入队前地址校验」「分数更高的页脚块挡不住真列表」「**没有 `base_config` 的候选重跑**」五节；其中第 4 节就是这次故障的**形状复刻**（诱饵块 8 条 vs 真列表 4 条，诱饵分数更高），第 5 节守住「失败页上的候选清单点得动」。跑法：`cd server && uv run python scripts/test_source_import.py` → **通过 29 / 失败 0 / 跳过 0**。
 
+**2026-10-15 增量：非 gov.cn 来源的筛选能力（用户问「除了 gov.cn 外的源不适配日期/机构/关键词筛选怎么办」→ 用户选定做 A + D）**
+
+问题定位（不是猜）：栏目列表页**没有检索能力**。没有检索入口时，关键词只能拿**已经翻到的那些页**逐条比对标题、时间范围只能逐条比对列表页上印的日期 → 召回上限 = `max_pages × 每页条数`，更早/更深的文件永远碰不到。gov.cn 之所以「适配」，是因为它走的是内置的**服务端检索接口**（MCP），不是被筛选项特殊照顾。
+
+- **A：`entrypoints[].search`（`SearchConfig`）= 把筛选推给站点自己的检索页**（`config.py` / `html_source.py`）
+  - 字段：`keyword_param`（照实测的表单字段名填）、`date_from_param` / `date_to_param`（**站点检索页确实接受日期参数时才填**）、`date_format`、`fixed_params`（TRS 系的 `channelid` 等隐藏参数）。
+  - `build_entry_url()` 是**唯一分流口**（检索型走检索页、栏目型走列表页），`HtmlListSource.search()` 与**所有接入探针**都用它——「试运行过了、正式抓取取不到」这类最难查的分歧从结构上消掉。
+  - 三条纪律都是机械的：① `url` 必须是**实测取过、真出条目**的检索页（不猜 `/search`）；② `list_selector` 用**结果页自己的**结构（通常和栏目页不同）；③ `method=post` 的表单、`action` 为 null（JS 拼地址）的检索框，当前引擎支持不了 → **如实报出来，不硬配**。
+  - 校验：`keyword_param` 全空格会拼出 `?%20%20=…`（地址看着正常、永远不命中）→ 入口上直接拦下；`date_format` 用「渲染 2000-01-02 必须同时出现 2000/01/02」判定（`strftime` 对写错的指令是**原样输出**而不是报错，认格式串不可靠）。
+  - 两个边界：**无关键词时检索入口不取数**（空关键词的检索页是空结果页，不是浏览路径）；`pagination.kind="none"` 时第 2 页返回 `None`——否则会在站点不认 `page=2` 时把第 1 页原样重取一遍，全是重复 URL、组合永不进入「翻到底」，白白烧掉检索预算（本轮新发现并修掉）。**`validate_item` 的关键词/日期复核对两类入口都保留**：站内检索同样分词，服务端命中 ≠ 相关。
+- **D：筛选能力声明（机读，不靠嘴说）**：`config.capability_summary()`（= `SourceConfig.capabilities()` / `summary()["filters"]`）对关键词 / 日期 / 机构 / 文种逐项回答「服务端 or 客户端」。它接受**裸 dict**（老库 `content_source.config` 可能没有新字段，来源列表不能因此 500）。
+  - `base.py` 给 `PolicySource` 的默认值是「全部服务端」（对 gov.cn 正确）→ **新引擎必须覆写**。
+  - `api/routes/filters.py` 改用 `source.filter_capabilities()` 组面板，并把检索型入口从「发布机构」名单里剔除（它们不是机构）。
+  - 前端：`SourceDTO` 新增 `keyword_server_side` / `date_server_side` / `search_entrypoints`；抓取页 `ConfigPanel` 在有话要说时多渲染一行 `store.sourceFilterNote`，明确告诉用户筛选**在哪一层**生效（而不是让人以为结果已经是全量）。
+- **A 的自动落点（页面导入）**：`source_import._maybe_add_search_entry()` 在选候选之后运行，用勘察报告里**已经有**的 `search_forms`（`analyze.search_forms()` 早就在报，只是此前没人用）→ 用**运行时同一个** `build_search_url` 拼地址**真取一页** → 用结果页自己的结构解析，**解析出条目才补一个名为「站内检索」的入口**，否则不加、并写清原因。日志把「没发现表单」「是 POST」「地址由 JS 拼」「主机不在白名单」「取回了但解析不出条目」「试过都没条目」逐条分开（「没试」与「试了不行」分得清）。`_rebuild_from_candidate` 在候选重跑时保留已声明的检索型入口。
+- **验收口径同步分开**：判据 1「列表发现」**只算栏目入口**（一个 0 命中的检索入口不得把「每个栏目都取到条目」判死，那会让人去改一份其实是对的配置）；检索型入口单独成**判据 1b**，**只有用了用户自己的关键词时才是硬判据**，用兜底探测词（`SEARCH_PROBE_KEYWORD`，「通知」）时是软的并写进 `untested[]`；`entrypoints[].probe_keyword` 记录实际用的词；没有可用关键词的检索入口记为**未探测**（而不是「0 条」——拿没带关键词的检索页去探测会得出「这个入口坏了」的错误结论）；健康检查同样报 `reachable: None` + 原因，不伪造可达。
+- **镜像同步**：`.claude/skills/website-source-onboarding/`（`SKILL.md` 阶段 2/4 的检索入口写法与三条纪律、`references/config-schema.md` 的 `### search` 字段表 + 示例第二入口、`references/acceptance-criteria.md` 的判据 1b 与探测词规则、`references/tool-map.md` 里那条已解决的缺口）与 `docs/architecture/source-onboarding.md`。
+- **回归用例**：`test_source_onboarding.py` 新增（离线）`SearchConfig` 校验（`date_format` 两例 + 空 `keyword_param`）、`capability_summary`（含旧配置/结构不全的裸 dict 不炸）、检索地址生成（固定参数与关键词、无关键词 → None、单页第 2 页 → None、声明翻页时保留参数、日期按 `date_format` 渲染、`build_entry_url` 分流），以及**假站点 + 假检索接口**上的试运行 4b 一节（判据 1b 硬/软两种、0 命中不连累判据 1）；`test_source_import.py` 新增两节（GET 表单被采纳为「站内检索」且用结果页自己的选择器；POST / JS 拼地址 / 0 命中的检索页分别如实跳过）。假站点设施新增 `query_pages`（`add_query`，检索接口按**路径**分派、查询串作参数——与真实检索页同形）与 `build_search_site(method=…, result=…)`。
+- **待实机验收**（我未运行，按仓库约定）：`cd server && uv run python scripts/test_source_onboarding.py` 与 `uv run python scripts/test_source_import.py`（预期全绿；新增用例数待实跑确认，**不预填数字**）。
+
+**2026-10-15 缺陷修复：用户报「通过其他来源进来的日期就是不对，一直都是 3 月 20 日」**：
+
+- **根因：日期候选链是「在一页上」扫出来的，而它的取值口径是「第一个取到非空文本的候选」。** 配置化来源的列表轮**不给日期**（`source_import` 从不填 `entrypoints[].date_selector`），`publish_date` 于是完全由详情页的 `detail.date_selectors` 决定：`date_text = _strip_label(_text_of(root, selectors))` → `parse_date`，而 `_text_of` 只认**第一个取到非空文本**的选择器。这条链出自 `analyze.meta_candidates`——**文档顺序、不打分、只扫一页**：页脚/模板里那个固定日期与文章自己的日期，在那一页上长得一模一样，于是它排在前面就赢了，跟着栏目翻下去就把**同一个日期**写进该来源的每一篇（年份筛选、时间窗口核对、成果库排序全部跟着错）。
+- **实测证据（chinanews 2026-10-15 那篇）**：`#pubtime_baidu` → `2026-10-15`、`div.content_left_time` → `2026-10-15`（页本身没问题）；而 `div.left`（侧栏，被全文档解析到 8 个节点）→ `时政` → `parse_date` = `None`。**同一个 `_text_of` 缺陷的第二种形态**：候选在前挡住真候选时，日期直接丢掉。
+- **改法（跨页核对 + 诚实丢弃）**：`html_source.date_texts_by_selector()`（与运行时**同一条**取值链，逐个候选分别量值）→ `source_import._verify_date_selectors()`：在所比 `_DATE_CHECK_SAMPLES = 3` 篇样本上**恒定不变**的候选当页脚/模板元素**丢弃**；能 `parse_date` 的候选自动提到链首（解掉上面的遮挡）；「丢」与「重排」都写进作业日志与 `sample_metrics.dropped_selectors`，**不静默**。样本由 `_sibling_detail_pages()` 回**候选自己的列表页**取（复用 `page_url` + `list_selector`，不新增任何字段——挑到的就是这份配置将来会抓的那些条目），取不到就少比几篇并在日志里说明。**门槛故意保守**（3 篇全中才算恒定）：同栏目同一天发两条通知很常见，拿它当模板元素会把**正确**的日期也丢掉；被否为非正文的候选**不做**这一步（不多花抓取）。
+- **日期宁可缺失也不写错**：`date_selectors` 可能被清成 `[]` —— 这是本项目一贯口径（「取不到就是 None，绝不猜」）。日志会写明是哪个选择器、值是什么，并提示「若确认它就是该站的发布日期，请手工写回 `detail.date_selectors`」。
+- **验收侧同步堵漏（Phase 14 的 `dry_run_ingestion`）**：判据 6「详情页日期命中率」是**软**判据，恒定值让它一路 100% 通过——正是这个 bug 过验收的方式。现改为：抽样各篇的日期值**只有一个**时，判据 6 的 `note` 与 `coverage_limits[]` 双双写明「⚠ 抽样 N 篇的发布日期全部相同（X）：疑似取到了页脚/模板元素，命中率高不代表取对了」。
+- **镜像同步**：`docs/architecture/source-onboarding.md`（新条目）、`.claude/skills/website-source-onboarding/references/config-schema.md`（`date_selectors` 行补顺序语义 + 跨页核对）、`references/acceptance-criteria.md`（判据 6 补「值恒定 = 假命中」）。
+- **⛔ 历史数据不会自动订正**：已落库的错日期**改不了自动修正**——`publish_date` 在插入时写定，`update_policy_from_fulltext` 用 `COALESCE` 不覆盖非空值，`insert_policies` 又是 `ON CONFLICT … DO NOTHING`，重跑同一个任务也不会改写旧行。补救须用户执行：对该来源**建新任务重抓**（新行按改正后的配置拿到正确日期），旧行按需人工订正（本次不写订正脚本、不碰历史数据）。
+- **待实机验收**（我未运行，按仓库约定）：重新导入那个报错的来源，看作业日志里「日期候选跨页核对：比了 N 篇样本」与「有 K 条候选被丢弃或重排（原因见「正文规则」那条）」，确认 `detail.date_selectors` 里留下的是**会随文章变化**的那条；再建任务抓一遍，成果库日期应逐篇不同。
+
+**2026-10-15 缺陷修复：用户报「手动停用的项目无法再次启用」（启用闸门查验收凭据时带了条数窗口）**：
+
+- **根因：同一个问题，两处各写了一份判定。** 列表页/详情页的「已验收」徽标走 `repo.list_passing_dry_run_fingerprints()`——**全表**按 `report->>'fingerprint'` 找通过试运行；启用闸门 `onboarding._latest_passing_run()` 却走 `repo.list_onboarding_runs(source_key=…, limit=20)`——只在**该来源最近 20 条记录**里找。同一来源反复导入 / 候选重跑之后（每次导入至少写 inspect、discover、dry_run 三条记录），那份凭据被后来的记录挤出窗口，于是「徽标说已验收、按钮说能启用，点下去却被拒」——且**不会自愈**（再点多少次都一样），除非 `force=true`。
+- **凭据是既成事实，不该有窗口。** 指纹是配置内容的哈希（`config_fingerprint()`），「指纹一致」就等于「这份配置真被跑过一次并通过了」；同一来源之后勘察多少回、失败多少回都与其无关。新增 `repo.fetch_latest_passing_run(fingerprint=…)`：按指纹在**全表**取最近一条通过试运行（`ORDER BY started_at DESC LIMIT 1`，无窗口），闸门改用它。
+- **判定口径收成一处**：`repositories._PASSING_DRY_RUN_SQL`（`kind='dry_run' AND status='passed' AND report IS NOT NULL`），单条闸门与列表页批量查询**都拼这一条**——原来两份手抄的判定，漂出来的分歧正是这个 bug。`schema.sql` 新增部分索引 `idx_onboarding_run_passing_fp`（`(report->>'fingerprint') WHERE kind='dry_run' AND status='passed'`）服务这次查询（幂等；老库重跑 `database/init.sh` 即生效，不加也能跑、只是慢）。
+- **拒绝文案要说清是「哪一种没有」**：闸门未命中时再查一次「该来源有没有**别的**指纹通过过」，如有则在拒绝文案里点出「该来源最近一次通过的试运行用的是指纹 X（当前配置 Y）——说明配置在验收之后改过」。两种情况用户要做的事不同（**重跑** vs **先跑**），不该都只丢一句「没有指纹一致的」。
+- **回归用例**（`test_source_onboarding.py`，落库用例，我未运行）：先跑出一次通过试运行，再**故意灌 20 条更晚的 inspect 记录**，然后 `register_source(approved=True)`——必须仍然 `ok`。按旧实现的窗口语义这些记录必然把凭据挤出前 20 条，所以这个形状在旧实现下必挂、在新实现下必过。用例收尾连它写进去的接入记录一起清（新增 `repo.delete_onboarding_runs()`，**只给测试用**——生产的验收凭据就住在同一张表里）。
+- **镜像同步**：`docs/architecture/source-onboarding.md`（诚实规则那条下补「凭据按指纹全表查、不设窗口」）、`references/acceptance-criteria.md`（第 6 节验收与注册的绑定）、`references/config-schema.md`（状态机 `disabled` 行）、`references/tool-map.md`（测试覆盖那条）、`SKILL.md` 速查表（拒因现在会点出上一次通过的指纹；新增一行「已停用来源点启用被拒=不该再发生」）、`docs/guides/extending.md` 的 *Hand-kept mirrors* 表（把 `SKILL.md` 本身也列进去——它的速查表同样在镜像行为）。
+- **待实机验收**（我未运行，按仓库约定）：`cd server && uv run python scripts/test_source_onboarding.py --db-scratch`（预期新增那条通过；`--db-scratch` 用一次性库，不留脏数据）；页面上把那个被停用的来源点「启用」，应直接成功、不再出现「没有指纹一致的通过试运行」。
+
 **待用户验收（页面手工路径）**：
 
 1. 顶栏「来源管理」→ 列出内置 gov.cn；「导入网址」→ 粘一个政务栏目页 → 阶段与日志**逐条**出现（不是一次刷完）。
@@ -653,6 +717,7 @@ pnpm dev
 5. 切回 gov.cn → 「文种」恢复、机构选项回到 gov.cn 的 facet 名单。
 6. 弹窗手势：卡片内按住拖选文字、移到遮罩上松手 → **不得**关闭；遮罩上单击 → 关闭。
 7. 导入一个 `blocked` 的站点（robots 禁止）→ 报告写明「未绕过访问控制」，且「启用」不可用。
+8. 「停用」一个已启用来源 → 再点「启用」→ **必须能重新启用**（不得再出现「拒绝启用：没有指纹一致的通过试运行」）；徽标「已验收」与实际闸门不得互相打架。
 
 **阻塞**：
 
