@@ -31,25 +31,22 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
-import re
 from datetime import date
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agent.mcp import find_tool, tool_json
 from app.config import get_settings
 from app.db import repositories as repo
 from app.db.repositories import PolicyRow
 from app.pipeline import judge
 from app.pipeline.extract import extract_policy
-from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
+from app.pipeline.fulltext_clean import body_metrics, split_fulltext
+from app.sources import SourceError, get_by_label
+from app.sources.base import PolicySource
 
 logger = logging.getLogger(__name__)
-
-MCP_SOURCE_LABEL = "China-Central-Policy-MCP"
 
 
 class PipelineError(Exception):
@@ -86,7 +83,10 @@ def _effective(source: dict[str, Any] | None, key: str) -> int:
 
 async def prepare_node(state: PipelineState) -> dict:
     task_id = state["task_id"]
-    stage = f"正在连接 {MCP_SOURCE_LABEL}（抓取源：{state.get('source', '')}）"
+    stage = (
+        f"正在连接 {get_by_label(state.get('source')).fetched_by}"
+        f"（抓取源：{state.get('source', '')}）"
+    )
     await repo.set_task_running(task_id, stage)
     await repo.add_task_log(task_id, stage, tone="info")
     return {}
@@ -127,9 +127,7 @@ async def fetch_node(state: PipelineState) -> dict:
     lib_rows = [r for r in rows if r["source_url"] in library_urls][:cap]
 
     if not keep_rows and not tagged_rows and not lib_rows:
-        return {
-            "error": "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试",
-        }
+        return {"error": _empty_result_message(state)}
 
     await repo.insert_policies(task_id, keep_rows + tagged_rows + lib_rows)
     await repo.refresh_task_counts(task_id)
@@ -208,6 +206,27 @@ async def await_confirm_node(state: PipelineState) -> dict:
     return {}
 
 
+def _empty_result_message(state: dict[str, Any]) -> str:
+    """0 结果时的用户文案。**来源不同，话不一样**：
+
+    配了站内检索入口的来源，关键词为空时那个入口根本不取数（检索页没有关键词参数时
+    返回的是空结果页，见 `build_search_url`）——只说「调整关键词」会让人以为是自己筛得太严。
+    """
+    message = "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试"
+    try:
+        source = get_by_label(state.get("source"))
+        search_names = source.filter_capabilities().get("search_entrypoints") or []
+    except Exception:  # noqa: BLE001 - 文案补充失败不该让任务报错
+        return message
+    if search_names and not [k for k in (state.get("keywords") or []) if str(k or "").strip()]:
+        return (
+            message
+            + f"（提示：来源「{source.label}」的关键词由站内检索入口执行"
+            f"（{'、'.join(search_names)}），本轮没有填关键词，该入口没有取数）"
+        )
+    return message
+
+
 async def _search_policies(
     keywords: list[str],
     date_from: date | None,
@@ -222,9 +241,11 @@ async def _search_policies(
 ) -> list[dict[str, Any]]:
     """按「关键词 × 发布机构 × 文种」组合扇出检索并合并去重；可**翻页续抓**直到凑够新增篇数。
 
-    gov.cn 检索 API 会静默忽略重复的筛选参数（`bmfl=A&bmfl=B` 等于不过滤），所以多选只能
-    由服务端逐值扇出；`pipeline_max_search_calls` 是**总调用数**预算（翻页续抓也计入），防组合爆炸。
-    每关键词条数 / 超时可用 `overrides`（任务行上的高级设置）按任务覆盖。
+    组合扇出与各站点过滤规则在抓取源适配器里（`app/sources`，gov.cn 因检索 API
+    会静默忽略重复的筛选参数，多选只能由服务端逐值扇出）；本函数只做编排：
+    调用预算（`pipeline_max_search_calls` 是**总调用数**预算，翻页续抓也计入，
+    防组合爆炸）、翻页、入库判别与正文预检。每关键词条数 / 超时可用 `overrides`
+    （任务行上的高级设置）按任务覆盖。
 
     Phase 13 续抓语义：一轮（round）= 对每个未翻空的组合各取「下一页」；某组合返回 0 条
     即视为翻空（gov.cn 越界页回空列表 / 非 200 code）。停止条件（任一满足）：
@@ -242,21 +263,12 @@ async def _search_policies(
     `judge_stats` 是出参：`failures` 累计 laya 判别调用失败篇数（fail-open 按建议入库计数）、
     `body_rejected` / `preflight_failed` 累计正文预检剔除 / 抓取失败篇数，调用方据此写任务日志。
     """
-    tool = find_tool("get_latest_policies")
-    if tool is None:
-        raise PipelineError(
-            f"抓取失败：无法连接 {MCP_SOURCE_LABEL}（工具未加载），"
-            "请确认本地服务已启动后重试"
-        )
-
+    source = get_by_label((overrides or {}).get("source"))
     settings = get_settings()
     per_keyword = _effective(overrides, "pipeline_per_keyword_limit")
     mcp_timeout = _effective(overrides, "pipeline_mcp_timeout")
-    kw_list = keywords or [None]
-    agency_list = agencies or [None]
-    doc_type_list = doc_types or [None]
 
-    combos = list(itertools.product(kw_list, agency_list, doc_type_list))
+    combos = source.search_plan(keywords or [], agencies or [], doc_types or [])
     budget = settings.pipeline_max_search_calls
 
     facet_active = bool(agencies or doc_types)
@@ -285,66 +297,40 @@ async def _search_policies(
             if combo in exhausted:
                 continue
             keyword, agency, doc_type = combo
-            args: dict[str, Any] = {"limit": per_keyword, "page": page_of[combo]}
-            if date_from:
-                args["startdate"] = date_from.isoformat()
-            if date_to:
-                args["enddate"] = date_to.isoformat()
-            if keyword:
-                args["keyword"] = keyword
-            if agency:
-                args["agency"] = agency
-            if doc_type:
-                args["doc_type"] = doc_type
             try:
-                raw = await asyncio.wait_for(tool.ainvoke(args), timeout=mcp_timeout)
+                raw_items = await source.search(
+                    keyword=keyword,
+                    agency=agency,
+                    doc_type=doc_type,
+                    page=page_of[combo],
+                    limit=per_keyword,
+                    date_from=date_from,
+                    date_to=date_to,
+                    timeout=mcp_timeout,
+                )
+            except SourceError as exc:
+                raise PipelineError(f"抓取失败：{exc}") from exc
             except Exception as exc:  # noqa: BLE001 - 统一转成设计稿要求的提示文案
                 raise PipelineError(
-                    f"抓取失败：连接 {MCP_SOURCE_LABEL} 超时或异常（{exc}），"
+                    f"抓取失败：连接 {source.fetched_by} 超时或异常（{exc}），"
                     "请确认本地服务已启动后重试"
                 ) from exc
             calls += 1
 
-            try:
-                data = tool_json(raw)
-            except ValueError as exc:
-                raise PipelineError(f"抓取失败：{exc}") from exc
-
-            raw_items = (data or {}).get("items") or []
             if not raw_items:
                 # 该组合翻到底（越界页 gov.cn 回空列表 / 非 200 code 也表现为 items=[]）
                 exhausted.add(combo)
 
             page_fresh: list[dict[str, Any]] = []  # 本页的新增篇目（判别后再定是否占名额）
             for item in raw_items:
-                # ① 公报不参与 bmfl/pcodeJiguan 等筛选（实测恒 56 条纹丝不动）——筛选生效时整批丢弃。
-                #    MCP 侧现在也会在「截断成 limit 条」之前先丢掉公报，这里保留作为兜底：万一线上
-                #    跑的是未重建的旧 build/index.js，公报仍会混进来。
-                catalog_key = str(item.get("catalog_key") or item.get("catalog") or "")
-                if facet_active and catalog_key == "gongbao":
-                    continue
-                # ② 接口在「严格条件 0 命中」时会静默退回全量浏览列表——与关键词毫无交集的直接丢弃
-                #    （MCP 已在解析端剥离 <em> 高亮标签，这里拿到的 title 是纯文本）。
-                #    注意 gov.cn 的 title 检索是**分词**的：q=水域 会命中「…流域防洪建设…」「…水污染防治…」
-                #    这类标题（水域 → 水 + 域），若强求「标题包含完整关键词」会把接口的正常命中整批误杀，
-                #    症状是「facet 明明有机构/条数、抓取却报未检索到」。所以这里只要求标题与关键词
-                #    **至少共享一个字**：足以拦下整页无关的浏览噪声，又不会误杀分词命中。
-                title = str(item.get("title") or "").strip()
-                if (
-                    keyword
-                    and keyword not in title
-                    and not any(ch in title for ch in keyword)
+                # 站点特有的条目标过滤（公报 / 标题分词匹配 / 日期窗口，见 GovCnSource.validate_item）
+                if not source.validate_item(
+                    item,
+                    keyword=keyword,
+                    date_from=date_from,
+                    date_to=date_to,
+                    facet_active=facet_active,
                 ):
-                    continue
-                # ③ 日期必须落在窗口内；窗口已设但日期缺失也丢弃（否则「无」不可信）。
-                #    前提：MCP 报的 date 必须与接口做窗口过滤用的是同一个日期——即站点显示的发布日期
-                #    （取 ptimeStr/pubtimeStr，文本缺失才落到 ptime 这个常为成文日期的 epoch）。若 MCP
-                #    又改回优先取 epoch，这里会把接口按窗口返回的行整批误判成越界，出现「facet 有 1 条、
-                #    实际 0 条」。
-                item_date = _parse_date(item.get("date"))
-                if date_from and (item_date is None or item_date < date_from):
-                    continue
-                if date_to and (item_date is None or item_date > date_to):
                     continue
                 url = str(item.get("url") or "").strip()
                 if not url or url in seen:
@@ -383,6 +369,7 @@ async def _search_policies(
                 # laya 通过（含 fail-open）的再抓全文预检——图片版页面壳与薄壳转发通知
                 # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）
                 await _preflight_bodies(
+                    source,
                     [it for it in page_fresh if not it.get("judge_tagged")],
                     mcp_timeout,
                     judge_stats,
@@ -406,6 +393,7 @@ async def _search_policies(
 
 
 async def _preflight_bodies(
+    source: PolicySource,
     items: list[dict[str, Any]],
     mcp_timeout: int,
     judge_stats: dict[str, int] | None,
@@ -430,8 +418,7 @@ async def _preflight_bodies(
     if (min_cjk <= 0 and min_enders <= 0) or not items:
         return
 
-    tool = find_tool("get_policy_fulltext")
-    if tool is None:
+    if not source.fulltext_available():
         # fail-open：MCP 都没起来的话检索早就失败了，这里只是兜底不阻断
         logger.warning("正文预检跳过：未加载 get_policy_fulltext 工具")
         return
@@ -445,14 +432,10 @@ async def _preflight_bodies(
                 url = str(it.get("url") or "").strip()
                 if not url:
                     raise ValueError("缺少原文链接")
-                raw = await asyncio.wait_for(tool.ainvoke({"url": url}), timeout=mcp_timeout)
-                data = tool_json(raw)
-                if not isinstance(data, dict):
-                    raise ValueError("全文接口返回了非预期内容")
-                _, clean = split_fulltext(str(data.get("body") or ""))
+                result = await source.fetch_fulltext(url, timeout=mcp_timeout)
+                _, clean = split_fulltext(result.body)
                 cjk, enders = body_metrics(clean)
-                # 未重建的旧 build 没有 image_count 字段，按 0 处理（句末信号照样拦得住壳）
-                imgs = int(data.get("image_count") or 0)
+                imgs = result.image_count
             except Exception as exc:  # noqa: BLE001 - 单篇预检故障不能拖垮检索
                 logger.warning(
                     "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
@@ -479,39 +462,23 @@ async def _preflight_bodies(
 
 def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None:
     """MCP 检索结果 → `policy_document` 一行（标题/链接缺失的直接丢弃）。"""
-    title = str(item.get("title") or "").strip()
-    url = str(item.get("url") or "").strip()
-    if not title or not url:
+    adapter = get_by_label(source)
+    normalized = adapter.normalize_item(item)
+    if normalized is None:
         return None
     return {
-        "title": title,
-        "source_url": url,
-        "publish_date": _parse_date(item.get("date")),
+        "title": normalized.title,
+        "source_url": normalized.url,
+        "publish_date": normalized.date,
         "source_name": source,
-        # 机关/文号先剥零宽字符再 strip：gov.cn 的值首常带 U+200B（见 fulltext_clean._ZWSP_RE）
-        "agency": (strip_zero_width(str(item.get("issuing_agency") or "")).strip() or None),
-        "doc_no": (strip_zero_width(str(item.get("document_number") or "")).strip() or None),
-        "catalog": (str(item.get("catalog_key") or item.get("catalog") or "").strip() or None),
-        "fetched_by": MCP_SOURCE_LABEL,
+        "agency": normalized.agency,
+        "doc_no": normalized.doc_no,
+        "catalog": normalized.catalog_key or normalized.catalog,
+        "fetched_by": adapter.fetched_by,
         # 检索循环内判别写回的标注（见 _search_policies）；未判别（服务停用）时为 None
-        "judge_tagged": item.get("judge_tagged"),
-        "judge_prob": item.get("judge_prob"),
+        "judge_tagged": normalized.judge_tagged,
+        "judge_prob": normalized.judge_prob,
     }
-
-
-def _parse_date(value: Any) -> date | None:
-    """把 MCP 返回的 `2025-06-05` / `2025年6月5日` 之类转成 date；解析不了就当没有。"""
-    text = str(value or "").strip()
-    match = re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", text)
-    if not match:
-        match = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text)
-    if not match:
-        return None
-    year, month, day = (int(g) for g in match.groups())
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
 
 
 # ---------- extract ----------
@@ -551,7 +518,10 @@ async def _extract_one(
     await repo.add_task_log(task_id, f"正在提取第 {index} 篇 …", tone="active")
 
     try:
-        fulltext = await _fetch_fulltext(url, policy_id, timeout=_effective(overrides, "pipeline_mcp_timeout"))
+        source = get_by_label((overrides or {}).get("source"))
+        fulltext = await _fetch_fulltext(
+            source, url, policy_id, timeout=_effective(overrides, "pipeline_mcp_timeout")
+        )
         body = str(fulltext.get("body") or "").strip()
         if len(body) < 50:
             raise ValueError("政策正文为空或过短，无法提取")
@@ -592,43 +562,56 @@ async def _extract_one(
         await repo.refresh_task_counts(task_id)
 
 
-async def _fetch_fulltext(url: str | None, policy_id: int, *, timeout: int | None = None) -> dict[str, Any]:
+async def _fetch_fulltext(
+    source: PolicySource,
+    url: str | None,
+    policy_id: int,
+    *,
+    timeout: int | None = None,
+) -> dict[str, Any]:
     """取政策全文，并用解析出的机构/文号回填 policy_document。"""
     if not url:
         raise ValueError("缺少原文链接，无法抓取全文")
 
-    tool = find_tool("get_policy_fulltext")
-    if tool is None:
-        raise PipelineError(
-            f"无法连接 {MCP_SOURCE_LABEL}（工具未加载），请确认本地服务已启动后重试"
-        )
-
     try:
-        raw = await asyncio.wait_for(
-            tool.ainvoke({"url": url, "policy_id": str(policy_id)}),
-            timeout=timeout if timeout else get_settings().pipeline_mcp_timeout,
+        result = await source.fetch_fulltext(
+            url, policy_id, timeout=timeout if timeout else get_settings().pipeline_mcp_timeout
         )
+    except SourceError as exc:
+        raise PipelineError(
+            f"无法连接 {source.fetched_by}（{exc}），请确认本地服务已启动后重试"
+        ) from exc
+    except ValueError:
+        raise  # 全文接口返回了非预期内容——保持原样冒泡
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"抓取全文失败（{exc}）") from exc
 
-    data = tool_json(raw)
-    if not isinstance(data, dict):
-        raise ValueError("全文接口返回了非预期内容")
-
     # 清洗：剥掉整页抓取带入的 CSS/JS/导航噪声，元信息表（发文机关/来源/主题分类…）
     # 单独解析出来。干净正文写回 data["body"]，让下游 LLM 提取与 fulltext 归档都用干净版本。
-    meta, clean_body = split_fulltext(str(data.get("body") or ""))
-    if clean_body:
-        data["body"] = clean_body
+    meta, clean_body = split_fulltext(result.body)
+    body = clean_body or result.body
 
+    # `publish_date` 只放**发布日期**，所以这里要按来源判断全文接口报的日期算不算数
+    # （见 `PolicySource.fulltext_date_is_publish`）。gov.cn 报的是成文日期——拿它覆盖会把
+    # 跨年文件分错年份（年份筛选/直方图都按 `EXTRACT(YEAR FROM publish_date)`），也会和抓取时
+    # 按发布日期判的日期窗口对不上。成文日期没有丢：它照样从归档全文解析出来，详情页单独展示
+    # （`FulltextMeta.signed_date`）。列表轮没给日期时这里传 None，那一行就诚实地留空，
+    # 不拿另一个语义的日期顶上（`update_policy_from_fulltext` 的 COALESCE 只在非空时覆盖）。
     await repo.update_policy_from_fulltext(
         policy_id,
-        agency=str(data.get("issuer") or "").strip() or (meta.agency or ""),
-        doc_no=str(data.get("doc_no") or "").strip() or (meta.doc_no or ""),
-        publish_date=_parse_date(data.get("date")) or _parse_date(meta.signed_date),
-        fulltext=str(data.get("body") or "").strip(),
+        agency=(result.issuer or "").strip() or (meta.agency or ""),
+        doc_no=(result.doc_no or "").strip() or (meta.doc_no or ""),
+        publish_date=result.date if source.fulltext_date_is_publish else None,
+        fulltext=body.strip(),
     )
-    return data
+    return {
+        "body": body,
+        "title": result.title,
+        "issuer": result.issuer,
+        "doc_no": result.doc_no,
+        "date": result.date,
+        "image_count": result.image_count,
+    }
 
 
 def _short_error(exc: Exception) -> str:

@@ -355,7 +355,7 @@ do_start() {
   printf '%s' "$SERVER_PID" > "$RUN_DIR/server.pid"
 
   step "启动前端：pnpm dev（端口 ${WEB_PORT_DEFAULT}）"
-  ( cd "$WEB_DIR" && exec pnpm dev ) &
+  ( cd "$WEB_DIR" && exec npm run dev -- --host 0.0.0.0 ) &
   WEB_PID=$!
   printf '%s' "$WEB_PID" > "$RUN_DIR/web.pid"
 

@@ -226,12 +226,15 @@ class LibraryPolicyItem(BaseModel):
     id: int
     title: str
     agency: str | None = None
-    doc_type: str | None = None  # 由文号前缀推导（国令/国发/国函/国办发/国办函），推导不出为 null
+    doc_type: str | None = None  # 由文号前缀推导（首个括号符之前，如 国发/粤府），推导不出为 null
     publish_date: date | None = None
     summary: str | None = None  # 提取的摘要（信息栏）
     fact_count: int = 0
     point_count: int = 0
     source_url: str | None = None
+    # 抓取来源（任务的 source label）。成果库跨来源混排，卡片上靠它区分是哪家站的
+    # ——非 gov.cn 来源没有「文种」这类 gov.cn 专属标志，少了它就只剩标题和摘要。
+    source_name: str | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "LibraryPolicyItem":
@@ -245,6 +248,7 @@ class LibraryPolicyItem(BaseModel):
             fact_count=int(row.get("fact_count") or 0),
             point_count=int(row.get("point_count") or 0),
             source_url=row.get("source_url"),
+            source_name=row.get("source_name"),
         )
 
 

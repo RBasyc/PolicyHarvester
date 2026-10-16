@@ -1,8 +1,22 @@
 # 环境变量：位于仓库根目录（.env.example 为模板），不入库
 .env
 
-# Claude Code 会话状态（本地工具目录，不入库）
-.claude/
+# Claude Code 会话状态（worktrees 等本地工具目录，不入库）。
+# 例外：.claude/skills/ 是可交付的 Skill 定义（website-source-onboarding），必须入库——
+# 注意这里用 `.claude/*` 而不是 `.claude/`：整目录排除会让 git 不再往下走，下面的 ! 规则失效。
+.claude/*
+!.claude/skills/
 
 # start.sh 的运行态目录（服务 PID 文件）
 .run/
+
+# 来源接入抓回来的原始附件（原始文件是「证据」，体积不可控，不入库）：
+# 落盘路径见 SOURCE_ARTIFACT_DIR，登记在 source_artifact 表里
+server/.artifacts/
+
+# Python / 前端构建产物
+__pycache__/
+node_modules/
+.venv/
+dist/
+.pytest_cache/

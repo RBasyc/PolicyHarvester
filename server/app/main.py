@@ -11,12 +11,13 @@ from fastapi.responses import JSONResponse
 from app.agent import tools as tools_registry
 from app.agent.graph import get_graph
 from app.agent.mcp import load_mcp_tools
-from app.api.routes import agent, config, filters, health, policies, schedules, tasks
+from app.api.routes import agent, config, filters, health, policies, schedules, sources, tasks
 from app.config import get_settings
 from app.db import repositories as repo
 from app.db.pool import close_pool, open_pool
 from app.pipeline.crawl_graph import shutdown_pipelines
 from app.scheduler import shutdown_scheduler, start_scheduler
+from app.sources.registry import load_configured_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,15 @@ async def lifespan(app: FastAPI):
             logger.info("启动收尾：任务 %s 上次未跑完，已标记为 failed", stale)
     except Exception:  # noqa: BLE001 - 数据库不可用不应阻断服务启动
         logger.warning("启动收尾失败：无法清理残留任务", exc_info=True)
+    # 装载配置化抓取源（Phase 14）：content_source 里 status=active 的来源装进来源注册表，
+    # 抓取任务的来源下拉与流水线的 get_by_label 才认得它们。库不可用 / 表还没建时只告警，
+    # 服务照常启动（与 MCP 加载失败降级一致）。
+    try:
+        loaded, failed = await load_configured_from_db()
+        if failed:
+            logger.warning("有 %d 份来源配置未能装载：%s", len(failed), "；".join(failed))
+    except Exception:  # noqa: BLE001 - 装载失败不应阻断服务启动
+        logger.warning("配置化来源装载失败", exc_info=True)
     # 先加载 MCP 工具（失败时内部已降级为空列表），再预编译图，
     # 保证图里的 ToolNode / bind_tools 拿到完整工具表
     tools_registry.MCP_TOOLS.extend(await load_mcp_tools())
@@ -86,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(filters.router)
     app.include_router(config.router)
     app.include_router(schedules.router)
+    app.include_router(sources.router)
 
     return app
 

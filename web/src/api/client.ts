@@ -6,7 +6,9 @@
  */
 
 import type {
+  BatchStreamEvent,
   FacetList,
+  ImportStreamEvent,
   LibraryListResponse,
   LibraryMeta,
   LibraryPolicyDetail,
@@ -20,6 +22,19 @@ import type {
   ScheduleJobDTO,
   ScheduleToggled,
   ScheduleTriggered,
+  SourceBatchImportCreated,
+  SourceBatchImportPayload,
+  SourceBatchSnapshot,
+  SourceEnableResult,
+  SourceImportCreated,
+  SourceImportJob,
+  SourceImportLog,
+  SourceImportPayload,
+  SourceJob,
+  SourceListResponse,
+  SourceRecentRunsResponse,
+  SourceRunsResponse,
+  SourceTrialPayload,
   StreamEvent,
   TaskConfirmPayload,
   TaskCreatePayload,
@@ -77,12 +92,23 @@ export const api = {
   createTask: (payload: TaskCreatePayload) =>
     request<TaskCreated>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
 
-  /** 筛选器可选值（发布机构 / 文种）；失败时后端回退静态名单，不会抛错。 */
-  loadFacets: (params: { q?: string; date_from?: string | null; date_to?: string | null }) => {
+  /**
+   * 筛选器可选值（发布机构 / 文种）；失败时后端回退静态名单，不会抛错。
+   *
+   * `source` 传当前抓取源的 label：配置化站点来源走另一条口径（发布机构 = 栏目名，
+   * 没有文种），响应里的 `supports` 决定前端该隐藏哪些筛选项。
+   */
+  loadFacets: (params: {
+    q?: string
+    date_from?: string | null
+    date_to?: string | null
+    source?: string | null
+  }) => {
     const search = new URLSearchParams()
     if (params.q) search.set('q', params.q)
     if (params.date_from) search.set('date_from', params.date_from)
     if (params.date_to) search.set('date_to', params.date_to)
+    if (params.source) search.set('source', params.source)
     const qs = search.toString()
     return request<FacetList>(`/filters/facets${qs ? `?${qs}` : ''}`)
   },
@@ -150,23 +176,81 @@ export const api = {
     request<ScheduleTriggered>(`/schedules/${jobId}/run`, { method: 'POST' }),
   deleteSchedule: (jobId: number) =>
     request<ScheduleDeleted>(`/schedules/${jobId}`, { method: 'DELETE' }),
-}
 
-export interface StreamHandlers {
-  onTask: (task: TaskDTO) => void
-  onLog: (log: LogLine) => void
-  onDone: (task: TaskDTO) => void
-  onError: (message: string) => void
+  // ---- 来源接入（Phase 15）：导入网址 + 来源管理 ----
+  /** 来源下拉的数据源：内置 gov.cn + content_source 的所有行（含草案/已停用）。 */
+  listSources: () => request<SourceListResponse>('/sources'),
+  /** 某来源的接入记录（每次勘察/试运行的完整报告，供人工复核）。 */
+  sourceRuns: (sourceId: number) => request<SourceRunsResponse>(`/sources/${sourceId}/runs`),
+
+  /** 发起一次「导入网址」作业；地址不合法（内网/非 http(s)）后端直接 400。 */
+  startSourceImport: (payload: SourceImportPayload) =>
+    request<SourceImportCreated>('/sources/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  sourceImportJob: (jobId: string) => request<SourceImportJob>(`/sources/import/${jobId}`),
+  cancelSourceImport: (jobId: string) =>
+    request<{ ok: boolean }>(`/sources/import/${jobId}/cancel`, { method: 'POST' }),
+
+  // ---- 批量导入 / 作业列表 / 接入记录总览 / 试运行（Phase 16） ----
+  /** 批量导入：N 个地址排队逐个跑（并发满排队不拒绝），逐条立即给结果。 */
+  startBatchImport: (payload: SourceBatchImportPayload) =>
+    request<SourceBatchImportCreated>('/sources/import/batch', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  /** 进程内导入作业列表（倒序快照；进度详情走单作业接口）。 */
+  listImportJobs: (limit = 50) => request<SourceJob[]>(`/sources/import?limit=${limit}`),
+  /** 跨来源最近接入记录（每来源取最新一条）；kind 可选过滤。 */
+  sourceRunsRecent: (params: { limit?: number; kind?: string } = {}) => {
+    const search = new URLSearchParams()
+    if (params.limit) search.set('limit', String(params.limit))
+    if (params.kind) search.set('kind', params.kind)
+    const qs = search.toString()
+    return request<SourceRecentRunsResponse>(`/sources/runs/recent${qs ? `?${qs}` : ''}`)
+  },
+  /** 来源试运行：真实小批量抓取（仅 active 来源可用，否则 409）。 */
+  trialSource: (sourceId: number, payload: SourceTrialPayload = {}) =>
+    request<{ ok: boolean; source_id: number; task_id?: number; status?: string; note?: string }>(
+      `/sources/${sourceId}/trial`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  /** 来源健康检查：逐入口真抓第 1 页。 */
+  healthSource: (sourceId: number) =>
+    request<{
+      ok: boolean
+      source_id: number
+      loaded?: boolean
+      entrypoints?: { name: string; url: string; reachable: boolean; http_status?: number; bytes?: number; items?: number; error?: string }[]
+    }>(`/sources/${sourceId}/health`, { method: 'POST' }),
+  /** 启用来源。没有通过验收时后端 409 拒绝；`force=true` 才会放行（会写进变更说明）。 */
+  enableSource: (sourceId: number, payload: { force?: boolean; change_note?: string } = {}) =>
+    request<SourceEnableResult>(`/sources/${sourceId}/enable`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  disableSource: (sourceId: number) =>
+    request<{ ok: boolean }>(`/sources/${sourceId}/disable`, { method: 'POST' }),
+  deleteSource: (sourceId: number) =>
+    request<{ ok: boolean }>(`/sources/${sourceId}`, { method: 'DELETE' }),
 }
 
 /**
- * 订阅任务进度。返回取消订阅的函数。
+ * SSE 传输层：两种进度流（抓取任务的 `/tasks/{id}/stream` 与导入作业的
+ * `/sources/import/{job}/stream`）用的是**同一个协议**（未命名事件 + 单行 JSON），
+ * 所以订阅逻辑只写这一份。
  *
- * 服务端用 `data: {"type": ...}` 的**未命名事件**，所以走 EventSource 的 onmessage；
- * 收到 `done` 或出错后主动关闭，避免 EventSource 自动重连。
+ * 服务端发的是 `data: {"type": ...}` 的**未命名事件**，因此走 EventSource 的 onmessage；
+ * `onEvent` 返回 `true` 表示已收到终态，这里主动关闭连接，避免 EventSource 自动重连
+ * （自动重连会重放全部历史，页面上的日志会翻倍）。
  */
-export function subscribeTaskStream(taskId: number, handlers: StreamHandlers): () => void {
-  const source = new EventSource(`${BASE}/tasks/${taskId}/stream`)
+function subscribeSse<E>(
+  path: string,
+  onEvent: (payload: E) => boolean | void,
+  onError: (message: string) => void,
+): () => void {
+  const source = new EventSource(`${BASE}${path}`)
   let closed = false
 
   const close = () => {
@@ -176,37 +260,124 @@ export function subscribeTaskStream(taskId: number, handlers: StreamHandlers): (
   }
 
   source.onmessage = (event: MessageEvent<string>) => {
-    let payload: StreamEvent
+    let payload: E
     try {
-      payload = JSON.parse(event.data) as StreamEvent
+      payload = JSON.parse(event.data) as E
     } catch {
       return
     }
-
-    switch (payload.type) {
-      case 'task':
-        handlers.onTask(payload.task)
-        break
-      case 'log':
-        handlers.onLog(payload.log)
-        break
-      case 'done':
-        // onDone 内部会同步最终快照，这里不再重复调用 onTask
-        handlers.onDone(payload.task)
-        close()
-        break
-      case 'error':
-        handlers.onError(payload.message)
-        close()
-        break
-    }
+    if (onEvent(payload) === true) close()
   }
 
   source.onerror = () => {
     if (closed) return
     close()
-    handlers.onError('进度连接中断，请刷新页面或重试')
+    onError('进度连接中断，请刷新页面或重试')
   }
 
   return close
+}
+
+export interface StreamHandlers {
+  onTask: (task: TaskDTO) => void
+  onLog: (log: LogLine) => void
+  onDone: (task: TaskDTO) => void
+  onError: (message: string) => void
+}
+
+/** 订阅抓取任务进度。返回取消订阅的函数。 */
+export function subscribeTaskStream(taskId: number, handlers: StreamHandlers): () => void {
+  return subscribeSse<StreamEvent>(
+    `/tasks/${taskId}/stream`,
+    (payload) => {
+      switch (payload.type) {
+        case 'task':
+          handlers.onTask(payload.task)
+          break
+        case 'log':
+          handlers.onLog(payload.log)
+          break
+        case 'done':
+          // onDone 内部会同步最终快照，这里不再重复调用 onTask
+          handlers.onDone(payload.task)
+          return true
+        case 'error':
+          handlers.onError(payload.message)
+          return true
+      }
+    },
+    handlers.onError,
+  )
+}
+
+export interface ImportStreamHandlers {
+  /** 作业快照变了（阶段推进 / 产物更新）：整份替换即可 */
+  onPhase: (job: SourceImportJob) => void
+  onLog: (log: SourceImportLog) => void
+  /** 作业进终态（done / error / cancelled）：`job` 是最终快照，报告就在里面 */
+  onDone: (job: SourceImportJob) => void
+  onError: (message: string) => void
+}
+
+/** 订阅导入作业进度。返回取消订阅的函数。 */
+export function subscribeImportStream(
+  jobId: string,
+  handlers: ImportStreamHandlers,
+): () => void {
+  return subscribeSse<ImportStreamEvent>(
+    `/sources/import/${jobId}/stream`,
+    (payload) => {
+      switch (payload.type) {
+        case 'phase':
+          handlers.onPhase(payload.job)
+          break
+        case 'log':
+          handlers.onLog(payload.log)
+          break
+        case 'done':
+          handlers.onDone(payload.job)
+          return true
+        case 'error':
+          handlers.onError(payload.message)
+          return true
+      }
+    },
+    handlers.onError,
+  )
+}
+
+export interface BatchStreamHandlers {
+  /** 批快照变了（子作业状态/队列位置推进）：整份替换即可 */
+  onPhase: (batch: SourceBatchSnapshot) => void
+  onLog: (jobId: string, log: SourceImportLog) => void
+  /** 全部子作业终态：`batch` 是最终快照 */
+  onDone: (batch: SourceBatchSnapshot) => void
+  onError: (message: string) => void
+}
+
+/** 订阅批量导入的聚合进度（单连接）。返回取消订阅的函数。 */
+export function subscribeBatchStream(
+  batchId: string,
+  handlers: BatchStreamHandlers,
+): () => void {
+  return subscribeSse<BatchStreamEvent>(
+    `/sources/import/batch/${batchId}/stream`,
+    (payload) => {
+      switch (payload.type) {
+        case 'phase':
+          handlers.onPhase(payload.batch)
+          break
+        case 'log':
+          handlers.onLog(payload.job_id, payload.log)
+          break
+        case 'done':
+          handlers.onDone(payload.batch)
+          return true
+        case 'error':
+          handlers.onError(payload.message)
+          return true
+      }
+    },
+    handlers.onError,
+  )
 }

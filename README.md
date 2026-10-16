@@ -44,6 +44,9 @@ PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之�
 | **跨任务成果库** | 按 source_url 去重沉淀，支持机构/文种/年份筛选                         |
 | **定时入库**     | 按分钟/小时/每日/每周自动抓取，跳过确认闸门直接入库                    |
 | **成本可观测**   | 可用页数、正文长度、并发数、检索预算均可按任务覆盖                     |
+| **网站来源接入** | 粘贴网址自动勘察 → 生成配置 → 试运行验收 → 注册启用，接入任意政策站点  |
+| **站内检索优先** | 带站点自带检索入口时，关键词/日期推给站点检索页执行，而非取回后过滤    |
+| **筛选能力声明** | 机读声明关键词/日期筛选在哪一层生效，前端如实标注召回边界              |
 
 ---
 
@@ -123,7 +126,7 @@ FastAPI（:8000）
 两条链路**互相独立**：
 
 - **A · 对话 Agent**（`app/agent/`）— 经典 ReAct 循环，工具来自本地 `@tool` + 启动时经 stdio 拉起的 MCP 工具；MCP 不可用时自动降级为仅本地工具。
-- **B · 抓取流水线**（`app/pipeline/`）— **确定性的两段式图**，中间夹一道人工确认闸门：第一段检索候选并落库后停住（`awaiting_confirmation`），用户勾选/剔除后再跑第二段逐篇提取。
+- **B · 抓取流水线**（`app/pipeline/`）— **确定性的两段式图**，中间夹一道人工确认闸门：第一段检索候选并落库后停住（`awaiting_confirmation`），用户勾选/剔除后再跑第二段逐篇提取。检索候选可来自 gov.cn（MCP），也可来自任意已接入的**配置化网站来源**（`app/sources/`，栏目列表页或站点自带检索页）。
 
 ---
 
@@ -230,13 +233,17 @@ policyharvester/
 ├── start.sh / start.bat     # 一键启动 / 自检 / 停止
 ├── .env.example             # 环境变量模板
 ├── PLAN.md / TODO.md        # 实施计划 / 进度清单
+├── CLAUDE.md                # AI 编码助手的入口（索引 + 硬性规则）
+├── docs/                    # 项目文档 wiki（架构 / 指南 / 进度）
 ├── database/                # PostgreSQL 建库 / 建表 / 种子数据
 ├── server/                  # 后端：FastAPI + LangGraph + psycopg3
 │   └── app/
-│       ├── agent/           #   A. ReAct 对话 Agent
-│       ├── pipeline/        #   B. 抓取流水线
+│       ├── agent/           #   A. ReAct 对话 Agent（+ onboarding_tools）
+│       ├── pipeline/        #   B. 抓取 / 提取流水线
+│       ├── sources/         #   C. 配置化来源接入层
+│       ├── services/        #   接入编排（onboarding / source_import）
 │       ├── db/              #   连接池 + 全部 SQL
-│       ├── api/routes/      #   health / agent / tasks / policies / filters / config / schedules
+│       ├── api/routes/      #   health / agent / tasks / policies / filters / config / schedules / sources
 │       └── scheduler.py     #   定时入库轮询循环
 ├── tools/                   # China-Central-Policy-MCP（已 vendored）
 └── web/                     # 前端：Vue 3 + TypeScript + Vite
@@ -261,13 +268,19 @@ policyharvester/
 
 ## 文档
 
-| 文档               | 内容                                           |
-| ------------------ | ---------------------------------------------- |
-| PLAN.md            | 打通三端的整体实施计划                         |
-| TODO.md            | 逐阶段任务清单与进度日志                       |
-| CLAUDE.md          | 面向 AI 编码助手的深度架构说明（踩坑记录最全） |
-| server/README.md   | 后端 API 字段、进度语义                        |
-| database/README.md | 表结构设计                                     |
+深度文档已 wiki 化，入口是 **[docs/README.md](docs/README.md)**（含完整文档地图）。
+
+| 文档                                         | 内容                                                          |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| [docs/README.md](docs/README.md)             | 文档 wiki 首页 / 索引 / 维护规则                              |
+| [docs/architecture/](docs/architecture/)     | 架构说明：总览、对话 Agent、流水线、gov.cn 检索踩坑、来源接入 |
+| [docs/guides/](docs/guides/)                 | 命令与配置、构建/运行约定、扩展指引与镜像清单                 |
+| [docs/progress/log.md](docs/progress/log.md) | 进度日志明细（逐条踩坑与验收证据）                            |
+| [PLAN.md](PLAN.md)                           | 打通三端的整体实施计划                                        |
+| [TODO.md](TODO.md)                           | 逐阶段任务清单与状态（明细日志见 docs/progress/log.md）       |
+| [CLAUDE.md](CLAUDE.md)                       | 面向 AI 编码助手的入口（索引 + 硬性规则）                     |
+| [server/README.md](server/README.md)         | 后端 API 字段、进度语义                                       |
+| [database/README.md](database/README.md)     | 表结构设计                                                    |
 
 ---
 - 作者声明：本项目仅供学习、教学与学术研究使用。 开源的目的在于帮助有需要的分析师与研究者更高效地开展政策信息分析与复现工作。

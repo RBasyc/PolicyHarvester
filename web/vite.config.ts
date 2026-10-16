@@ -3,6 +3,8 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // SPA 回退（dev 下刷新 /library/123 不 404）；prod 用 hash 模式，本就无需回退
+  appType: 'spa',
   plugins: [vue()],
   server: {
     proxy: {

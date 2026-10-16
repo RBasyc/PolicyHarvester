@@ -7,13 +7,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.sources import get_default
+
 TaskStatus = Literal["pending", "running", "awaiting_confirmation", "completed", "failed"]
 ContentType = Literal["policy", "notice", "all"]  # 已弃用：对抓取无过滤作用，仅遗留列保留
 ScheduleType = Literal["manual", "daily", "weekly"]  # 已弃用：demo 不执行定时，仅遗留列保留
 LogTone = Literal["info", "success", "active"]
 
-# 文种（gov.cn 检索 pcodeJiguan 参数的可选值）
-DOC_TYPES: tuple[str, ...] = ("国令", "国发", "国函", "国办发", "国办函")
+# 文种白名单来自默认抓取源（gov.cn 检索 pcodeJiguan 参数的可选值），注册表导入时求值
+DOC_TYPES: tuple[str, ...] = get_default().doc_types
 
 # `started_at` 距今超过这个秒数就不再外推剩余时间（老任务/演示数据上外推没有意义）
 _MAX_ELAPSED_FOR_ETA = 6 * 3600
@@ -225,12 +227,41 @@ class FacetOption(BaseModel):
     count: int
 
 
+class FacetSupports(BaseModel):
+    """这个**抓取源**支持哪些筛选项——前端据此隐藏不支持的筛选项。
+
+    不隐藏的后果是**静默的空结果**：配置化来源（`HtmlListSource`）没有「文种」概念，
+    选了文种服务端就把所有条目都过滤掉，用户看到「没有相关内容」却看不出为什么——
+    这种 bug 极难排查，所以在来源这一层就把「有没有这个筛选项」说清楚。
+
+    `keyword_server_side` / `date_server_side` 是**另一类**信息：这些筛选项不是「没有」，
+    而是「有，但只在取回来的那几页里生效」。栏目列表页给不了检索能力，关键词只能逐条比对
+    翻到的标题、日期只能逐条比对列表页上那个日期，召回上限 = 翻页深度。前端必须说出来，
+    否则用户会以为「筛过了 = 筛全了」——那是这个仓里最贵的一类误解。
+    """
+
+    agencies: bool = True
+    doc_types: bool = True
+    keyword_server_side: bool = True
+    date_server_side: bool = True
+    note: str | None = None
+
+
 class FacetList(BaseModel):
-    """筛选器可选值：优先实时 facet（带条数），失败时回退静态名单。"""
+    """筛选器可选值：优先实时 facet（带条数），失败时回退静态名单。
+
+    `source` 是**数据来源**（`live` = gov.cn 实时统计 / `fallback` = 静态兜底名单），
+    与请求参数里的 `source`（抓取源 label）不是一回事。
+
+    配置化来源走另一条口径（见 `filters.get_facets`）：`agencies` = 该来源的入口名
+    （它同时是「发布机构」的匹配值），`doc_types` 为空，`supports.doc_types=False`。
+    """
 
     agencies: list[FacetOption]
     doc_types: list[FacetOption]
     source: Literal["live", "fallback"]
+    supports: FacetSupports = FacetSupports()
+    source_label: str | None = None
 
 
 class TaskCreated(BaseModel):

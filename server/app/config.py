@@ -100,6 +100,23 @@ class Settings(BaseSettings):
     judge_keep_choice: str = "入库"  # criteria[0]：判到它 → 正常入库
     judge_drop_choice: str = "不入库"  # criteria[1]：判到它 → 打「不建议入库」标记
 
+    # --- 网站来源接入（Phase 14）：受控抓取（app/sources/net.py）与来源勘察 ---
+    # 这组走 Settings（进程启动时读取），改 .env 需重启（与 PIPELINE_MODELS 的热读不同）。
+    source_fetch_timeout: float = 20.0  # 单次 HTTP 请求超时秒数（含详情页与附件）
+    source_fetch_max_bytes: int = 4_000_000  # 单个响应体字节上限，超出截断（防超大文件撑爆内存）
+    source_fetch_max_redirects: int = 5  # 重定向跳数上限（每一跳都要过一遍安全复验）
+    source_fetch_concurrency: int = 4  # 全局同时在飞的请求数上限（信号量）
+    source_request_interval_ms: int = 800  # 同一主机两次请求的最小间隔（礼貌抓取；0 = 不限）
+    source_respect_robots: bool = True  # 是否遵守 robots.txt（用户要求遵守站点访问许可）
+    source_user_agent: str = "AgentDemo-SourceOnboarding/1.0 (+policy ingestion; contact: local demo)"
+    # 允许访问私网 / 本机地址。**默认 false**：抓取目标来自用户提交的 URL，必须防 SSRF。
+    # 只在本机联调或确需抓受信内网站点时打开（会同时影响 check_url 与逐跳复验）。
+    source_allow_private_hosts: bool = False
+    source_list_cache_ttl: float = 300.0  # 列表页缓存存活秒数（同一次检索内避免重复取同一页）
+    # 试运行 / 附件归档产物的落盘目录（相对仓库根；留空 = 不落盘，只在库里记 URL 与哈希）
+    source_artifact_dir: str = "server/.artifacts"
+    source_max_artifacts_per_run: int = 20  # 单次试运行最多归档多少个附件（控体积与时长）
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -568,19 +568,29 @@ async def mark_extraction_failed(policy_id: int, error: str) -> None:
 
 # 成果库「同一原文只出现一次」的实现：DISTINCT ON (source_url) 按 url 去重，
 # 同一篇被多个任务抓到时保留最新一行（id 最大），重新执行任务不会覆盖/重复入库。
-# 文种 policy_document 没有列，由文号前缀推导（国办发/国办函 优先于 国发/国函，再 国令）。
-_LIBRARY_LATEST_CTE = """
+#
+# 文种 policy_document 没有列，由文号前缀推导，两条腿：
+#   ① 通用——取文号里**第一个括号符之前**的部分（国发〔2026〕3号 → 国发，粤府〔2026〕1号 → 粤府）。
+#      非 gov.cn 来源用的是自己的地方文号，只有这条腿推得出文种；前缀限 1–6 字，
+#      挡住「关于xxx的通知〔2026〕3号」这种把整串当文种的情况。
+#   ② 兜底——无括号的旧形态沿用 gov.cn 名单（文号写作「国令第761号」这类）。
+# 前缀 r 是给正则里的 \[ 用的：PostgreSQL 的括号表达式需要反斜杠把 [ 转义成字面量，
+# 而 Python 非 raw 字符串里的 \[ 会触发无效转义警告。
+_LIBRARY_LATEST_CTE = r"""
 WITH latest AS (
     SELECT DISTINCT ON (p.source_url)
-        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.source_url, p.created_at,
+        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.source_url, p.source_name, p.created_at,
         e.extracted_at, e.info_summary,
         (SELECT COUNT(*) FROM fact_item fi WHERE fi.extraction_id = e.id) AS fact_count,
         COALESCE(jsonb_array_length(e.info_points), 0) AS point_count,
-        CASE WHEN starts_with(p.doc_no, '国办发') THEN '国办发'
-             WHEN starts_with(p.doc_no, '国办函') THEN '国办函'
-             WHEN starts_with(p.doc_no, '国发')  THEN '国发'
-             WHEN starts_with(p.doc_no, '国函')  THEN '国函'
-             WHEN starts_with(p.doc_no, '国令')  THEN '国令'
+        CASE
+            WHEN p.doc_no ~ '^[^〔\[（【]{1,6}[〔\[（【]'
+                THEN btrim(regexp_replace(p.doc_no, '[〔\[（【].*$', ''))
+            WHEN starts_with(p.doc_no, '国办发') THEN '国办发'
+            WHEN starts_with(p.doc_no, '国办函') THEN '国办函'
+            WHEN starts_with(p.doc_no, '国发')  THEN '国发'
+            WHEN starts_with(p.doc_no, '国函')  THEN '国函'
+            WHEN starts_with(p.doc_no, '国令')  THEN '国令'
         END AS doc_type
     FROM policy_document p
     JOIN extraction e ON e.policy_id = p.id
@@ -908,3 +918,409 @@ async def fetch_library_urls() -> set[str]:
                 """
             )
             return {row["source_url"] for row in await cur.fetchall()}
+
+
+# ---------- Phase 14：网站来源接入（来源注册表 / 变更历史 / 接入记录 / 原始证据） ----------
+
+
+async def list_content_sources(status: str | None = None) -> list[Row]:
+    """来源列表；`status` 给定则按状态过滤（lifespan 只装载 active）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            if status:
+                await cur.execute(
+                    """
+                    SELECT * FROM content_source
+                    WHERE status = %s
+                    ORDER BY level, label
+                    """,
+                    (status,),
+                )
+            else:
+                await cur.execute("SELECT * FROM content_source ORDER BY level, label")
+            return list(await cur.fetchall())
+
+
+async def fetch_content_source(source_id: int) -> Row | None:
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT * FROM content_source WHERE id = %s", (source_id,))
+            return await cur.fetchone()
+
+
+async def fetch_content_source_by_key(key: str) -> Row | None:
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT * FROM content_source WHERE key = %s", (key,))
+            return await cur.fetchone()
+
+
+async def save_content_source(
+    *,
+    config: dict[str, Any],
+    label: str,
+    level: str,
+    organization: str | None,
+    source_type: str,
+    engine: str,
+    status: str,
+    fingerprint: str,
+    entrypoint_count: int,
+    notes: str | None,
+    change_note: str | None = None,
+    changed_by: str = "agent",
+) -> dict[str, Any]:
+    """新建或更新一份来源配置，返回 `{"row", "created", "version_bumped"}`。
+
+    **版本只在配置语义真的变了（fingerprint 不同）时才 +1**：重复注册同一份配置是幂等的，
+    否则每次「再点一次注册」都刷一条无意义的版本与变更记录，历史就没法看了。
+    写 `content_source` 与写 `content_source_revision` 在**同一事务**里，避免配置与历史脱节。
+    """
+    payload = json.dumps(config, ensure_ascii=False)
+    async with get_pool().connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT id, version, fingerprint FROM content_source WHERE key = %s",
+                    (config.get("key"),),
+                )
+                existing = await cur.fetchone()
+
+                if existing is None:
+                    await cur.execute(
+                        """
+                        INSERT INTO content_source
+                            (key, label, level, organization, source_type, engine, status,
+                             version, config, fingerprint, entrypoint_count, notes, activated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s::jsonb, %s, %s, %s,
+                                CASE WHEN %s = 'active' THEN now() END)
+                        RETURNING *
+                        """,
+                        (
+                            config.get("key"), label, level, organization, source_type, engine,
+                            status, payload, fingerprint, entrypoint_count, notes, status,
+                        ),
+                    )
+                    row = await cur.fetchone()
+                    await _insert_revision(
+                        cur, row["id"], 1, fingerprint, payload, change_note, changed_by
+                    )
+                    return {"row": row, "created": True, "version_bumped": True}
+
+                bumped = existing["fingerprint"] != fingerprint
+                version = int(existing["version"]) + 1 if bumped else int(existing["version"])
+                await cur.execute(
+                    """
+                    UPDATE content_source
+                    SET label = %s, level = %s, organization = %s, source_type = %s,
+                        engine = %s, status = %s, version = %s, config = %s::jsonb,
+                        fingerprint = %s, entrypoint_count = %s, notes = %s,
+                        activated_at = CASE
+                            WHEN %s = 'active' AND activated_at IS NULL THEN now()
+                            ELSE activated_at END
+                    WHERE key = %s
+                    RETURNING *
+                    """,
+                    (
+                        label, level, organization, source_type, engine, status, version,
+                        payload, fingerprint, entrypoint_count, notes, status, config.get("key"),
+                    ),
+                )
+                row = await cur.fetchone()
+                if bumped:
+                    await _insert_revision(
+                        cur, row["id"], version, fingerprint, payload, change_note, changed_by
+                    )
+                return {"row": row, "created": False, "version_bumped": bumped}
+
+
+async def _insert_revision(
+    cur: Any,
+    source_id: int,
+    version: int,
+    fingerprint: str,
+    payload: str,
+    change_note: str | None,
+    changed_by: str,
+) -> None:
+    """写一条变更历史（调用方已开事务，这里只发 SQL）。"""
+    await cur.execute(
+        """
+        INSERT INTO content_source_revision
+            (source_id, version, fingerprint, config, change_note, changed_by)
+        VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+        ON CONFLICT (source_id, version) DO NOTHING
+        """,
+        (source_id, version, fingerprint, payload, change_note, changed_by),
+    )
+
+
+async def list_source_revisions(source_id: int) -> list[Row]:
+    """某来源的变更历史（新版本在前）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT id, source_id, version, fingerprint, change_note, changed_by, created_at
+                FROM content_source_revision
+                WHERE source_id = %s
+                ORDER BY version DESC
+                """,
+                (source_id,),
+            )
+            return list(await cur.fetchall())
+
+
+async def set_content_source_status(source_id: int, status: str) -> Row | None:
+    """改来源状态（启用 / 停用）；首次转 active 记 activated_at。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE content_source
+                SET status = %s,
+                    activated_at = CASE
+                        WHEN %s = 'active' AND activated_at IS NULL THEN now()
+                        ELSE activated_at END
+                WHERE id = %s
+                RETURNING *
+                """,
+                (status, status, source_id),
+            )
+            return await cur.fetchone()
+
+
+async def delete_content_source(source_id: int) -> bool:
+    """删除来源（变更历史随 FK 级联；已抓到的政策与原始证据保留，历史可追溯）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM content_source WHERE id = %s RETURNING id", (source_id,))
+            return await cur.fetchone() is not None
+
+
+async def create_onboarding_run(
+    *,
+    kind: str,
+    source_key: str | None = None,
+    source_id: int | None = None,
+    input: dict[str, Any] | None = None,
+) -> int:
+    """开一条接入执行记录（status=running），返回 run_id。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO source_onboarding_run (kind, source_key, source_id, input)
+                VALUES (%s, %s, %s, %s::jsonb)
+                RETURNING id
+                """,
+                (kind, source_key, source_id, json.dumps(input or {}, ensure_ascii=False)),
+            )
+            row = await cur.fetchone()
+            return int(row["id"])
+
+
+async def finish_onboarding_run(
+    run_id: int,
+    *,
+    status: str,
+    summary: dict[str, Any] | None = None,
+    report: dict[str, Any] | None = None,
+    failure_reason: str | None = None,
+) -> None:
+    """收尾一条接入执行记录（写结论、完整报告与失败原因）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE source_onboarding_run
+                SET status = %s, summary = %s::jsonb, report = %s::jsonb,
+                    failure_reason = %s, finished_at = now()
+                WHERE id = %s
+                """,
+                (
+                    status,
+                    json.dumps(summary or {}, ensure_ascii=False),
+                    json.dumps(report or {}, ensure_ascii=False),
+                    failure_reason,
+                    run_id,
+                ),
+            )
+
+
+async def fetch_onboarding_run(run_id: int) -> Row | None:
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT * FROM source_onboarding_run WHERE id = %s", (run_id,))
+            return await cur.fetchone()
+
+
+async def list_onboarding_runs(
+    *, source_key: str | None = None, kinds: list[str] | None = None, limit: int = 20
+) -> list[Row]:
+    """接入执行记录（按时间倒序）；不传 source_key 时返回全部来源的最近若干条。
+
+    `kinds` 过滤记录类型（inspect/dry_run/…）；跨来源「最近记录」视图用它做
+    kind 筛选（Phase 16）。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            conditions: list[str] = []
+            params: list[Any] = []
+            if source_key:
+                conditions.append("source_key = %s")
+                params.append(source_key)
+            if kinds:
+                conditions.append("kind = ANY(%s)")
+                params.append(kinds)
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            await cur.execute(
+                f"SELECT * FROM source_onboarding_run {where} "
+                "ORDER BY started_at DESC LIMIT %s",
+                (*params, limit),
+            )
+            return list(await cur.fetchall())
+
+
+# ---------- 验收凭据：通过的试运行 ----------
+
+# 「通过的试运行」的**唯一**判定口径。启用闸门（`onboarding._latest_passing_run`）与
+# 列表页的 `verified` 标志（下面那个 list_*）都必须拼这一条 SQL：两处各写一份就会漂，
+# 而漂出来的分歧正是 2026-10-15 用户报的「手动停用的项目无法再次启用」——
+# 列表页按指纹在**全表**里找、显示「已验收」，闸门却只在「该来源最近 20 条记录」里找，
+# 凭据被后来的勘察/失败试运行挤出窗口后，两边就各说各话（按钮说能启用，点了被拒）。
+_PASSING_DRY_RUN_SQL = "kind = 'dry_run' AND status = 'passed' AND report IS NOT NULL"
+
+
+async def fetch_latest_passing_run(
+    *, fingerprint: str | None = None, source_key: str | None = None
+) -> Row | None:
+    """最近一条**通过的试运行**（= 验收凭据），按时间倒序取第一条；没有则 None。
+
+    两个条件都可选，但用途不同，语义也不同：
+
+    - `fingerprint`：**启用闸门用的那个**。指纹是配置内容的哈希
+      （`SourceConfig.config_fingerprint`），所以「指纹一致」就等于「这份配置被真跑过、
+      并且通过了」——与它多久以前跑的无、与同一来源之后又写了多少条记录无关。
+      **这里绝不能加条数窗口**（`ORDER BY … LIMIT 20` 那种写法）：凭据是既成事实，
+      不该被后来的记录挤出视野，否则「已验收」会随时间自己退化成「没验收」。
+    - `source_key`：只为**把失败原因说清楚**（不传 fingerprint = 该来源到底验收过没有）。
+      用来区分「配置改过了」与「压根没跑过」——这两种情况要用户做的事不一样。
+    """
+    conditions = [_PASSING_DRY_RUN_SQL]
+    params: list[Any] = []
+    if fingerprint is not None:
+        conditions.append("report->>'fingerprint' = %s")
+        params.append(fingerprint)
+    if source_key is not None:
+        conditions.append("source_key = %s")
+        params.append(source_key)
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"SELECT * FROM source_onboarding_run WHERE {' AND '.join(conditions)} "
+                "ORDER BY started_at DESC LIMIT 1",
+                tuple(params),
+            )
+            return await cur.fetchone()
+
+
+async def list_passing_dry_run_fingerprints() -> set[str]:
+    """全部「通过的试运行」报告里的配置指纹集合（列表页 `verified` 标志的批量口径）。
+
+    与 `fetch_latest_passing_run` 共用 `_PASSING_DRY_RUN_SQL` 那一条判定口径，只是这里
+    set 化、给列表页一次算完、消 N+1。**判定规则只许住在这两处**（都靠那个常量），
+    别处不许再抄——抄一份就多一份「列表说已验收、闸门说没有」的机会。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"""
+                SELECT DISTINCT report->>'fingerprint' AS fingerprint
+                FROM source_onboarding_run
+                WHERE {_PASSING_DRY_RUN_SQL}
+                """
+            )
+            return {r["fingerprint"] for r in await cur.fetchall() if r.get("fingerprint")}
+
+
+async def delete_onboarding_runs(source_keys: list[str]) -> int:
+    """删掉这些 key 的接入记录，返回删除条数——**只给测试收尾用**。
+
+    用例建的来源行被删掉后，附着在它上面的勘察/试运行记录就成了没有来源的孤儿，
+    留着只会在「接入记录」里刷屏。生产数据上没有任何代码该调它：**验收凭据就住在
+    这些行里**，删掉等于把「这份配置验收过」这件事从历史里抹了。
+    """
+    if not source_keys:
+        return 0
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM source_onboarding_run WHERE source_key = ANY(%s) RETURNING id",
+                (list(source_keys),),
+            )
+            return len(await cur.fetchall())
+
+
+async def insert_source_artifact(
+    *,
+    kind: str,
+    url: str,
+    run_id: int | None = None,
+    source_key: str | None = None,
+    task_id: int | None = None,
+    policy_id: int | None = None,
+    final_url: str | None = None,
+    filename: str | None = None,
+    ext: str | None = None,
+    content_type: str | None = None,
+    bytes_len: int | None = None,
+    sha256: str | None = None,
+    saved_path: str | None = None,
+    status: str = "ok",
+    error: str | None = None,
+) -> int:
+    """登记一条原始证据（页面 / 正文 / 附件），返回 artifact_id。
+
+    登记≠落盘：`saved_path` 为空表示只记了元信息（例如试运行阶段只做发现与计量）。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO source_artifact
+                    (run_id, source_key, task_id, policy_id, kind, url, final_url, filename,
+                     ext, content_type, bytes_len, sha256, saved_path, status, error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    run_id, source_key, task_id, policy_id, kind, url, final_url, filename,
+                    ext, content_type, bytes_len, sha256, saved_path, status, error,
+                ),
+            )
+            row = await cur.fetchone()
+            return int(row["id"])
+
+
+async def list_source_artifacts(
+    *, run_id: int | None = None, task_id: int | None = None, limit: int = 100
+) -> list[Row]:
+    """原始证据列表（按 run 或 task 过滤）。"""
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            if run_id is not None:
+                await cur.execute(
+                    "SELECT * FROM source_artifact WHERE run_id = %s ORDER BY id LIMIT %s",
+                    (run_id, limit),
+                )
+            elif task_id is not None:
+                await cur.execute(
+                    "SELECT * FROM source_artifact WHERE task_id = %s ORDER BY id LIMIT %s",
+                    (task_id, limit),
+                )
+            else:
+                await cur.execute(
+                    "SELECT * FROM source_artifact ORDER BY id DESC LIMIT %s", (limit,)
+                )
+            return list(await cur.fetchall())

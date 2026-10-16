@@ -41,6 +41,26 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Phase 14：网站来源接入
+-- 来源层级：与前端「来源」列表的分类口径一致（国家级 / 省 / 市 / 县 / 其他）。
+DO $$ BEGIN
+    CREATE TYPE source_level AS ENUM ('national', 'province', 'city', 'county', 'other');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 来源状态机：draft（仅试运行）→ validated（试运行通过）→ active（已注册、抓取任务可选）
+--                                     ↘ disabled（人工停用，可再启用）
+DO $$ BEGIN
+    CREATE TYPE content_source_status AS ENUM ('draft', 'validated', 'active', 'disabled');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 接入执行状态：running（进行中）/ passed（通过）/ failed（失败）/ blocked（受阻，需补能力）
+DO $$ BEGIN
+    CREATE TYPE onboarding_status AS ENUM ('running', 'passed', 'failed', 'blocked');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- ---------- 表 ----------
 
 -- 抓取任务（对应前端「抓取配置」+「抓取进度」面板）
@@ -197,6 +217,81 @@ ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS schedule_job_id BIGINT REFERENCE
 -- 补丁：schedule_job 补「提取模型」覆盖列（老库已建过 schedule_job 时 CREATE TABLE 不会补列）
 ALTER TABLE schedule_job ADD COLUMN IF NOT EXISTS pipeline_model TEXT;
 
+-- ---------- Phase 14：网站来源接入 ----------
+
+-- 来源注册表：一份 SourceConfig 一行（config 列存完整 JSONB）。
+-- 抓取任务通过 crawl_task.source（展示名 label）解析到来源，因此 label 必须唯一。
+CREATE TABLE IF NOT EXISTS content_source (
+    id               BIGSERIAL PRIMARY KEY,
+    key              TEXT NOT NULL UNIQUE,      -- 稳定标识（SourceConfig.key，配置化来源的注册表键）
+    label            TEXT NOT NULL UNIQUE,      -- 展示名；写进 crawl_task.source，按此解析适配器
+    level            source_level NOT NULL DEFAULT 'other',
+    organization     TEXT,
+    source_type      TEXT NOT NULL DEFAULT 'government_portal',  -- government_portal / open_api / rss / mixed
+    engine           TEXT NOT NULL DEFAULT 'html_list',
+    status           content_source_status NOT NULL DEFAULT 'draft',
+    version          INTEGER NOT NULL DEFAULT 1,
+    config           JSONB NOT NULL,            -- 完整 SourceConfig（app/sources/config.py）
+    fingerprint      TEXT,                      -- SourceConfig.config_fingerprint()：判断内容是否真变了
+    entrypoint_count INTEGER NOT NULL DEFAULT 0, -- 冗余字段：来源列表页免解析 JSONB
+    notes            TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    activated_at     TIMESTAMPTZ                -- 首次置为 active 的时间（正式启用留痕）
+);
+
+-- 配置变更历史：每次注册 / 更新写一条，支撑「可追溯、可重跑」（哪一版、谁改的、改了什么）。
+CREATE TABLE IF NOT EXISTS content_source_revision (
+    id          BIGSERIAL PRIMARY KEY,
+    source_id   BIGINT NOT NULL REFERENCES content_source(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    fingerprint TEXT,
+    config      JSONB NOT NULL,                 -- 该版本的完整配置快照（对比两版差异用）
+    change_note TEXT,
+    changed_by  TEXT,                           -- 'agent' / 'user' / 'system'
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source_id, version)
+);
+
+-- 接入执行记录：勘察 / 取样 / 试运行 / 验收各留一条，验收报告存 report。
+-- 与 crawl_task 的区别：这里记的是**接入过程**（能不能接、接得对不对），
+-- crawl_task 记的是**生产抓取**（这次抓了哪些政策）。
+CREATE TABLE IF NOT EXISTS source_onboarding_run (
+    id             BIGSERIAL PRIMARY KEY,
+    source_id      BIGINT REFERENCES content_source(id) ON DELETE SET NULL,  -- 勘察阶段可能还没有来源行
+    source_key     TEXT,                        -- 冗余：来源行删除后仍可追溯这次接入针对哪个 key
+    kind           TEXT NOT NULL,               -- inspect / discover / sample / analyze / dry_run / validate
+    status         onboarding_status NOT NULL DEFAULT 'running',
+    input          JSONB,                       -- 本次输入（URL、目标、样例范围等）
+    summary        JSONB,                       -- 阶段结论（精简，给对话回复用）
+    report         JSONB,                       -- 完整报告（勘察报告 / 验收报告）
+    failure_reason TEXT,
+    started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at    TIMESTAMPTZ
+);
+
+-- 原始证据归档：抓回的页面 / 正文 / 附件都记一条（含 sha256 与落盘路径），
+-- 满足「原始文本与文件、来源标识、原始 URL、抓取时间、元数据、版本信息」的留存要求。
+CREATE TABLE IF NOT EXISTS source_artifact (
+    id           BIGSERIAL PRIMARY KEY,
+    run_id       BIGINT REFERENCES source_onboarding_run(id) ON DELETE SET NULL,
+    source_key   TEXT,
+    task_id      BIGINT REFERENCES crawl_task(id) ON DELETE SET NULL,   -- 生产抓取归属的任务（试运行为 NULL）
+    policy_id    BIGINT REFERENCES policy_document(id) ON DELETE CASCADE, -- 关联到落库的政策行（可 null）
+    kind         TEXT NOT NULL,                 -- page / fulltext / attachment
+    url          TEXT NOT NULL,
+    final_url    TEXT,                          -- 重定向后的地址
+    filename     TEXT,
+    ext          TEXT,
+    content_type TEXT,
+    bytes_len    INTEGER,
+    sha256       TEXT,                          -- 内容哈希：重复内容检测与完整性校验
+    saved_path   TEXT,                          -- 落盘相对路径；NULL = 只登记未落盘
+    status       TEXT NOT NULL DEFAULT 'ok',    -- ok / truncated / failed
+    error        TEXT,
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ---------- 索引 ----------
 
 CREATE INDEX IF NOT EXISTS idx_policy_document_task  ON policy_document(task_id);
@@ -208,6 +303,17 @@ CREATE INDEX IF NOT EXISTS idx_schedule_job_due      ON schedule_job(enabled, ne
 CREATE INDEX IF NOT EXISTS idx_policy_document_url   ON policy_document(task_id, source_url);
 -- Phase 13：v_policy_results.in_library 的相关子查询只按 source_url 探测（前导列是 task_id 用不上）
 CREATE INDEX IF NOT EXISTS idx_policy_document_url_only ON policy_document(source_url);
+-- Phase 14：来源注册表按状态装载（lifespan 只取 active），变更历史与接入记录按来源倒序翻
+CREATE INDEX IF NOT EXISTS idx_content_source_status    ON content_source(status);
+CREATE INDEX IF NOT EXISTS idx_source_revision_source   ON content_source_revision(source_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_onboarding_run_source    ON source_onboarding_run(source_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_onboarding_run_key       ON source_onboarding_run(source_key, started_at DESC);
+-- 验收凭据（启用闸门 + 列表页 verified 标志）按报告里的指纹在**全表**里找通过试运行，
+-- 不带条数窗口（见 repositories._PASSING_DRY_RUN_SQL）：这条部分索引专门服务那次查询
+CREATE INDEX IF NOT EXISTS idx_onboarding_run_passing_fp ON source_onboarding_run((report->>'fingerprint'))
+    WHERE kind = 'dry_run' AND status = 'passed';
+CREATE INDEX IF NOT EXISTS idx_source_artifact_run      ON source_artifact(run_id);
+CREATE INDEX IF NOT EXISTS idx_source_artifact_url      ON source_artifact(url);
 
 -- ---------- updated_at 自动维护 ----------
 
@@ -230,6 +336,10 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_schedule_job_updated') THEN
         CREATE TRIGGER trg_schedule_job_updated BEFORE UPDATE ON schedule_job
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_content_source_updated') THEN
+        CREATE TRIGGER trg_content_source_updated BEFORE UPDATE ON content_source
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
     END IF;
 END $$;

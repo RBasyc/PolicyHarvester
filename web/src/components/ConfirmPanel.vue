@@ -188,7 +188,7 @@ async function onConfirm(): Promise<void> {
 
     <footer class="confirm-foot">
       <p class="foot-note">
-        日期取自检索结果，可能与原文实际日期有出入（提取时会用原文回填）。
+        此处日期为检索结果给的<strong>发布日期</strong>，入库后保持不变；原文里的成文日期是另一个字段，在成果库详情页单独展示。
       </p>
       <div class="foot-actions">
         <button
