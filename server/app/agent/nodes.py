@@ -9,8 +9,7 @@ from langchain_core.messages import SystemMessage
 from app.agent.state import AgentState
 from app.agent.tools import all_tools
 from app.config import get_settings
-
-SYSTEM_PROMPT = "你是一个乐于助人的 AI 助手。"
+from app.prompts import load_prompt
 
 
 def _build_llm(
@@ -53,6 +52,7 @@ def _build_llm(
 async def call_model(state: AgentState) -> dict:
     """agent 节点：携带工具定义调用模型，返回模型回复。"""
     llm = _build_llm().bind_tools(all_tools())
-    messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
+    # 提示词**在调用时**从 prompts/chat.md 读（不进图、不进缓存）：改完即刻生效，不用重启
+    messages = [SystemMessage(content=load_prompt("chat")), *state["messages"]]
     response = await llm.ainvoke(messages)
     return {"messages": [response]}

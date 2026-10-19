@@ -6,16 +6,17 @@ import json
 import logging
 import os
 from functools import lru_cache
-from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.prompts import REPO_ROOT
 
 logger = logging.getLogger(__name__)
 
-# 仓库根目录（server/app/config.py -> 上三级）
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# 仓库根目录：真身在 app/prompts.py（提示词目录也要用它），这里保留私有别名，少改下面的调用点
+_REPO_ROOT = REPO_ROOT
 
 # 真实 shell 环境的快照（**必须**在 load_dotenv 之前拍）：load_dotenv 不覆盖已有变量，
 # 启动后 os.environ 里已分不清「用户在 shell 里设的」和「从 .env 灌进来的」；
@@ -93,10 +94,8 @@ class Settings(BaseSettings):
     # 共 16 组合）：「疑问句+枚举」× state=仅标题 8/9，且唯一误判方向安全（函被判入库，
     # 只是在确认面板多一行）；旧的「文种直判」对长标题/含函文号只有 4/9——文号里的
     # 「函」会把模型带偏。该 RL 模型对措辞极敏感，改前先跑一遍矩阵，别凭语感改。
-    judge_instructions: str = (
-        "这篇文件属于哪一类？批复、函、人事任免、公告、会议纪要等事务性或礼节性文件"
-        "选「不入库」；条例、办法、规定、规划、意见等具有长期执行效力的政策文件选「入库」。"
-    )
+    # 默认文案现在住在 prompts/judge.md（留空 = 用它）；这里填了才覆盖它。
+    judge_instructions: str = ""
     judge_keep_choice: str = "入库"  # criteria[0]：判到它 → 正常入库
     judge_drop_choice: str = "不入库"  # criteria[1]：判到它 → 打「不建议入库」标记
 

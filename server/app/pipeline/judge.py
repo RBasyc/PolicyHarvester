@@ -30,6 +30,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,10 @@ async def _judge_one(
         "questions": {
             "q1": {
                 "type": "choice",
-                "instructions": instructions or settings.judge_instructions,
+                # 优先级：调用方覆盖 > .env 的 JUDGE_INSTRUCTIONS > prompts/judge.md
+                "instructions": instructions
+                or settings.judge_instructions
+                or load_prompt("judge"),
                 "criteria": [settings.judge_keep_choice, settings.judge_drop_choice],
             }
         },

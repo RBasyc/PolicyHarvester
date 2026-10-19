@@ -19,13 +19,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import date
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.agent.nodes import _build_llm
 from app.config import ModelRegistryEntry, get_settings, resolve_model_api_key, resolve_model_entry
+from app.prompts import load_prompt
+from app.sources.util import parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -75,19 +79,19 @@ class ExtractionPayload(BaseModel):
     knowledge: KnowledgePayload
 
 
-SYSTEM_PROMPT = """你是政策文件结构化提取助手。用户会给你一篇国务院/部委政策文件的标题与正文，
-你要把它拆成「事实 Facts / 信息 Information / 知识 Knowledge」三部分。
+# 提示词本体在仓库根 prompts/extract.md（见 app/prompts.py）。
+# 这里是**模块常量**：import 时读一次，改 md 后要重启服务。
+SYSTEM_PROMPT = load_prompt("extract")
 
-要求：
-- 全部用简体中文；只依据原文，不得推测或编造原文没有的内容；
-- 事实（facts）是可核验的硬信息：时间、发文机构、涉及机构、政策动作、数字指标等，逐条列明；
-- 信息（info）是对文件的归纳：摘要 + 要点；
-- 知识（knowledge）不是「读懂这份文件所需的背景知识」，而是从这份文件里能沉淀下来、
-  用来指导我们下一步行动的知识：政策划了哪些线、开了哪些口子、留了多长的窗口、
-  钱和资源往哪投，什么样的主体在什么条件下能拿到什么，读完我们该据此做什么；
-- 知识区要写成可执行的结论，不要写名词解释、概念科普、政策沿革这类背景性内容；
-- 正文可能被截断，若某一部分在给定正文里找不到依据，就给出更少但更可靠的条目，不要编。
-"""
+# 回退路径（纯文本 JSON）时追加的指令，同样来自 prompts/。
+JSON_FALLBACK_INSTRUCTION = load_prompt("extract_json_fallback")
+
+# 日期兜底抽取的提示词（结构解析拿不到发布日期时才调用），同样是 import 时读一次。
+DATE_PROMPT = load_prompt("extract_date")
+
+# 模型兜底日期的合理区间：发布日期不可能在未来，太早的日期几乎都是页面其他内容
+# （版权年、相关链接）被误读。区间外一律当没抽到，不写库。
+_MIN_MODEL_DATE_YEAR = 1990
 
 
 def _build_extract_llm(entry: ModelRegistryEntry) -> Any:
