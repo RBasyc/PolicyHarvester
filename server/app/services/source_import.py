@@ -54,15 +54,19 @@ from app.schemas.source import (
     SourceImportRequest,
 )
 from app.sources import net
+from app.sources.analyze import analyze_page
 from app.sources.config import (
     SEARCH_PROBE_KEYWORD,
     DetailConfig,
     EntrypointConfig,
+    FieldRule,
     config_from_row,
 )
 from app.sources.net import domain_allowed
+from app.sources.pagination_probe import probe_single_page_entry, rule_from_evidence
+from app.sources.field_rules import apply_rule, rules_from_field_candidates
 from app.sources.html_source import date_texts_by_selector, parse_detail_page, parse_list_page
-from app.sources.htmlparse import selector_supported, strip_nth_of_type
+from app.sources.htmlparse import parse_html, selector_supported, strip_nth_of_type
 from app.sources.util import parse_date
 from app.sources.registry import get, register_configured, unregister
 
@@ -87,7 +91,9 @@ _TERMINAL_JOB_STATUSES = ("done", "error", "cancelled")
 # 真正列出条目的栏目页；用户直接给栏目页时这层只是多花几次抓取（有节流与白名单兜底）。
 _DISCOVER_FOLLOW = 1
 
-# 报告页最多列几个候选供切换重跑（逐个试抓，用第一个能定出正文规则的）。
+# 报告页最多列几个**普通列表**候选供切换重跑（逐个试抓，用第一个能定出正文规则的）。
+# **只管普通列表候选，不占命名区域的名额**：区域是「同页全都要」——被名额挤掉的那一个
+# 连展开的机会都没有（静默少一个栏目），而它有自己的上限（`analyze.region_candidates(limit=8)`）。
 _MAX_CANDIDATES = 5
 
 # 「内容发现到头了」时统一附在最常见死路上的解释：中文政府站大多已改成 JS 渲染列表，
@@ -100,6 +106,10 @@ _STATIC_ONLY_HINT = (
 _PAGINATION_MAX_PAGES = 10
 _DETAIL_CONTAINER_LIMIT = 3
 _DETAIL_META_LIMIT = 2
+# 每个字段最多几条规则（规则链本身有 fallback，2 条足够：主规则 + 一个备选形状）
+_DETAIL_FIELD_RULE_LIMIT = 2
+# 字段总数上限：模型可自由命名，但自动导入只采纳分析器认得的标签，避免元信息块刷屏
+_DETAIL_FIELD_LIMIT = 12
 
 # 自动加进来的检索型入口的固定名（重名时后面补序号，见 `_unique_entry_name`）
 _SEARCH_ENTRY_NAME = "站内检索"
@@ -530,6 +540,9 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         if not candidates:
             return _fail(job, f"内容发现没有给出可用的列表容器候选。{_STATIC_ONLY_HINT}", "failed")
 
+        # 命名区域若自带独立栏目页，先改接栏目页（页内预览块列几条就是几条、且没有翻页）
+        await _prefer_column_pages(job, candidates, domains)
+
         payload, error = await _pick_candidate(job, candidates, domains, request)
         if payload is None:
             _log(job, f"候选逐个试过都不行：{error}", "error")
@@ -539,6 +552,14 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         # 已翻到的条目里比对标题」变成「送进站点检索」。这一步是**真取一页**验证的，
         # 试不出来就不加（也可能页面里根本没说）——绝不猜一个 /search 塞进配置。
         await _maybe_add_search_entry(job, payload, domains, request)
+
+        # 同页命名区域（tab 标签页 / 标题模块）逐个接成独立入口——「只抓政策解读 /
+        # 同时抓政府规章+市政府文件」由抓取页现成的「发布机构 = 入口名」筛选完成。
+        await _expand_named_regions(job, payload, candidates, domains)
+
+    # 收尾：声明为单页的入口，都用自己页面的证据回问一次「你还有下一页吗」——
+    # 能推导出翻页规则的就真取第 2 页验过补进配置，推导不出的把「召回被截断」写进入口 notes。
+    await _resolve_single_page_entries(job, payload, domains)
 
     _mark_selected(job.candidates, payload)
 
@@ -809,33 +830,70 @@ def _rank_candidates(candidates: list[dict[str, Any]], target_url: str) -> list[
 
 
 def _simplify_pagination(raw: dict[str, Any]) -> dict[str, Any]:
-    """把 `pagination_candidates` 的输出收敛成 `PaginationConfig` 认得的字段。"""
-    kind = raw.get("kind")
-    if kind == "query_param" and raw.get("param"):
-        rule: dict[str, Any] = {"kind": "query_param", "param": str(raw["param"])}
-    elif kind == "path_index" and raw.get("path_template"):
-        rule = {"kind": "path_index", "path_template": str(raw["path_template"])}
-    else:
-        # 没反推出规则（只有「下一页」链接 / 页码太少）：声明只有一页，翻页靠人工改配置。
-        # 这里**不臆造** param 或模板——试运行的「翻页可用性」判据会如实报告取不到第 2 页。
-        return {"kind": "none"}
-    rule["start"] = int(raw.get("start") or 1)
-    rule["step"] = int(raw.get("step") or 1)
-    rule["max_pages"] = _PAGINATION_MAX_PAGES
-    return rule
+    """把 `pagination_candidates` 的输出收敛成 `PaginationConfig` 认得的字段。
+
+    反推不出规则时声明单页（`kind="none"`）——但**「单页」不再是「就这么算了」**：组装
+    阶段的 `_resolve_single_page_entries` 会拿入口自己的页面回问一次「你还有下一页吗」，
+    推导得出的规则真取第 2 页验过再补进配置（见 `sources/pagination_probe.py`）。
+
+    规则映射本身委托给同一模块，避免「分析报告说能翻、组装配置说不能翻」两处口径分叉。
+    """
+    rule = rule_from_evidence(raw, max_pages=_PAGINATION_MAX_PAGES)
+    return rule if rule else {"kind": "none"}
 
 
 def _build_candidates(discovered: dict[str, Any]) -> list[dict[str, Any]]:
-    """把内容发现报告的入口候选整理成可选清单（已按命中条数排序）。
+    """把内容发现报告的入口候选整理成可选清单（命名区域在前，其余按命中条数排序）。
 
     **这些是候选，不是结论**——每个候选的选择器组合都要靠试运行的真实抓取验证，
     报告页因此把「这次用了哪一个」和「还剩哪几个」都摆出来，点一下就换一个重跑。
+
+    `kind="region"` 的候选来自 `analyze.regions`（命名内容区域：tab 标签页 / 标题邻近
+    模块）：名字是页面上实测到的栏目名，带 `scope_selector`+`scope_index` 定位到同页
+    多个同签名列表中的某一个。命名区域排前面——它们既有名字（入口名即可读的栏目名）
+    又能单独定位；其余普通列表候选维持原样作为备选。
+
+    `_MAX_CANDIDATES` **只管普通列表候选**：命名区域是「同页全都要」，被名额挤掉的那一个
+    连展开的机会都没有（静默少一个栏目），所以区域全部入列，上限交给分析器自己管。
 
     `rejected_reason` 是这条候选**为什么没被采用**（选择器引擎执行不了 / 试抓样本失败）；
     页面把它显示出来，而不是把不适用的候选悄悄丢掉——「没试」和「试了不行」要分得清。
     """
     out: list[dict[str, Any]] = []
+    for page in discovered.get("pages") or []:
+        page_url = page.get("url") or ""
+        for region in page.get("regions") or []:
+            scope = region.get("scope_selector")
+            inner = region.get("list_selector")
+            if not scope or not inner:
+                continue
+            dropped: list[str] = []
+            usable_scope = _usable_selector(scope, dropped, "entrypoints[].scope_selector")
+            usable_inner = _usable_selector(inner, dropped, "entrypoints[].list_selector")
+            out.append(
+                {
+                    "index": len(out),
+                    "kind": "region",
+                    "page_url": page_url,
+                    "name": (region.get("name") or f"栏目{len(out) + 1}")[:60],
+                    "scope_selector": usable_scope or str(scope),
+                    "scope_index": region.get("scope_index"),
+                    "list_selector": usable_inner or str(inner),
+                    "item_count": region.get("item_count"),
+                    "sample_title": region.get("sample_title"),
+                    "sample_url": region.get("sample_url"),
+                    "column_url": region.get("column_url"),
+                    # 页内区域不带翻页（门户页上的模块通常没有独立翻页）；有栏目页时
+                    # 走栏目页入口，翻页由栏目页自己的规则覆盖。
+                    "pagination": {"kind": "none"},
+                    "detail": None,  # 只有被采用的那条会被补上（其余候选留到重跑时再抓样本页）
+                    "rejected_reason": "; ".join(dropped) if (usable_scope is None or usable_inner is None) else None,
+                }
+            )
+    list_count = 0
     for row in discovered.get("entrypoint_candidates") or []:
+        if list_count >= _MAX_CANDIDATES:
+            break
         selector = row.get("list_selector")
         page_url = row.get("page_url")
         if not selector or not page_url:
@@ -845,6 +903,7 @@ def _build_candidates(discovered: dict[str, Any]) -> list[dict[str, Any]]:
         out.append(
             {
                 "index": len(out),
+                "kind": "list",
                 "page_url": page_url,
                 "name": (row.get("name_suggestion") or f"栏目{len(out) + 1}")[:60],
                 "list_selector": usable or str(selector),
@@ -856,16 +915,27 @@ def _build_candidates(discovered: dict[str, Any]) -> list[dict[str, Any]]:
                 "rejected_reason": "; ".join(dropped) if usable is None else None,
             }
         )
-        if len(out) >= _MAX_CANDIDATES:
-            break
+        list_count += 1
     return out
 
 
 def _mark_selected(candidates: list[dict[str, Any]], payload: dict[str, Any]) -> None:
-    """按最终配置反标「这次用了哪个候选」（重跑时前端据此高亮当前项）。"""
-    used = {(e.get("url"), e.get("list_selector")) for e in (payload or {}).get("entrypoints") or []}
+    """按最终配置反标「这次用了哪些候选」（重跑时前端据此高亮当前项）。
+
+    区域的 `(url, list_selector)` 可能撞车（多个 tab 面板的 list_selector 都是 `li`），
+    所以匹配键带 scope：`(url, list_selector, scope_selector, scope_index)`。
+    """
+    used = {
+        (e.get("url"), e.get("list_selector"), e.get("scope_selector"), e.get("scope_index"))
+        for e in (payload or {}).get("entrypoints") or []
+    }
     for candidate in candidates:
-        candidate["selected"] = (candidate["page_url"], candidate["list_selector"]) in used
+        candidate["selected"] = (
+            candidate.get("page_url"),
+            candidate.get("list_selector"),
+            candidate.get("scope_selector"),
+            candidate.get("scope_index"),
+        ) in used
 
 
 def _meta_selectors(
@@ -889,6 +959,67 @@ def _meta_selectors(
         if len(out) >= limit:
             break
     return out
+
+
+def _field_rules_from_analysis(
+    analysis: dict[str, Any], dropped: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """`field_candidates` → `detail.fields` 草案（分组/命名规则见 `rules_from_field_candidates`）。"""
+    candidates = analysis.get("field_candidates") or []
+    fields = rules_from_field_candidates(
+        candidates,
+        rule_limit=_DETAIL_FIELD_RULE_LIMIT,
+        field_limit=_DETAIL_FIELD_LIMIT,
+    )
+    if candidates and not fields:
+        dropped.append("字段候选没有一条能转成可执行规则（标签/取值形状不完整）")
+    return {
+        name: [rule.model_dump(exclude_none=True) for rule in rules]
+        for name, rules in fields.items()
+    }
+
+
+def _verify_field_rules(
+    pages: list[str], fields: dict[str, list[dict[str, Any]]]
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """跨页核对**日期类**字段规则：恒定值的规则当模板元素丢掉。
+
+    与 `_verify_date_selectors` 同一个理由、同一套门槛，只是执行的是 `FieldRule`。
+    只核对日期字段：机构/主题分类在一组样本里恒为同一个值是合理的（同一栏目同一单位），
+    日期恒为同一天则几乎一定是页脚模板（「本站维护日期」之类）。
+
+    返回 `(保留的 fields, 说明)`；说明进作业日志。
+    """
+    date_fields = [name for name in fields if name in ("date", "signed_date", "effective_date")]
+    if len(pages) < _DATE_CHECK_SAMPLES or not date_fields:
+        return fields, []
+
+    roots = [parse_html(html) for html in pages]
+    result = dict(fields)
+    notes: list[str] = []
+    for name in date_fields:
+        kept: list[dict[str, Any]] = []
+        for raw in fields.get(name) or []:
+            try:
+                rule = FieldRule.model_validate(raw)
+            except Exception:  # noqa: BLE001 - 不合法的规则不参与核对，原样保留由校验兜底
+                kept.append(raw)
+                continue
+            seen = [value for root in roots if (value := apply_rule(root, rule))]
+            if len(seen) >= _DATE_CHECK_SAMPLES and len(set(seen)) == 1:
+                notes.append(
+                    f"字段规则「{name}」（{raw.get('selector') or ''}）在所比 "
+                    f"{len(seen)} 篇样本里恒为「{seen[0]}」——与页脚/模板元素无法区分，"
+                    "已按「宁可缺失也不写错」丢弃"
+                )
+                continue
+            kept.append(raw)
+        if kept:
+            result[name] = kept
+        else:
+            result.pop(name, None)
+            notes.append(f"字段「{name}」的候选规则全部被判为模板常量，已整组移除")
+    return result, notes
 
 
 def _verify_date_selectors(pages: list[str], selectors: list[str]) -> tuple[list[str], list[str]]:
@@ -957,6 +1088,8 @@ async def _sibling_detail_pages(
             url=listing.url,
             list_selector=list_selector,
             link_selector="a",
+            scope_selector=candidate.get("scope_selector") or None,
+            scope_index=candidate.get("scope_index"),
         )
         items = parse_list_page(listing.text, entry, listing.url, limit=limit + 2)
     except Exception as exc:  # noqa: BLE001 - 核对取不到只是少比几篇，不该让整次导入失败
@@ -997,10 +1130,15 @@ def _detail_from_analysis(analysis: dict[str, Any]) -> tuple[dict[str, Any], lis
     detail: dict[str, Any] = {
         "container_selectors": containers,
         "title_selectors": _meta_selectors(meta, "title", dropped),
+        # 旧选择器链保留作 fallback：`parse_detail_page` 先跑字段规则，取不到再走这里。
+        # 两套都留着，老站点的行为与命中率不变，新规则只做增量。
         "date_selectors": _meta_selectors(meta, "date", dropped),
         "agency_selectors": _meta_selectors(meta, "agency", dropped),
         "doc_no_selectors": _meta_selectors(meta, "doc_no", dropped),
     }
+    fields = _field_rules_from_analysis(analysis, dropped)
+    if fields:
+        detail["fields"] = fields
     if settings.pipeline_min_body_chars > 0:
         # 与检索阶段的正文预检同口径（预检把不达标的标「不建议入库」）
         detail["min_body_chars"] = int(settings.pipeline_min_body_chars)
@@ -1059,10 +1197,14 @@ async def _sample_detail_analysis(
 
     # 日期候选跨页核对：第一页就是刚抓到的这一篇，再回候选自己的列表页挑同栏目条目做对照
     siblings = await _sibling_detail_pages(job, candidate, domains, limit=_DATE_CHECK_SAMPLES - 1)
+    pages = [fetched.text, *siblings]
     detail["date_selectors"], date_notes = _verify_date_selectors(
-        [fetched.text, *siblings], detail.get("date_selectors") or []
+        pages, detail.get("date_selectors") or []
     )
     dropped.extend(date_notes)
+    if detail.get("fields"):
+        detail["fields"], field_notes = _verify_field_rules(pages, detail["fields"])
+        dropped.extend(field_notes)
     _log(
         job,
         f"日期候选跨页核对：比了 {1 + len(siblings)} 篇样本"
@@ -1092,7 +1234,16 @@ def _log_detail_rule(job: ImportJob, detail: dict[str, Any], dropped: list[str])
         + f"；元信息 标题 {len(detail.get('title_selectors') or [])} 条／"
         + f"日期 {len(detail.get('date_selectors') or [])} 条／"
         + f"机构 {len(detail.get('agency_selectors') or [])} 条／"
-        + f"文号 {len(detail.get('doc_no_selectors') or [])} 条",
+        + f"文号 {len(detail.get('doc_no_selectors') or [])} 条"
+        + (
+            "；语义字段 "
+            + "、".join(
+                f"{name}({len(rules)} 条)"
+                for name, rules in (detail.get("fields") or {}).items()
+            )
+            if detail.get("fields")
+            else ""
+        ),
     )
     if dropped:
         _log(job, "以下候选选择器引擎执行不了，已按其降级写法处理或留空：" + "；".join(dropped), "warn")
@@ -1178,6 +1329,15 @@ async def _rebuild_from_candidate(
     `base_config` 缺省时（上一次导入在「选候选」阶段就失败，没留下骨架）按 `_base_payload`
     重建，边界仍然是**服务端从地址推出**的 `domains`；来源名只能用主机兜底（那次勘察的标题
     早丢了），不是错，只是不如第一次好看。
+
+    **替换范围**（2026-10-16 收窄，原来是无条件整份重建——会静默丢掉已展开的其它命名区域）：
+    点的是**命名区域**候选时，只替换「它自己那一个位置」的入口，其它栏目（含**其它页面的**
+    命名区域）与站内检索入口原样保留——纠错不该有超出目标的破坏面。点的是**普通列表**候选时
+    维持原语义：整份入口集以它为准重建（保留站内检索）。
+
+    保留条件里**不设「同页」**（2026-10-16 二次收窄）：命名区域可能分布在门户首页与它链接到
+    的栏目页两张页面上，早先的「同页」限制会让两页的栏目在重跑时互相替换——于是「这几个栏目
+    我都要」永远做不到，点一个丢一个。重跑是**替换**，不是清除。
     """
     base = copy.deepcopy(request.base_config or {})
     candidate = dict(request.candidate or {})
@@ -1197,17 +1357,50 @@ async def _rebuild_from_candidate(
 
     base["scope"] = {**(base.get("scope") or {}), "allowed_domains": domains}
     entry = _entrypoint(candidate, 0)
+    existing = [row for row in (base.get("entrypoints") or []) if isinstance(row, dict)]
     # 检索型入口与「选了哪个栏目候选」无关：重跑只换栏目入口，检索入口原样留着，
     # 否则用户每换一次候选就要丢一次站内检索能力（还得靠人工改配置加回来）。
-    kept_search = [
-        row
-        for row in (base.get("entrypoints") or [])
-        if isinstance(row, dict) and isinstance(row.get("search"), dict)
-    ]
+    kept_search = [row for row in existing if isinstance(row.get("search"), dict)]
+    requested_scope = str(candidate.get("scope_selector") or "").strip()
+    # 区域候选有两种写法，都是「一个栏目」：页内区域（带 scope 定位）与**已改接独立栏目页**
+    # 的区域（`_prefer_column_pages` 把 scope 清空了，只剩 `column_page` 标记）。两种都要按
+    # 「只替换它自己」处理，否则后者会掉进整份重建、把别处的栏目一起清掉。
+    is_region = bool(requested_scope) or bool(candidate.get("column_page"))
+    kept_entries: list[dict[str, Any]] = []
+    if is_region:
+        page_url = candidate.get("page_url")
+        requested_index = candidate.get("scope_index")
+        requested_list = candidate.get("list_selector")
+
+        def _same_slot(row: dict[str, Any]) -> bool:
+            if row.get("url") != page_url:
+                return False
+            if requested_scope:
+                # 多个 tab 面板**共享同一个 scope 选择器**，靠 scope_index 区分，
+                # 所以匹配键必须是 (url, scope_selector, scope_index) 三元组。
+                return (
+                    str(row.get("scope_selector") or "").strip() == requested_scope
+                    and row.get("scope_index") == requested_index
+                )
+            # 改接过的区域没有 scope 定位，一个栏目页上就一个列表容器：地址 + 选择器即位置。
+            return row.get("list_selector") == requested_list
+
+        search_ids = {id(row) for row in kept_search}
+        kept_entries = [
+            row for row in existing if id(row) not in search_ids and not _same_slot(row)
+        ]
+        replaced = sum(1 for row in existing if id(row) not in search_ids and _same_slot(row))
+        _log(
+            job,
+            f"区域重跑：替换同位置的入口 {replaced} 个，"
+            f"保留其它命名区域/栏目 {len(kept_entries)} 个（跨页的也在内）"
+            if kept_entries
+            else "区域重跑：上一份配置没有其它命名区域可保留",
+        )
     entry_name = str(entry.get("name") or "").strip()
     if entry_name:
-        entry["name"] = _unique_entry_name(entry_name, kept_search)
-    base["entrypoints"] = [entry, *kept_search]
+        entry["name"] = _unique_entry_name(entry_name, [*kept_entries, *kept_search])
+    base["entrypoints"] = [entry, *kept_entries, *kept_search]
 
     detail = candidate.get("detail")
     if not detail:
@@ -1258,16 +1451,276 @@ def _entrypoint(candidate: dict[str, Any], index: int) -> dict[str, Any]:
 
     入口名同时是「发布机构」筛选的匹配值（见 `EntrypointConfig` 的注释），所以名字要
     可读；翻页规则来自勘察阶段从页码链接反推的结果，反推不出就声明 `none`（一页），
-    由试运行的「翻页可用性」判据如实报告。
+    由试运行的「翻页可用性」判据如实报告。命名区域候选带 `scope_selector`/`scope_index`
+    （同页多个同签名列表的定位），一并写进入口配置。
     """
     name = (candidate.get("name") or f"栏目{index + 1}").strip()[:60] or f"栏目{index + 1}"
-    return {
+    entry: dict[str, Any] = {
         "name": name,
         "url": candidate["page_url"],
         "list_selector": candidate["list_selector"],
         "link_selector": "a",
         "pagination": _simplify_pagination(candidate.get("pagination") or {}),
     }
+    scope = str(candidate.get("scope_selector") or "").strip()
+    if scope:
+        entry["scope_selector"] = scope
+        scope_index = candidate.get("scope_index")
+        if scope_index is not None:
+            entry["scope_index"] = int(scope_index)
+    return entry
+
+
+# ---------- 命名区域展开（同页多列表 → 多入口） ----------
+
+
+async def _probe_region_items(
+    job: ImportJob, candidate: dict[str, Any], domains: list[str]
+) -> list[dict[str, Any]]:
+    """真取区域所在页，按 scope 组合解析一次——验证这个区域定位**真的**出条目。
+
+    区域的 scope/list 选择器是分析器在**这一页**上归纳的，展开成入口前必须用同一对
+    选择器真解析一遍（与 `_pick_candidate` 逐个试抓样本同一口径）：解析不出就如实
+    记 `rejected_reason`，不静默丢弃，也不把没验证的选择器写进配置。
+    """
+    page_url = str(candidate.get("page_url") or "")
+    if not page_url:
+        return []
+    try:
+        fetched = await net.fetch_text(page_url, allowed_domains=domains)
+    except (net.FetchError, net.UnsafeURLError) as exc:
+        _log(job, f"同页展开验证：{page_url} 取回失败（{exc}）", "warn")
+        return []
+    entry = EntrypointConfig(
+        name=str(candidate.get("name") or "区域"),
+        url=fetched.url,
+        list_selector=str(candidate.get("list_selector") or ""),
+        link_selector="a",
+        scope_selector=candidate.get("scope_selector") or None,
+        scope_index=candidate.get("scope_index"),
+    )
+    try:
+        return parse_list_page(fetched.text, entry, fetched.url, limit=5)
+    except Exception as exc:  # noqa: BLE001 - 解析异常 = 该区域不可用，不该让整次导入失败
+        _log(job, f"同页展开验证：区域「{candidate.get('name')}」解析异常（{exc}）", "warn")
+        return []
+
+
+async def _expand_named_regions(
+    job: ImportJob,
+    payload: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    domains: list[str],
+) -> None:
+    """把入选候选所在页上的其它命名区域接成独立入口（共享同一套正文规则）。
+
+    `_pick_candidate` 只采用一个候选（由它的样本详情页定出正文规则）；门户页上并排的
+    命名区域（tab 标签页 / 标题模块）与它共用同一套详情页模板，逐一如实验证后各成一个
+    入口。正文规则留在 payload 级共享，不逐区域重复抓样本详情页（那是试运行判据 3 的活）。
+
+    只展开**同一页**上的命名区域：不同页的列表候选走的是「翻栏目页」的老路（各自有
+    独立候选，由人选）。展开失败的区域把原因写进 `rejected_reason`——页面候选清单里
+    「没试」和「试了不行」要分得清。
+    """
+    used = {
+        (e.get("url"), e.get("list_selector"), e.get("scope_selector"), e.get("scope_index"))
+        for e in (payload or {}).get("entrypoints") or []
+    }
+    chosen = next(
+        (
+            c
+            for c in candidates
+            if (
+                c.get("page_url"),
+                c.get("list_selector"),
+                c.get("scope_selector"),
+                c.get("scope_index"),
+            )
+            in used
+        ),
+        None,
+    )
+    if chosen is None:
+        return
+    page_url = chosen.get("page_url")
+    # 归组键取**区域所在的门户页**：入选候选可能已被 `_prefer_column_pages` 改接到独立栏目页
+    # （`region_page_url` 记住原门户页），同一门户上并列的其它 tab 仍要从原页面展开。
+    group = chosen.get("region_page_url") or page_url
+    existing = list(payload.get("entrypoints") or [])
+    added = 0
+    for candidate in candidates:
+        if (candidate.get("region_page_url") or candidate.get("page_url")) != group:
+            continue  # 只展开同页命名区域；普通列表候选维持单选备选
+        if not candidate.get("scope_selector") and not candidate.get("column_page"):
+            # 普通列表候选维持单选备选（它们各有独立候选，由人挑）；
+            # 但**改接过栏目页的区域仍是区域**——只是不再需要 scope 定位，照样要展开。
+            continue
+        if candidate.get("rejected_reason"):
+            continue
+        key = (
+            candidate.get("page_url"),
+            candidate.get("list_selector"),
+            candidate.get("scope_selector"),
+            candidate.get("scope_index"),
+        )
+        if key in used:
+            continue  # 已入选（含被选中的那条本身）
+        items = await _probe_region_items(job, candidate, domains)
+        if not items:
+            candidate["rejected_reason"] = "同页展开验证：真取一页后该区域解析不出条目"
+            continue
+        entry = _entrypoint(candidate, len(existing))
+        entry["name"] = _unique_entry_name(entry["name"], existing)
+        existing.append(entry)
+        used.add(key)
+        added += 1
+        _log(
+            job,
+            f"同页命名区域「{entry['name']}」已接成独立入口"
+            f"（样本 {len(items)} 条可解析）：抓取时可按栏目单独勾选",
+        )
+    if added:
+        payload["entrypoints"] = existing
+        _log(job, f"共接入 {added + 1} 个命名区域入口（含入选的那个）；正文规则共用一份")
+
+
+# ---------- 翻页：区域优先接栏目页 + 单页声明必须由证据支撑 ----------
+
+
+async def _prefer_column_pages(
+    job: ImportJob, candidates: list[dict[str, Any]], domains: list[str]
+) -> None:
+    """命名区域自带独立栏目页时，**就地**把候选改接栏目页（通用规则，不针对任何站点）。
+
+    页内区域只是门户页上的一个**预览块**：列几条就是几条，且没有翻页（见 `_build_candidates`
+    里区域候选的 `pagination: none`）。而 tab 自己链接到的栏目页是**完整列表**——有自己的
+    列表容器和翻页规则。接栏目页，召回才不被预览块的长度封顶；这正是「抓到 N 篇就不动了」
+    的一条成因（2026-10-16 用户实例：门户 tab 区域入口只取到 9 条，之后再无新增）。
+
+    栏目页要**真取一页、真解析出条目**才采用（与选候选同一门槛）。取不到或解析不出就原样
+    保留页内区域并写明原因——「试了不行」和「没试」要分得清。
+
+    就地替换而非新增候选：候选清单是「供人切换重跑」的短清单（有数量上限），多插一条会把
+    真正可用的候选挤出去。替换后 `kind` 仍是 `region`、入口名不变（它仍然是那个 tab 栏目），
+    只是不再需要 `scope_*` 定位——解析的是栏目页，而不是门户页上的那一个模块。
+    """
+    upgraded = 0
+    for candidate in candidates:
+        if candidate.get("kind") != "region" or candidate.get("rejected_reason"):
+            continue
+        column_url = str(candidate.get("column_url") or "").strip()
+        if not column_url or column_url.rstrip("/") == str(candidate.get("page_url") or "").rstrip("/"):
+            continue
+        if not domain_allowed((urlsplit(column_url).hostname or "").lower(), domains):
+            continue
+        try:
+            fetched = await net.fetch_text(column_url, allowed_domains=domains)
+        except (net.FetchError, net.UnsafeURLError) as exc:
+            _log(job, f"区域「{candidate.get('name')}」的栏目页取回失败，仍接页内区域（{exc}）", "warn")
+            continue
+        analysis = analyze_page(fetched.text, fetched.url, listed_as="column")
+        top = next((row for row in analysis.get("list_candidates") or [] if row.get("selector")), None)
+        if top is None:
+            _log(job, f"区域「{candidate.get('name')}」的栏目页没有可用的列表容器，仍接页内区域", "warn")
+            continue
+        try:
+            items = parse_list_page(
+                fetched.text,
+                EntrypointConfig(
+                    name=str(candidate.get("name") or "栏目"),
+                    url=fetched.url,
+                    list_selector=str(top["selector"]),
+                    link_selector="a",
+                ),
+                fetched.url,
+                limit=5,
+            )
+        except Exception as exc:  # noqa: BLE001 - 解析异常 = 该栏目页不可用，保留页内区域
+            _log(job, f"区域「{candidate.get('name')}」的栏目页解析异常，仍接页内区域（{exc}）", "warn")
+            continue
+        if not items:
+            _log(job, f"区域「{candidate.get('name')}」的栏目页解析不出条目，仍接页内区域", "warn")
+            continue
+        first = items[0]
+        # region_page_url 取**改接前**的门户页：同一门户上并列的其它 tab 仍要从原页面展开
+        # （见 `_expand_named_regions` 的归组口径）
+        candidate.update(
+            {
+                "region_page_url": candidate.get("page_url"),
+                "page_url": fetched.url,
+                "column_page": True,
+                "list_selector": str(top["selector"]),
+                "scope_selector": None,
+                "scope_index": None,
+                "item_count": len(items),
+                "sample_title": first.get("title"),
+                "sample_url": first.get("url"),
+                "pagination": _simplify_pagination(analysis.get("pagination") or {}),
+                "detail": None,  # 换了一页，样本正文规则要在试抓那一步重新定
+            }
+        )
+        upgraded += 1
+        _log(
+            job,
+            f"命名区域「{candidate.get('name')}」改用其独立栏目页（样本 {len(items)} 条可解析）："
+            "页内预览块只列几条，栏目页才是完整列表（后续仍会用它自己的翻页规则核对）",
+        )
+    if upgraded:
+        _log(job, f"{upgraded} 个命名区域改接独立栏目页；其余区域仍按页内模块接入")
+
+
+async def _resolve_single_page_entries(
+    job: ImportJob, payload: dict[str, Any], domains: list[str]
+) -> None:
+    """给「声明为单页」的入口回问一次站点：**你还有下一页吗**（通用，逐入口）。
+
+    背景：`kind="none"` 过去是默认值——反推不出翻页规则就静默写单页，而验收只对**声明了**
+    翻页的入口发问，没声明就记为「未测试」放行。于是「站点其实有很多页、抓取永远只取第 1
+    页」全程无人报警，用户看到的是「抓到 N 篇就不动、显示无新增」，还分不清是站点没内容
+    还是我们没翻页。
+
+    这里把口径翻过来：单页声明必须由**站点自己的页面**证明。证据来自页面里的页码链接与
+    「下一页」链接；推导得出的规则**真取第 2 页验过**才写进配置，验不过或推导不出就如实
+    写进入口 `notes`（配置里、报告里都看得见），绝不硬塞一个可能被忽略的参数。
+
+    检索型入口跳过：它们要带关键词才有第 2 页（见 `build_search_url`），翻页由试运行的
+    「站内检索入口」判据覆盖。
+    """
+    resolved = 0
+    truncated: list[str] = []
+    for entry in payload.get("entrypoints") or []:
+        if entry.get("search"):
+            continue
+        pagination = entry.get("pagination") or {}
+        if str(pagination.get("kind") or "none") != "none":
+            continue
+        try:
+            model = EntrypointConfig.model_validate(
+                {**entry, "pagination": entry.get("pagination") or {"kind": "none"}}
+            )
+        except Exception as exc:  # noqa: BLE001 - 入口本身不合法时交给 generate_config 报错
+            _log(job, f"入口「{entry.get('name')}」翻页核对跳过（{exc}）", "warn")
+            continue
+        probe = await probe_single_page_entry(
+            model, allowed_domains=domains, max_pages=_PAGINATION_MAX_PAGES
+        )
+        if probe.verified and probe.rule:
+            entry["pagination"] = probe.rule
+            resolved += 1
+            _log(job, f"入口「{entry.get('name')}」：{probe.detail}")
+        elif probe.truncated:
+            entry["notes"] = f"{probe.detail}（本入口实际只取第 1 页）"
+            truncated.append(f"{entry.get('name')}：{probe.detail}")
+            _log(job, f"入口「{entry.get('name')}」{probe.detail}", "warn")
+    if truncated:
+        _log(
+            job,
+            f"有 {len(truncated)} 个入口的单页声明未能提升为翻页（召回被截断在第 1 页）："
+            + "；".join(truncated),
+            "warn",
+        )
+    if resolved:
+        _log(job, f"{resolved} 个单页入口经页面证据核对后补上了翻页规则（已真取第 2 页验证）")
 
 
 # ---------- 检索型入口（站内检索） ----------

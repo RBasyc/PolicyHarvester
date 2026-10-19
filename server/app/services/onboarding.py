@@ -39,7 +39,13 @@ from urllib.parse import urlsplit
 from app.config import get_settings
 from app.sources import net
 from app.sources.analyze import analyze_page
-from app.sources.config import SEARCH_PROBE_KEYWORD, SourceConfig, validate_source_config
+from app.sources.config import (
+    SEARCH_PROBE_KEYWORD,
+    EntrypointConfig,
+    SourceConfig,
+    validate_source_config,
+)
+from app.sources.field_rules import rules_from_field_candidates
 from app.sources.html_source import (
     HtmlListSource,
     build_entry_url,
@@ -400,8 +406,13 @@ async def analyze_structure(
     html: str | None = None,
     allowed_domains: list[str] | None = None,
     listed_as: str = "page",
+    include_outline: bool = True,
 ) -> dict[str, Any]:
-    """阶段 3：单页结构分析。给 `html` 直接分析（离线可用），给 `url` 则先取回。"""
+    """阶段 3：单页结构分析。给 `html` 直接分析（离线可用），给 `url` 则先取回。
+
+    `include_outline` 控制是否附带压缩 DOM 提纲（模型据此判断字段取值位置）；
+    列表页勘察不需要它，详情页补字段时需要。
+    """
     if html is None:
         if not url:
             return {**_fail("需要提供 url 或 html 之一"), "ok": False, "kind": "failed"}
@@ -410,12 +421,16 @@ async def analyze_structure(
         except (net.FetchError, net.UnsafeURLError) as exc:
             blocked = _blocked_reason(str(exc))
             return {**_fail(str(exc), kind="blocked" if blocked else "failed"), "ok": False}
-        analysis = analyze_page(fetched.text, fetched.url, listed_as=listed_as)
+        analysis = analyze_page(
+            fetched.text, fetched.url, listed_as=listed_as, include_outline=include_outline
+        )
         analysis["url"] = fetched.url
         analysis["http_status"] = fetched.status
         return {"ok": True, **analysis}
 
-    analysis = analyze_page(html, url or "", listed_as=listed_as)
+    analysis = analyze_page(
+        html, url or "", listed_as=listed_as, include_outline=include_outline
+    )
     analysis["url"] = url
     return {"ok": True, **analysis}
 
@@ -470,6 +485,7 @@ async def sample_content(
         "date": sum(1 for s in samples if s["date"]),
         "agency": sum(1 for s in samples if s["agency"]),
         "doc_no": sum(1 for s in samples if s["doc_no"]),
+        "fields": sum(1 for s in samples if s.get("fields")),
         "attachments": sum(len(s["attachments"]) for s in samples),
     }
     summary = {"samples": len(samples), **hits}
@@ -504,6 +520,7 @@ def _resolve_rules(
             "date_selectors": selectors.get("date_selectors") or [],
             "agency_selectors": selectors.get("agency_selectors") or [],
             "doc_no_selectors": selectors.get("doc_no_selectors") or [],
+            "fields": selectors.get("fields") or {},
         }
     meta = page.get("meta_candidates", {})
     details = page.get("detail_candidates", [])
@@ -516,6 +533,13 @@ def _resolve_rules(
         "date_selectors": [c["selector"] for c in meta.get("date", [])[:2] if c.get("selector")],
         "agency_selectors": [c["selector"] for c in meta.get("agency", [])[:2] if c.get("selector")],
         "doc_no_selectors": [c["selector"] for c in meta.get("doc_no", [])[:2] if c.get("selector")],
+        # 语义化字段候选：与 source_import 用同一个转换器，预览报告与自动导入口径一致
+        "fields": {
+            name: [rule.model_dump(exclude_none=True) for rule in rules]
+            for name, rules in rules_from_field_candidates(
+                page.get("field_candidates") or []
+            ).items()
+        },
     }
 
 
@@ -545,6 +569,9 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
         date_selectors=rules["date_selectors"],
         agency_selectors=rules["agency_selectors"],
         doc_no_selectors=rules["doc_no_selectors"],
+        # 显式给 `fields` 时手写规则优先；自动候选模式下同样带规则，
+        # 于是样本报告能直接反映「标签→值」规则的命中情况，而不只是旧选择器
+        fields=rules.get("fields") or {},
     )
     row: dict[str, Any] = {
         "url": link.get("url"),
@@ -553,6 +580,7 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
         "date": None,
         "agency": None,
         "doc_no": None,
+        "fields": {},
         "title": None,
         "body_chars": 0,
         "body_cjk": 0,
@@ -578,6 +606,7 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
     row["date"] = parsed.date_text
     row["agency"] = parsed.agency
     row["doc_no"] = parsed.doc_no
+    row["fields"] = parsed.extra
     body = parsed.body or ""
     row["body_chars"] = len(body)
     cjk, enders = body_metrics(body)
@@ -914,6 +943,23 @@ async def dry_run_ingestion(
             )
         )
 
+    # ---- 判据 5b：单页入场的召回边界（软性，只如实说清楚，不做拦截） ----
+    # 「单页」过去是静默默认值，这条路上没有任何环节会说出来，于是「抓了 N 篇就不动了」
+    # 无法与「站点就这么多」区分。这里逐个点名，并带上组装阶段写好的入口备注（如有）。
+    single_page = [
+        ep for ep in config.entrypoints if ep.pagination.kind == "none" and not ep.is_search
+    ]
+    if single_page:
+        limits.append(
+            f"有 {len(single_page)} 个入口声明为单页（{'、'.join(ep.name for ep in single_page)}）："
+            "只取第 1 页。页内命名区域的预览块默认如此——若该栏目其实有更多页，"
+            "召回会被截断（组装阶段已用页面证据核对过，能补的翻页规则已补上）"
+        )
+    for ep in config.entrypoints:
+        note = (ep.notes or "").strip()
+        if note:
+            limits.append(f"入口「{ep.name}」备注：{note}")
+
     # ---- 判据 6：去重 ----
     criteria.append(
         _criterion(
@@ -1126,45 +1172,67 @@ async def _probe_page2(
     *,
     keyword: str | None = None,
 ) -> dict[str, Any]:
-    """取声明了翻页的入口的第 2 页，核对「确实翻得动」。"""
-    source = HtmlListSource(config)
+    """逐**每个**声明了翻页的入口取第 2 页，核对「确实翻得动」。
+
+    早期实现只验第一个声明翻页的入口就返回——多入口配置里第二、三个入口的翻页规则坏了
+    不会被发现（2026-10-16 修）。全部通过才算通过；每条结论都报出来，坏的是哪几个一眼可见。
+    """
+    details: list[str] = []
+    failures: list[str] = []
     for entry in config.entrypoints:
         if entry.pagination.kind == "none":
             continue
         if entry.is_search and not (keyword or "").strip():
             continue  # 检索型入口没有关键词就没有可翻的第 2 页（见 build_search_url）
-        url = build_entry_url(
-            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=2
-        )
-        if url is None:
-            return {"passed": False, "detail": "第 2 页地址为空（max_pages=1？）", "note": None}
-        try:
-            fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
-        except (net.FetchError, net.UnsafeURLError) as exc:
-            return {"passed": False, "detail": "第 2 页取回失败", "note": str(exc)}
-        items2 = parse_list_page(fetched.text, entry, fetched.url)
-        if not items2:
-            return {
-                "passed": False,
-                "detail": "第 2 页无条目",
-                "note": f"翻页规则 kind={entry.pagination.kind} 可能与该站不符",
-            }
-        page1 = build_entry_url(
-            entry, keyword=keyword, date_from=date_from, date_to=date_to, page=1
-        )
-        try:
-            first = await net.fetch_text(str(page1), allowed_domains=config.scope.allowed_domains)
-            items1 = parse_list_page(first.text, entry, first.url)
-        except (net.FetchError, net.UnsafeURLError):
-            items1 = []
-        urls1 = {item["url"] for item in items1}
-        fresh = [item for item in items2 if item["url"] not in urls1]
+        result = await _probe_one_page2(config, entry, date_from, date_to, keyword=keyword)
+        details.append(f"{entry.name}：{result['detail']}")
+        if not result["passed"]:
+            failures.append(f"{entry.name}：{result['note'] or result['detail']}")
+    if not details:
+        return {"passed": False, "detail": "无参与探测的入口", "note": None}
+    return {
+        "passed": not failures,
+        "detail": "；".join(details),
+        "note": "；".join(failures) or None,
+    }
+
+
+async def _probe_one_page2(
+    config: SourceConfig,
+    entry: EntrypointConfig,
+    date_from: date | None,
+    date_to: date | None,
+    *,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """单个入口的第 2 页核对（`_probe_page2` 的逐入口实现）。"""
+    url = build_entry_url(entry, keyword=keyword, date_from=date_from, date_to=date_to, page=2)
+    if url is None:
+        return {"passed": False, "detail": "第 2 页地址为空（max_pages=1？）", "note": None}
+    try:
+        fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
+    except (net.FetchError, net.UnsafeURLError) as exc:
+        return {"passed": False, "detail": "第 2 页取回失败", "note": str(exc)}
+    items2 = parse_list_page(fetched.text, entry, fetched.url)
+    if not items2:
         return {
-            "passed": bool(fresh),
-            "detail": f"第 2 页 {len(items2)} 条，其中新增 {len(fresh)} 条",
-            "note": None if fresh else "第 2 页与第 1 页完全重复——参数可能被站点忽略",
+            "passed": False,
+            "detail": "第 2 页无条目",
+            "note": f"翻页规则 kind={entry.pagination.kind} 可能与该站不符",
         }
-    return {"passed": False, "detail": "无参与探测的入口", "note": None}
+    page1 = build_entry_url(entry, keyword=keyword, date_from=date_from, date_to=date_to, page=1)
+    try:
+        first = await net.fetch_text(str(page1), allowed_domains=config.scope.allowed_domains)
+        items1 = parse_list_page(first.text, entry, first.url)
+    except (net.FetchError, net.UnsafeURLError):
+        items1 = []
+    urls1 = {item["url"] for item in items1}
+    fresh = [item for item in items2 if item["url"] not in urls1]
+    return {
+        "passed": bool(fresh),
+        "detail": f"第 2 页 {len(items2)} 条，其中新增 {len(fresh)} 条",
+        "note": None if fresh else "第 2 页与第 1 页完全重复——参数可能被站点忽略",
+    }
 
 
 async def _probe_detail(item: dict[str, Any], config: SourceConfig) -> dict[str, Any]:
@@ -1180,6 +1248,7 @@ async def _probe_detail(item: dict[str, Any], config: SourceConfig) -> dict[str,
         "date": None,
         "agency": None,
         "doc_no": None,
+        "fields": {},
         "body_chars": 0,
         "body_cjk": 0,
         "sent_enders": 0,
@@ -1209,6 +1278,7 @@ async def _probe_detail(item: dict[str, Any], config: SourceConfig) -> dict[str,
     row["date"] = parsed.date_text
     row["agency"] = parsed.agency
     row["doc_no"] = parsed.doc_no
+    row["fields"] = parsed.extra
     body = parsed.body or ""
     row["body_chars"] = len(body)
     cjk, enders = body_metrics(body)

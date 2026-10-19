@@ -32,6 +32,7 @@ from app.config import get_settings
 from app.sources import net
 from app.sources.base import FulltextResult, PolicyItem, PolicySource
 from app.sources.config import DetailConfig, EntrypointConfig, PaginationConfig, SourceConfig
+from app.sources.field_rules import extract_fields
 from app.sources.htmlparse import Node, parse_html, select, select_one
 from app.sources.util import parse_date
 
@@ -45,6 +46,10 @@ _ATTACHMENT_HEURISTIC = ", ".join(f'a[href$=".{ext}"]' for ext in _ATTACHMENT_EX
 _META_LABEL_RE = re.compile(r"^\s*[一-龥A-Za-z]{2,8}\s*[:：]\s*")
 
 _CACHE_MAX = 64  # 列表页缓存条目上限（简单的容量+TTL 双限，规避无界增长）
+
+# 字段规则里的**保留字段名**：有列可用，其余进 metadata。
+# `date` 与 `publish_date` 视为同一个东西（列表/详情两处习惯叫法不同）。
+_RESERVED_FIELD_NAMES = {"title", "agency", "doc_no", "date", "publish_date"}
 
 
 def _strip_label(text: str) -> str:
@@ -89,6 +94,24 @@ def _pick_item_link(container: Node, link_selector: str, title: str) -> Node | N
 
 
 # ---------- 纯函数：列表页 URL 构造 ----------
+
+
+def _select_entry_containers(root: Node, entry: EntrypointConfig) -> list[Node]:
+    """按入口配置取出条目容器列表。
+
+    配了 `scope_selector` 时先定位作用域容器（可命中多个），再在各容器的**子树内**跑
+    `list_selector`；`scope_index` 非空时只取命中的第几个（0 起）——这是「同页多个同签名
+    列表只取其中一个」的机制（标签页面板 / 并列栏目模块），不依赖 CSS 位置伪类
+    （引擎的选择器子集本就不支持 `:nth-of-type`，见 `htmlparse.selector_supported`）。
+    """
+    if not entry.scope_selector:
+        return select(root, entry.list_selector)
+    scopes = select(root, entry.scope_selector)
+    if entry.scope_index is not None:
+        if entry.scope_index >= len(scopes):
+            return []
+        scopes = [scopes[entry.scope_index]]
+    return [container for scope in scopes for container in select(scope, entry.list_selector)]
 
 
 def _merge_query(url: str, params: list[tuple[str, str]]) -> str:
@@ -210,9 +233,7 @@ def parse_list_page(
     页内按绝对 URL 去重（同一个链接在「标题 + 更多」里出现两次很常见）。
     """
     root = parse_html(html)
-    containers = select(root, entry.list_selector)
-    if not containers:
-        return []
+    containers = _select_entry_containers(root, entry)
 
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -248,16 +269,42 @@ def parse_list_page(
         elif link.get("title") and parse_date(link.get("title")):
             item_date = link.get("title")  # 有些站把日期放进 title 属性
 
-        seen.add(url)
-        items.append(
-            {
-                "title": title,
-                "url": url,
-                "date": item_date,
-                "entrypoint": entry.name,
-                "pagination_url": base_url,
+        # 条目级字段规则（新口径）：在**条目容器**内执行，取到的标准字段覆盖上面的
+        # 旧选择器结果，其余字段进 metadata。规则链内部按顺序 fallback。
+        agency = doc_no = None
+        metadata: dict[str, str] = {}
+        if entry.item_fields:
+            extracted = extract_fields(container, entry.item_fields)
+            title = extracted.get("title") or title
+            agency = extracted.get("agency")
+            doc_no = extracted.get("doc_no")
+            item_date = (
+                extracted.get("date") or extracted.get("publish_date") or item_date
+            )
+            metadata = {
+                key: value
+                for key, value in extracted.items()
+                if key not in _RESERVED_FIELD_NAMES
             }
-        )
+
+        if not title:
+            continue
+
+        seen.add(url)
+        item: dict[str, Any] = {
+            "title": title,
+            "url": url,
+            "date": item_date,
+            "entrypoint": entry.name,
+            "pagination_url": base_url,
+        }
+        if agency:
+            item["agency"] = agency
+        if doc_no:
+            item["doc_no"] = doc_no
+        if metadata:
+            item["metadata"] = metadata
+        items.append(item)
         if limit is not None and len(items) >= limit:
             break
     return items
@@ -293,6 +340,9 @@ class DetailResult:
     image_count: int = 0
     attachments: list[Attachment] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # 字段规则取到的非保留字段（索引号 / 成文日期 / 主题分类 / 发文机关…），
+    # 原样透传到 `FulltextResult.metadata` → `policy_document.metadata`。
+    extra: dict[str, str] = field(default_factory=dict)
 
 
 def _pick_container(root: Node, selectors: list[str]) -> tuple[Node | None, str | None]:
@@ -390,6 +440,16 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
             return result
     result.container_selector = matched_selector
 
+    # 语义化字段规则优先（新口径）。在**整页**上执行而不是正文容器内：政务站的
+    # 元信息块（索引号 / 发文字号 / 成文日期）常常在正文容器之外。
+    # 取不到的保留字段再回落到旧选择器链，保证老配置行为不变。
+    field_values = extract_fields(root, detail.fields) if detail.fields else {}
+    result.extra = {
+        key: value
+        for key, value in field_values.items()
+        if key not in _RESERVED_FIELD_NAMES
+    }
+
     # 附件清单**先扫**，再摘掉 drop_selectors：附件区（`div.attach` 之类）通常要
     # 从正文里剔除，但「有哪些附件」正是接入要拿到的信息——先摘后扫会把附件一起抹掉。
     selector = detail.attachment_selector or _ATTACHMENT_HEURISTIC
@@ -413,13 +473,29 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
     result.image_count = sum(1 for node in container.iter_elements() if node.tag == "img")
     result.body = container.text_content()
 
-    result.title = _text_of(root, detail.title_selectors) or _text_of(container, ["h1", "h2"])
+    result.title = field_values.get("title") or _text_of(root, detail.title_selectors) or _text_of(
+        container, ["h1", "h2"]
+    )
     if not result.title:
         head_title = select_one(root, "title")
         result.title = " ".join(head_title.text_content().split()) if head_title else None
-    result.agency = _strip_label(_text_of(root, detail.agency_selectors) or "") or None
-    result.doc_no = _strip_label(_text_of(root, detail.doc_no_selectors) or "") or None
-    result.date_text = _strip_label(_text_of(root, detail.date_selectors) or "") or None
+    result.agency = (
+        field_values.get("agency")
+        or _strip_label(_text_of(root, detail.agency_selectors) or "")
+        or None
+    )
+    result.doc_no = (
+        field_values.get("doc_no")
+        or _strip_label(_text_of(root, detail.doc_no_selectors) or "")
+        or None
+    )
+    # `normalize=date` 的规则已产出 ISO；旧选择器的文本还可能带标签，保持原口径
+    result.date_text = (
+        field_values.get("date")
+        or field_values.get("publish_date")
+        or _strip_label(_text_of(root, detail.date_selectors) or "")
+        or None
+    )
     return result
 
 
@@ -534,14 +610,22 @@ class HtmlListSource(PolicySource):
             logger.warning(
                 "来源「%s」详情页解析告警（%s）：%s", self.label, url, "；".join(detail.warnings)
             )
+        publish_date = parse_date(detail.date_text)
+        # 结构解析没拿到日期时，把整页文本留给提取阶段的模型兜底（日期常在正文容器外）。
+        # 只在缺日期时计算：有日期就不为这份可能很大的文本白付一次解析与内存。
+        page_text = None
+        if publish_date is None:
+            page_text = " ".join(parse_html(text).text_content().split())
         return FulltextResult(
             body=detail.body,
             title=detail.title,
             issuer=detail.agency,
             doc_no=detail.doc_no,
-            date=parse_date(detail.date_text),
+            date=publish_date,
             image_count=detail.image_count,
             attachments=[a.as_dict() for a in detail.attachments],
+            metadata=detail.extra,
+            page_text=page_text,
         )
 
     def fulltext_available(self) -> bool:
@@ -560,12 +644,21 @@ class HtmlListSource(PolicySource):
         url = str(raw.get("url") or "").strip()
         if not title or not url:
             return None
+        metadata = raw.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        extra = {
+            str(key): strip_zero_width(str(value)).strip()
+            for key, value in metadata.items()
+            if str(value or "").strip()
+        }
         return PolicyItem(
             title=title,
             url=url,
             date=parse_date(raw.get("date")),
             agency=strip_zero_width(str(raw.get("agency") or "")).strip() or None,
             doc_no=strip_zero_width(str(raw.get("doc_no") or "")).strip() or None,
+            extra=extra,
             # 来源目录 = 命中的栏目名（成果库按此展示「来源栏目」）
             catalog_key=str(raw.get("entrypoint") or "").strip() or None,
             catalog=str(raw.get("entrypoint") or "").strip() or None,

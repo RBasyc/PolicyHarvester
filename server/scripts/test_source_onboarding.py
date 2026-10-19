@@ -10,6 +10,8 @@
 
 1. 解析与安全底座：选择器引擎、列表/详情解析、翻页地址生成、SSRF 校验、编码嗅探；
 2. 结构分析：列表容器 / 正文容器 / 元信息 / 翻页 / 栏目入口的候选识别；
+2b. 单页声明的证据核对：拿入口自己的页面回问「还有下一页吗」——反推出的规则要真取
+   第 2 页验出新条目才采纳，验不过或推不出就如实标成「召回被截断」，不静默当单页；
 3. 配置：可执行性校验、指纹稳定性、非法配置拦下；
 4. 试运行与注册：用**假站点**替换取数层，让 `dry_run_ingestion` 走真实代码路径
    （含 `_search_policies` 检索编排、正文预检），分别验证通过 / 失败 / 受阻 /
@@ -39,6 +41,7 @@ from app.sources import net  # noqa: E402
 from app.sources.analyze import analyze_page  # noqa: E402
 from app.sources.config import (  # noqa: E402
     SEARCH_PROBE_KEYWORD,
+    EntrypointConfig,
     SourceConfig,
     capability_summary,
     validate_source_config,
@@ -268,6 +271,106 @@ def build_search_site(*, method: str = "get", result: str = "items") -> FakeSite
         block = SEARCH_BARE_INPUT_BLOCK
     site.add("/col/index.html", LIST_PAGE_1.replace("</body>", block + "</body>"))
     site.add_query("/search.html", SEARCH_RESULT_PAGE if result == "items" else SEARCH_EMPTY_PAGE)
+    return site
+
+
+# ---------- 命名区域（同页多列表）：tab 门户页 fixture ----------
+
+# 门户页并排三个 tab 面板（政府规章 / 市政府文件 / 政策解读）：面板类签名**完全相同**
+# （common_newslist tab-panel-2）、后两个 display:none——正是「一个 UL 选择器命中全部、
+# 无法只取其中一个」的线上形状（2026-10-16 用户给的 gz.gov.cn 政务公开页）。
+# tab 的 wzades 属性就是栏目名，tab 的 <a href> 指向各栏目页（本站故意不注册栏目页，
+# 走「页内区域」这一路——栏目页 404 也是内容发现要容忍的常态）。
+_TAB_PORTAL_TABS = (
+    ("政府规章", "/zfgz/index.html", "gz"),
+    ("市政府文件", "/szfwj/index.html", "sz"),
+    ("政策解读", "/zcjd/index.html", "jd"),
+)
+
+
+def tab_portal_html(tabs=_TAB_PORTAL_TABS) -> str:
+    """tab 门户页的 HTML（单测直接喂 analyze，端到端用例经假站点取回）。
+
+    `tabs` 可换（见 `_COLUMN_PORTAL_TABS`：同一个门户页，但 tab 的 `<a href>` 指向**真实
+    存在**的栏目页）——门户页的结构不变，变的只有 tab 指向哪里。
+    """
+    panels = []
+    for _name, _col, prefix in tabs:
+        items = "".join(
+            f'<li><a href="/{prefix}/art{n}.html" title="{DETAIL_TITLES[n][0]}">{DETAIL_TITLES[n][0]}</a>'
+            f'<span class="time">{DETAIL_TITLES[n][3]}</span></li>'
+            for n in (1, 2, 3)
+        )
+        panels.append(f'<ul class="common_newslist tab-panel-2" role="tabpanel">{items}</ul>')
+    tablist = "".join(
+        f'<li wzades="{name}"><a href="{col}" title="{name}">{name}</a></li>'
+        for name, col, _prefix in tabs
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>政务公开 - 演示门户</title></head>
+<body>
+<div class="common_slide zwgk_news">
+  <div class="hd common_hd gw"><ul role="tablist">{tablist}</ul></div>
+  <div class="bd">{''.join(panels)}</div>
+</div>
+</body></html>"""
+
+
+def build_tab_portal_site() -> FakeSite:
+    """tab 门户页 + 9 篇详情（三个面板各 3 条，URL 前缀各异）+ 附件字节。"""
+    site = FakeSite()
+    site.add("/zwgk/index.html", tab_portal_html())
+    for _name, _col, prefix in _TAB_PORTAL_TABS:
+        for n in (1, 2, 3):
+            site.add(f"/{prefix}/art{n}.html", detail_page(n, *DETAIL_TITLES[n]))
+            site.add_binary(f"/{prefix}/files/art{n}.pdf", f"%PDF-1.4 region {prefix} {n}".encode() * 40)
+    return site
+
+
+# ---------- 命名区域的独立栏目页：tab 指向真栏目页 ----------
+
+# 同一个 tab 门户页，但其中一个 tab 的 `<a href>` 指向**真实存在且有翻页**的栏目页。
+# 线上形状（2026-10-16 用户给的 gz.gov.cn 政务公开页）：tab 面板只是门户页上的**预览块**
+# （列几条就是几条、没有翻页），tab 自己链接到的栏目页才是完整列表——只接页内区域，
+# 召回就被预览块的长度封死（「抓到 9 篇就不抓了」）。另两个 tab 的栏目页**故意不注册**：
+# 「栏目页取不回，仍接页内区域」这条退路也要有人守着。
+#
+# **顺序是有意的**：会被选中的是第一个候选（区域候选排在最前，`_pick_candidate` 取第一个
+# 样本详情页能解析的）。真栏目页那个排在中间，选的却是页内区域——这正是要考的组合：
+# 改接过的区域**不是**入选候选，展开同页命名区域时不许把它弄丢。
+_COLUMN_PORTAL_TABS = (
+    ("政府规章", "/zfgz/index.html", "zf"),  # 未注册 → 404，应保留页内区域
+    ("政策文件", "/col/index.html", "gz"),   # 真栏目页：3 页列表 + 6 篇详情（build_demo_site）
+    ("政策解读", "/zcjd/index.html", "jd"),  # 未注册 → 404，同上
+)
+
+
+def build_column_portal_site() -> FakeSite:
+    """tab 门户页，其中一个 tab 指向**真实存在且带翻页**的栏目页（`build_demo_site` 那套 `/col/`）。"""
+    site = build_demo_site()  # /col/index.html + index_2/3 + 6 篇详情 + 附件
+    site.add("/zwgk/index.html", tab_portal_html(_COLUMN_PORTAL_TABS))
+    for _name, _col, prefix in _COLUMN_PORTAL_TABS:
+        for n in (1, 2, 3):
+            site.add(f"/{prefix}/art{n}.html", detail_page(n, *DETAIL_TITLES[n]))
+            site.add_binary(f"/{prefix}/files/art{n}.pdf", f"%PDF-1.4 region {prefix} {n}".encode() * 40)
+    return site
+
+
+# 分页条**只有「下一页」链接、没有页码链接**：页面上确实写着还有下一页，但地址规律反推
+# 不出来（页码由 JS 拼参数 / 页码链接不可枚举）。配置只能写单页——本 fixture 考的是
+# **这件事必须被说出来**（入口 notes + 报告覆盖范围），而不是静默当成「站点只有一页」。
+# 与 LIST_PAGE_1 只差分页条一处，结论的差异因此可归因到分页条本身。
+NEXT_ONLY_LIST_PAGE = LIST_PAGE_1.replace(
+    '<div class="pager"><a href="index_2.html">下一页</a>'
+    '<a href="index_2.html">2</a><a href="index_3.html">3</a></div>',
+    '<div class="pager"><a href="index_2.html">下一页</a></div>',
+)
+
+
+def build_next_only_site() -> FakeSite:
+    """列表页分页条只有「下一页」链接的站点（第 2 页地址的规律反推不出来）。"""
+    site = build_demo_site()
+    site.add("/col/index.html", NEXT_ONLY_LIST_PAGE)
     return site
 
 
@@ -553,6 +656,67 @@ def test_parser_and_security() -> None:
         str(picked[:1]),
     )
 
+    # 同页多列表（2026-10-16 命名区域增量）：scope_selector + scope_index 只取其中一个 UL。
+    # 三个面板类签名完全相同——没有 scope 时一个选择器必然全部命中、合并、无法拆分。
+    portal_url = f"{BASE}/zwgk/index.html"
+    merged = parse_list_page(
+        tab_portal_html(),
+        EntrypointConfig(name="合并", url=portal_url, list_selector="li",
+                         scope_selector="ul.common_newslist.tab-panel-2"),
+        portal_url,
+    )
+    check("scope：不写 scope_index = 全部合并（旧行为，9 条）", len(merged) == 9, f"{len(merged)} 条")
+    scoped = parse_list_page(
+        tab_portal_html(),
+        EntrypointConfig(name="政策解读", url=portal_url, list_selector="li",
+                         scope_selector="ul.common_newslist.tab-panel-2", scope_index=2),
+        portal_url,
+    )
+    check("scope：scope_index=2 只取第 3 个面板（3 条）", len(scoped) == 3, f"{len(scoped)} 条")
+    check(
+        "scope：取到的确实是政策解读面板的条目",
+        bool(scoped) and all("/jd/" in item["url"] for item in scoped),
+        str([item["url"] for item in scoped]),
+    )
+    out_of_range = parse_list_page(
+        tab_portal_html(),
+        EntrypointConfig(name="越界", url=portal_url, list_selector="li",
+                         scope_selector="ul.common_newslist.tab-panel-2", scope_index=9),
+        portal_url,
+    )
+    check("scope：序号越界返回空列表（不报错、不兜底整页）", out_of_range == [])
+    problems = validate_source_config(
+        SourceConfig.model_validate(
+            demo_config_payload(
+                entrypoints=[
+                    {
+                        "name": "政策解读",
+                        "url": portal_url,
+                        "list_selector": "li",
+                        "scope_selector": "ul.common_newslist.tab-panel-2",
+                        "scope_index": 2,
+                    }
+                ]
+            )
+        )
+    )
+    check("配置校验：scope 入口通过可执行性校验", problems == [], str(problems))
+    bad_scope = validate_source_config(
+        SourceConfig.model_validate(
+            demo_config_payload(
+                entrypoints=[
+                    {"name": "坏", "url": portal_url, "list_selector": "li",
+                     "scope_selector": "div:nth-of-type(1)"}
+                ]
+            )
+        )
+    )
+    check(
+        "配置校验：引擎执行不了的 scope 选择器会被点名拦下",
+        any("scope_selector" in p for p in bad_scope),
+        str(bad_scope),
+    )
+
     # 翻页地址
     check("翻页：第 1 页", build_list_url(entry, 1) == entry.url)
     check("翻页：第 2 页", build_list_url(entry, 2) == f"{BASE}/col/index_2.html", str(build_list_url(entry, 2)))
@@ -708,6 +872,49 @@ def test_analysis() -> None:
     check("翻页识别：start 反推为 1", pagination.get("start") == 1, str(pagination.get("start_reason")))
     check("翻页识别：下一页链接", pagination.get("next_href") == f"{BASE}/col/index_2.html", str(pagination.get("next_href")))
 
+    # 翻页证据 → 「单页声明成不成立」的判定（纯函数、无网络；见 sources/pagination_probe.py）。
+    # 这一对函数是「抓到 N 篇就不动了」那条 bug 的正面回答：配置里写 kind=none 不再等于
+    # 「站点只有一页」，而要先拿页面自己的证据过一遍。
+    from app.sources.pagination_probe import has_pagination_evidence, rule_from_evidence
+
+    check("证据：页面有页码链接 → 有（单页声明不成立）", has_pagination_evidence(pagination) is True, str(pagination))
+    check(
+        "证据：只有「下一页」链接也算有（链接是事实，规不规律另说）",
+        has_pagination_evidence({"page_links": 0, "next_href": f"{BASE}/col/index_2.html"}) is True,
+        "next-only",
+    )
+    check("证据：什么都没有 → 无（单页就是事实）", has_pagination_evidence({"page_links": 0}) is False, "{page_links: 0}")
+    check("证据：None → 无（取不到页面时不乱判）", has_pagination_evidence(None) is False, "None")
+    check("证据：认不出规律的页码链接也算有", has_pagination_evidence({"page_links": 3, "kind": "unknown"}) is True, "kind=unknown")
+
+    rule = rule_from_evidence(pagination, max_pages=10)
+    check(
+        "规则：反推得出的路径模板原样采纳，start/step/max_pages 补齐",
+        rule == {
+            "kind": "path_index",
+            "path_template": "/col/index_{page}.html",
+            "start": 1,
+            "step": 1,
+            "max_pages": 10,
+        },
+        str(rule),
+    )
+    check(
+        "规则：max_pages 由调用方给（与组装阶段 _simplify_pagination 同一口径）",
+        (rule_from_evidence(pagination, max_pages=3) or {}).get("max_pages") == 3,
+        str(rule_from_evidence(pagination, max_pages=3)),
+    )
+    check(
+        "规则：只有「下一页」链接时**不臆造**参数（返回 None，由调用方保持单页并把原因说清）",
+        rule_from_evidence({"page_links": 0, "next_href": f"{BASE}/col/index_2.html"}, max_pages=10) is None,
+        "next-only",
+    )
+    check(
+        "规则：认不出的规律同样返回 None（宁可保持单页，也不塞一个会被站点忽略的参数）",
+        rule_from_evidence({"page_links": 3, "kind": "unknown", "example": f"{BASE}/col/a1.html"}, max_pages=10) is None,
+        "kind=unknown",
+    )
+
     detail_analysis = analyze_page(detail_page(1, *DETAIL_TITLES[1]), f"{BASE}/col/art1.html", listed_as="detail")
     top = detail_analysis["detail_candidates"][0]["selector"] if detail_analysis["detail_candidates"] else None
     check("正文候选首选 div#zoom", top == "#zoom", str(top))
@@ -727,6 +934,216 @@ def test_analysis() -> None:
     check("栏目入口候选（政策/公开）", "政策文件" in texts and "政务公开" in texts, str(texts))
     check("栏目入口排除登录类链接", "登录" not in texts, str(texts))
     check("订阅入口识别", f"{BASE}/rss.xml" in home["feeds"]["feeds"], str(home["feeds"]))
+
+    # 命名区域（2026-10-16 增量）：同页多个同签名 UL → 各成一个**命名**区域
+    portal = analyze_page(tab_portal_html(), f"{BASE}/zwgk/index.html", listed_as="entry")
+    regions = portal.get("regions") or []
+    tab_regions = [r for r in regions if r.get("kind") == "tab"]
+    check(
+        "区域归纳：三个 tab 面板各成一个区域（没有合并组搅回去）",
+        len(tab_regions) == 3 and not any(r.get("kind") == "module" for r in regions),
+        str([(r.get("kind"), r.get("name")) for r in regions]),
+    )
+    check(
+        "区域名取自 tab 的 wzades 标注",
+        [r["name"] for r in tab_regions] == ["政府规章", "市政府文件", "政策解读"],
+        str([r.get("name") for r in tab_regions]),
+    )
+    check(
+        "区域定位：同一 scope 选择器 + 序号 0/1/2 逐一点名",
+        all(r.get("scope_selector") == "ul.common_newslist.tab-panel-2" for r in tab_regions)
+        and [r.get("scope_index") for r in tab_regions] == [0, 1, 2],
+        str([(r.get("scope_selector"), r.get("scope_index")) for r in tab_regions]),
+    )
+    check(
+        "区域样本来自各自面板（第 3 个是政策解读的 /jd/）",
+        tab_regions[2].get("sample_url") == f"{BASE}/jd/art1.html",
+        str([r.get("sample_url") for r in tab_regions]),
+    )
+    check(
+        "区域带栏目页地址证据（tab 的 <a href>）",
+        tab_regions[0].get("column_url") == f"{BASE}/zfgz/index.html",
+        str([r.get("column_url") for r in tab_regions]),
+    )
+
+    # 标题邻近模块：两个同签名模块（div.module > ul.mod-list）并排、各有自己的标题——
+    # 普通选择器 `ul.mod-list > li` 会把两组全部命中（歧义），模块区域用 scope+index
+    # 把每组单独点名，名字来自各模块自己的标题。
+    module_page = (
+        '<html><head><title>门户</title></head><body>'
+        '<div class="module"><div class="hd"><h2>政府规章</h2></div>'
+        '<ul class="mod-list">'
+        '<li><a href="/a/art1.html">关于人工智能产业政策的解读说明</a></li>'
+        '<li><a href="/a/art2.html">关于数据要素市场建设的解读说明</a></li>'
+        '<li><a href="/a/art3.html">关于优化营商环境措施的解读说明</a></li>'
+        "</ul></div>"
+        '<div class="module"><div class="hd"><h2>政策解读</h2></div>'
+        '<ul class="mod-list">'
+        '<li><a href="/b/art1.html">关于科技创新平台建设的解读说明</a></li>'
+        '<li><a href="/b/art2.html">关于财政金融支持政策的解读说明</a></li>'
+        '<li><a href="/b/art3.html">关于人才引育措施的解读说明</a></li>'
+        "</ul></div></body></html>"
+    )
+    module_regions = [
+        r for r in analyze_page(module_page, f"{BASE}/", listed_as="entry").get("regions") or []
+        if r.get("kind") == "module"
+    ]
+    check(
+        "模块区域：同签名双模块各成一个命名区域",
+        [r.get("name") for r in module_regions] == ["政府规章", "政策解读"],
+        str([(r.get("name"), r.get("scope_index")) for r in module_regions]),
+    )
+    if len(module_regions) == 2:
+        check(
+            "模块区域：scope 选择器共享、序号逐一点名",
+            module_regions[0].get("scope_selector") == "ul.mod-list"
+            and [r.get("scope_index") for r in module_regions] == [0, 1],
+            str([(r.get("scope_selector"), r.get("scope_index")) for r in module_regions]),
+        )
+        check(
+            "模块区域：无名前不硬编（label_source 写明名字哪来的）",
+            all(r.get("label_source") in ("heading_div", "h2", "preceding_text") for r in module_regions),
+            str([r.get("label_source") for r in module_regions]),
+        )
+    # 「更多>>」剥离 + 导航条头拒绝（2026-10-16 实测站点回归）：模块头是
+    # <div class="tit"><span>标题</span><a>更多>></a></div> 时名字必须干净；模块头若塞着
+    # 一整条栏目快捷导航（政策文件/政策解读/规划信息/人事任免 + 一堆「更多>>」），
+    # text_content 会拼成一大串导航文本——这种节点是导航条不是标题，必须拒绝，
+    # 否则同页多个模块共用一条导航头，区域全是克隆名（xx2/xx3），筛选面板没法看。
+    more_page = (
+        '<html><head><title>门户</title></head><body>'
+        '<div class="module"><div class="tit"><span>通知公告</span><a href="/more1">更多&gt;&gt;</a></div>'
+        '<ul class="mod-list">'
+        '<li><a href="/a/art1.html">关于人工智能产业政策的解读说明</a></li>'
+        '<li><a href="/a/art2.html">关于数据要素市场建设的解读说明</a></li>'
+        '<li><a href="/a/art3.html">关于优化营商环境措施的解读说明</a></li>'
+        "</ul></div>"
+        '<div class="module"><div class="tit"><span>政策解读</span><a href="/more2">更多&gt;&gt;</a></div>'
+        '<ul class="mod-list">'
+        '<li><a href="/b/art1.html">关于科技创新平台建设的解读说明</a></li>'
+        '<li><a href="/b/art2.html">关于财政金融支持政策的解读说明</a></li>'
+        '<li><a href="/b/art3.html">关于人才引育措施的解读说明</a></li>'
+        "</ul></div></body></html>"
+    )
+    more_regions = [
+        r for r in analyze_page(more_page, f"{BASE}/", listed_as="entry").get("regions") or []
+        if r.get("kind") == "module"
+    ]
+    check(
+        "模块区域：模块头的「更多>>」噪声被剥掉",
+        [r.get("name") for r in more_regions] == ["通知公告", "政策解读"],
+        str([r.get("name") for r in more_regions]),
+    )
+
+    nav_bar_head = (
+        '<div class="tit">'
+        '<a href="/zcwj/">政策文件</a><a href="/zcjd/">政策解读</a>'
+        '<a href="/ghxx/">规划信息</a><a href="/rsrm/">人事任免</a>'
+        '<a href="/more{n}/">更多&gt;&gt;</a></div>'
+        '<ul class="mod-list">'
+        '<li><a href="/{c}/art1.html">关于人工智能产业政策的解读说明</a></li>'
+        '<li><a href="/{c}/art2.html">关于数据要素市场建设的解读说明</a></li>'
+        '<li><a href="/{c}/art3.html">关于优化营商环境措施的解读说明</a></li>'
+        "</ul>"
+    )
+    nav_page = (
+        '<html><head><title>门户</title></head><body>'
+        '<div class="module">'
+        + nav_bar_head.format(n=1, c="a")
+        + '</div><div class="module">'
+        + nav_bar_head.format(n=2, c="b")
+        + "</div></body></html>"
+    )
+    nav_regions = analyze_page(nav_page, f"{BASE}/", listed_as="entry").get("regions") or []
+    check(
+        "模块区域：导航条头（多栏目链接 + 一堆更多>>）被拒绝，宁可无名",
+        nav_regions == [],
+        str([(r.get("kind"), r.get("name")) for r in nav_regions]),
+    )
+    # 普通栏目页（单一列表、无歧义）不该被归纳出区域——区域不是列表候选的重复装饰
+    plain = analyze_page(LIST_PAGE_1, f"{BASE}/col/index.html", listed_as="entry")
+    check(
+        "单一列表页不产出模块区域（站头导航文本不许当栏目名）",
+        (plain.get("regions") or []) == [],
+        str([(r.get("kind"), r.get("name")) for r in (plain.get("regions") or [])]),
+    )
+
+
+# ---------- 2b. 单页声明的证据核对（假站点上真取第 2 页） ----------
+
+
+def _probe_entry(url: str, name: str = "栏目") -> EntrypointConfig:
+    """一个「声明为单页」的入口（翻页核对要回答的正是它的单页声明成不成立）。"""
+    return EntrypointConfig(name=name, url=url, list_selector="ul.news-list > li", link_selector="a")
+
+
+async def test_pagination_probe() -> None:
+    """`probe_single_page_entry`：单页声明必须由**站点自己的页面**证明。
+
+    四条路各一个用例——真能翻（补上验过的规则）/ 只有「下一页」链接（保持单页但如实说
+    截断）/ 页面压根没有翻页入口（单页是事实，不报警）/ 页面取不回（既不谎报已验证，
+    也不谎报截断）。这正是「抓到 N 篇就不动了」那条 bug 的正面回答。
+    """
+    print("\n=== 2b. 单页声明的证据核对（真取第 2 页） ===")
+
+    from app.sources.pagination_probe import probe_single_page_entry
+
+    domains = ["demo.example.gov.cn"]
+
+    # (1) 页面上有页码链接 2/3 → 反推出路径模板 → **真取** index_2.html 验出新条目才算数
+    install_fake_network(build_demo_site())
+    probe = await probe_single_page_entry(
+        _probe_entry(f"{BASE}/col/index.html", "政策文件"), allowed_domains=domains, max_pages=7
+    )
+    check(
+        "有页码链接：真取第 2 页验出新条目后才采纳规则",
+        probe.verified and (probe.rule or {}).get("path_template") == "/col/index_{page}.html",
+        f"verified={probe.verified} rule={probe.rule} detail={probe.detail}",
+    )
+    check(
+        "采纳的规则用调用方给的上限（不自己定一个，免得两处两个口径）",
+        (probe.rule or {}).get("max_pages") == 7,
+        str(probe.rule),
+    )
+    check("验过的不算「召回被截断」", probe.truncated is False, probe.detail)
+
+    # (2) 分页条只有「下一页」链接 → 规律反推不出来 → 保持单页，但**如实标成截断**
+    install_fake_network(build_next_only_site())
+    probe = await probe_single_page_entry(
+        _probe_entry(f"{BASE}/col/index.html", "政策文件"), allowed_domains=domains
+    )
+    check(
+        "只有「下一页」链接：不臆造参数，保持单页",
+        not probe.verified and probe.rule is None,
+        f"verified={probe.verified} rule={probe.rule}",
+    )
+    check(
+        "但如实标成「召回被截断在第 1 页」（不再是静默的「站点只有一页」）",
+        probe.truncated is True and "截断" in probe.detail,
+        probe.detail,
+    )
+
+    # (3) 页面压根没有翻页入口 → 单页就是事实，不该报警
+    install_fake_network(build_tab_portal_site())
+    probe = await probe_single_page_entry(
+        _probe_entry(f"{BASE}/zwgk/index.html", "政府规章"), allowed_domains=domains
+    )
+    check(
+        "页面无翻页入口：单页声明成立，不误报截断",
+        not probe.verified and probe.truncated is False and "无翻页入口" in probe.detail,
+        f"truncated={probe.truncated} detail={probe.detail}",
+    )
+
+    # (4) 页面取不回 → 没核对过就说没核对过（既不谎报「已验证」也不谎报「截断」）
+    install_fake_network(FakeSite())
+    probe = await probe_single_page_entry(
+        _probe_entry(f"{BASE}/whatever/index.html", "栏目"), allowed_domains=domains
+    )
+    check(
+        "页面取不回：如实说「未核对」，不冒充结论",
+        not probe.verified and probe.truncated is False and "未核对" in probe.detail,
+        probe.detail,
+    )
 
 
 # ---------- 3. 配置 ----------
@@ -1288,6 +1705,7 @@ async def main() -> int:
     try:
         test_parser_and_security()
         test_analysis()
+        await test_pagination_probe()
         test_config()
         await test_dry_run()
         await test_search_entrypoint()

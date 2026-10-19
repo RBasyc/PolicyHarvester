@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -126,6 +127,99 @@ class SearchConfig(BaseModel):
         return self
 
 
+# 字段取值位置。政务站最常见的两种形状都在这里：
+#   <span>文　　号：</span> 惠府〔2025〕13号   → 标签在 span，值在父节点的直接文本里（parent_own_text）
+#   <div>发布日期：2025-03-10</div>           → 标签和值在同一个节点（self_text + drop_label）
+#   <dt>发布机构</dt><dd>惠州市政府办公室</dd> → 标签与值分居兄弟节点（next_sibling_text）
+FieldValueFrom = Literal[
+    "self_text",
+    "own_text",
+    "parent_text",
+    "parent_own_text",
+    "next_sibling_text",
+    "attr",
+]
+
+
+class FieldRule(BaseModel):
+    """一条**语义化**字段规则：先按标签找节点，再按位置取值，最后用正则收口。
+
+    这是对旧 `xxx_selectors` 的增量：旧字段只能表达「第几个选择器命中什么」，
+    遇到「标签在 `<span>`、值在父节点文本里」或「同一个 `div.col-6` 复用于多个字段」
+    就束手无策。这里把「标签 → 值」的关系写成数据，模型可以自由组合，流水线只负责解释。
+
+    - `scope`：先定位元信息块（如 `div.row.border`），避免在正文里误命中；
+    - `selector`：候选节点（通常指向标签节点 `span.fw-bold`）；
+    - `label_equals`：标签文本，比较前会**去掉所有空白与末尾冒号**，所以 `文　　号：`、
+      `文号`、`文 号：` 都等价；
+    - `label_matches`：同上，但用正则（在去空白后的标签文本上匹配）；
+    - `value_from`：取哪个位置的文本，语义见 `FieldValueFrom`；
+    - `drop_label`：从取值里去掉标签本身（`self_text`/`parent_text` 常需要）；
+    - `pattern` / `group`：正则截取；`reject`：命中任一正则就跳过这个候选；
+    - `normalize`：`whitespace` = 压空白；`date` = 解析成 ISO 日期（解析不了返回空）；
+      `none` = 只 strip，保留换行；
+    - `match_index`：标签可能命中多个节点时，从第几个开始尝试（0 起）；前一个取不到会
+      继续尝试后面的，避免把「索引号」那格的空值当成整个字段失败。
+
+    规则按列表顺序尝试，第一个取到非空值的规则获胜；这天然提供了 fallback 链。
+    """
+
+    scope: str | None = Field(None, description="在哪个子树内查找；不填 = 全页")
+    selector: str = Field("*", min_length=1, description="候选节点选择器；通常指向标签节点")
+    label_equals: str | None = Field(
+        None, max_length=40, description="标签文本（忽略所有空白与末尾冒号）"
+    )
+    label_matches: str | None = Field(
+        None, max_length=300, description="标签文本正则（在去空白后的标签文本上匹配）"
+    )
+    value_from: FieldValueFrom = "self_text"
+    attr: str | None = Field(None, max_length=40, description="value_from=attr 时取哪个属性")
+    drop_label: bool = False
+    pattern: str | None = Field(None, max_length=500, description="取值正则；可用 group 指定捕获组")
+    group: int = Field(0, ge=0)
+    reject: list[str] = Field(default_factory=list, description="取值命中任一正则则跳过该候选")
+    normalize: Literal["whitespace", "none", "date"] = "whitespace"
+    match_index: int = Field(0, ge=0, description="从第几个标签命中开始尝试（0 起）")
+
+    @field_validator("scope", "selector")
+    @classmethod
+    def _selector_ok(cls, value: str | None, info: Any) -> str | None:
+        if value is None:
+            return None
+        ok, reason = selector_supported(value)
+        if not ok:
+            raise ValueError(f"{info.field_name} 不可用：{reason}")
+        return value
+
+    @field_validator("pattern", "label_matches")
+    @classmethod
+    def _pattern_ok(cls, value: str | None, info: Any) -> str | None:
+        if value:
+            try:
+                re.compile(value)
+            except re.error as exc:
+                raise ValueError(f"{info.field_name} 不是合法正则：{exc}") from exc
+        return value
+
+    @field_validator("reject")
+    @classmethod
+    def _reject_ok(cls, value: list[str]) -> list[str]:
+        for item in value:
+            try:
+                re.compile(item)
+            except re.error as exc:
+                raise ValueError(f"reject 不是合法正则「{item}」：{exc}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _check(self) -> "FieldRule":
+        if self.value_from == "attr" and not (self.attr or "").strip():
+            raise ValueError("value_from=attr 时必须提供 attr")
+        if self.label_equals and self.label_matches:
+            raise ValueError("label_equals 与 label_matches 只能二选一")
+        return self
+
+
 class EntrypointConfig(BaseModel):
     """一个内容入口（栏目列表页 / 检索结果页）。
 
@@ -141,9 +235,22 @@ class EntrypointConfig(BaseModel):
     url: str = Field(..., min_length=1)
     list_selector: str = Field(..., min_length=1, description="条目容器选择器（命中多个 = 多条）")
     link_selector: str = "a"  # 相对条目容器的链接选择器
-
+    # 同页多列表的定位（2026-10-16「命名区域」增量，纯确定性）：
+    # 一张页面上常有多个同签名的列表（标签页面板 / 并列模块，如门户页的「政府规章 /
+    # 市政府文件 / 政策解读」三个 tab）。只写 list_selector 会把它们全部命中、合并、
+    # 且无法只取其中一个。先按 scope_selector 定位容器（可命中多个），再在各容器的
+    # 子树内跑 list_selector；scope_index 取命中的第几个（0 起），不填 = 全部合并。
+    # scope 语义由 `parse_list_page` 执行，不依赖 CSS 伪类（引擎本就不支持 :nth-of-type）。
+    scope_selector: str | None = Field(None, description="列表容器的作用域选择器（先定位再在子树内取条目）")
+    scope_index: int | None = Field(None, ge=0, description="scope 命中多个时取第几个（0 起）；不填 = 全部")
     title_selector: str | None = None  # 不填 = 用链接文本
     date_selector: str | None = None  # 不填 = 不取日期（详情页再补）
+    # 列表条目上的通用字段（与详情页 `fields` 同一套 DSL）。典型用途：列表里的
+    # 发布日期、发文机关、文号。取到的值按字段名进入 `PolicyItem.extra`，随后以
+    # `metadata` JSONB 落库；`date` 会兼作 `publish_date` 的兜底。
+    item_fields: dict[str, list[FieldRule]] = Field(
+        default_factory=dict, description="列表条目字段名 → 规则链（第一个取到非空值的规则获胜）"
+    )
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
     search: SearchConfig | None = None  # 非空 = 站内检索入口（关键词/日期进服务端）
     notes: str | None = None
@@ -168,6 +275,13 @@ class DetailConfig(BaseModel):
     date_selectors: list[str] = Field(default_factory=list)
     agency_selectors: list[str] = Field(default_factory=list)
     doc_no_selectors: list[str] = Field(default_factory=list)
+    # 语义化字段规则（新口径）。与上面的 `*_selectors` 并存：`fields` 优先级更高，
+    # 取到值的字段写回 title/agency/doc_no/date（按字段名），其余字段进入
+    # `DetailResult.extra` → `FulltextResult.metadata` → `policy_document.metadata`。
+    # 旧配置不填 `fields` 时行为完全不变。
+    fields: dict[str, list[FieldRule]] = Field(
+        default_factory=dict, description="字段名 → 规则链；title/agency/doc_no/date 为保留名"
+    )
     drop_selectors: list[str] = Field(
         default_factory=list, description="正文内需剔除的节点（分享条/相关阅读/打印提示）"
     )
@@ -300,6 +414,7 @@ def validate_source_config(config: SourceConfig) -> list[str]:
         for field_name, selector in (
             ("list_selector", ep.list_selector),
             ("link_selector", ep.link_selector),
+            ("scope_selector", ep.scope_selector),
             ("title_selector", ep.title_selector),
             ("date_selector", ep.date_selector),
         ):
@@ -308,6 +423,9 @@ def validate_source_config(config: SourceConfig) -> list[str]:
             ok, reason = selector_supported(selector)
             if not ok:
                 problems.append(f"入口「{ep.name}」的 {field_name} 不可用：{reason}")
+        _validate_field_rules(
+            f"入口「{ep.name}」的 item_fields", ep.item_fields, problems
+        )
 
     for field_name, selectors in (
         ("container_selectors", config.detail.container_selectors),
@@ -325,6 +443,7 @@ def validate_source_config(config: SourceConfig) -> list[str]:
         ok, reason = selector_supported(config.detail.attachment_selector)
         if not ok:
             problems.append(f"detail.attachment_selector 不可用：{reason}")
+    _validate_field_rules("detail.fields", config.detail.fields, problems)
 
     if not config.detail.container_selectors:
         problems.append(
@@ -332,6 +451,25 @@ def validate_source_config(config: SourceConfig) -> list[str]:
             "（先跑 analyze_content_structure 取得候选选择器）"
         )
     return problems
+
+
+def _validate_field_rules(
+    where: str, fields: dict[str, list[FieldRule]], problems: list[str]
+) -> None:
+    """字段规则的可执行性校验（选择器子集 + 正则已由 Pydantic validator 管）。"""
+    for field_name, rules in fields.items():
+        if not rules:
+            problems.append(f"{where}.{field_name} 规则链为空")
+            continue
+        for index, rule in enumerate(rules):
+            for label, selector in (("scope", rule.scope), ("selector", rule.selector)):
+                if not selector:
+                    continue
+                ok, reason = selector_supported(selector)
+                if not ok:
+                    problems.append(
+                        f"{where}.{field_name}[{index}].{label} 不可用：{reason}"
+                    )
 
 
 def capability_summary(config: dict[str, Any]) -> dict[str, Any]:
