@@ -453,7 +453,13 @@ export interface SourceImportCandidate {
   index: number
   page_url: string
   name: string
+  /** 候选种类：region = 命名内容区域（tab 标签页/标题模块），list = 普通列表候选 */
+  kind?: 'region' | 'list'
   list_selector: string
+  /** 同页多列表定位：先定位作用域容器，再在其中跑 list_selector（region 候选才有） */
+  scope_selector?: string | null
+  /** 作用域命中多个时取第几个（0 起）；缺省 = 全部合并 */
+  scope_index?: number | null
   item_count: number | null
   sample_title: string | null
   sample_url: string | null
