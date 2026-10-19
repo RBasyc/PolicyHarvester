@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS policy_document (
     task_id      BIGINT NOT NULL REFERENCES crawl_task(id) ON DELETE CASCADE,
     title        TEXT NOT NULL,
     publish_date DATE,
+    publish_date_source TEXT,                                 -- 日期来源：NULL=页面解析，'model'=模型从页面内容补提
     source_name  TEXT,                                        -- 来源（国务院政策文件库）
     source_url   TEXT,                                        -- 原文链接
     agency       TEXT,                                        -- 发文机关
@@ -120,6 +121,7 @@ CREATE TABLE IF NOT EXISTS policy_document (
     fulltext     TEXT,                                        -- 政策正文存档（提取阶段落库，供成果库「政策正文」展示）
     judge_tagged BOOLEAN,                                     -- 入库判别标注（Phase 13）：NULL=未判别，TRUE=不建议入库
     judge_prob   REAL,                                        -- 判别为「不入库」的概率（未判别 / 拿不到为 NULL）
+    metadata     JSONB NOT NULL DEFAULT '{}',                 -- 字段规则取到的站点自定义元信息（索引号/成文日期/主题分类…）
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (task_id, source_url)
 );
@@ -133,6 +135,14 @@ ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS fulltext TEXT;
 --               TRUE = 不建议入库（手动任务仅提示；定时任务自动剔除）。
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS judge_tagged BOOLEAN;
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS judge_prob   REAL;
+-- 补丁：配置化来源的字段规则（detail.fields / entrypoint.item_fields）取到的自定义元信息。
+-- 用 JSONB 而不是加列：站点字段名千差万别（索引号 / 成文日期 / 主题分类 / 发文字号…），
+-- 逐字段加列会让每接一个站都动 schema；标准字段仍走 agency / doc_no / publish_date 列。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+-- 补丁：发布日期来源。NULL = 抓取时从页面结构解析（列表/详情规则）；
+-- 'model' = 结构解析没拿到，提取阶段由模型从页面内容补提（前端据此标注「模型提取」）。
+-- 单独一列而不是塞 metadata：表格/详情都要读它，且它约束的是 publish_date 这一标准列的可信度。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS publish_date_source TEXT;
 
 -- 提取结果（与 policy_document 一对一；对应抽屉「事实 / 信息 / 知识」三区）
 CREATE TABLE IF NOT EXISTS extraction (
@@ -368,6 +378,8 @@ SELECT
         WHERE e2.status = 'extracted'
           AND p2.source_url = p.source_url
           AND p2.task_id <> p.task_id
-    ) AS in_library
+    ) AS in_library,
+    -- 追加在列尾：CREATE OR REPLACE VIEW 只允许在末尾加列
+    p.publish_date_source
 FROM policy_document p
 LEFT JOIN extraction e ON e.policy_id = p.id;

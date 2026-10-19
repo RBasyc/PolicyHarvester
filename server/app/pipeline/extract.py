@@ -167,6 +167,66 @@ async def extract_policy(
     return payload, entry.model
 
 
+async def extract_publish_date(
+    *,
+    title: str,
+    text: str,
+    url: str | None = None,
+    max_text_chars: int | None = None,
+    model_id: str | None = None,
+    config: RunnableConfig | None = None,
+) -> date | None:
+    """结构解析没拿到发布日期时的**兜底**：让模型从页面文本里找明确写出的日期。
+
+    为什么要单独一次调用：发布日期常写在正文容器之外的页头/元信息块，正文 `body` 里
+    根本没有；而正文提取的提示词只关心三区内容，不应为了一个日期把整页噪声塞进去。
+    只在缺日期时调用（见 `crawl_graph._backfill_model_publish_date`），失败按「无日期」
+    处理——日期补不上不能拖垮已经成功的提取。
+
+    防幻觉是硬约束：提示词要求只认页面明确写出的「发布日期/发布时间」，不许拿成文/
+    施行日期顶替，也不许推测；返回后再按合理区间校验（未来日期、过早日期一律丢弃）。
+    """
+    settings = get_settings()
+    limit = max_text_chars or settings.pipeline_max_body_chars
+    truncated = (text or "").strip()
+    if not truncated:
+        return None
+    if len(truncated) > limit:
+        truncated = truncated[:limit] + "\n…（页面文本过长已截断）"
+
+    messages = [
+        SystemMessage(content=DATE_PROMPT),
+        HumanMessage(
+            content=(
+                f"政策标题：{title}\n"
+                f"原文链接：{url or '（无）'}\n\n"
+                f"页面文本：\n{truncated}"
+            )
+        ),
+    ]
+
+    try:
+        entry = resolve_model_entry(model_id)
+        response = await _build_extract_llm(entry).ainvoke(messages, config=config)
+        content = (
+            response.content
+            if isinstance(response.content, str)
+            else _blocks_to_text(response.content)
+        )
+        data = _loads_lenient(content)
+        parsed = parse_date(data.get("publish_date"))
+    except Exception as exc:  # noqa: BLE001 - 日期兜底失败不能影响提取结果
+        logger.warning("模型补提发布日期失败（%s），按「无日期」处理", exc)
+        return None
+
+    if parsed is None:
+        return None
+    if parsed < date(_MIN_MODEL_DATE_YEAR, 1, 1) or parsed > date.today():
+        logger.warning("模型补提的发布日期不合理（%s），已丢弃", parsed)
+        return None
+    return parsed
+
+
 async def _extract_via_tool(
     llm: Any, messages: list, *, config: RunnableConfig | None = None
 ) -> ExtractionPayload:

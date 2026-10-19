@@ -22,6 +22,8 @@ class PolicyRow(TypedDict, total=False):
     title: str
     source_url: str
     publish_date: date | None
+    # 日期来源：None=页面解析；"model"=预检/提取阶段模型补提（见 crawl_graph）
+    publish_date_source: str | None
     source_name: str | None
     agency: str | None
     doc_no: str | None
@@ -29,6 +31,7 @@ class PolicyRow(TypedDict, total=False):
     fetched_by: str | None
     judge_tagged: bool | None  # 入库判别标注（Phase 13）：True=不建议入库；None=未判别
     judge_prob: float | None  # 判别为「不入库」的概率（未判别 / 拿不到为 None）
+    metadata: dict[str, str]  # 字段规则取到的站点自定义元信息（索引号/成文日期…）
 
 
 # ---------- 读：抓取任务 ----------
@@ -74,8 +77,8 @@ async def fetch_task_policies(task_id: int) -> list[Row]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT id, task_id, title, publish_date, source_url, catalog, status, extracted_at,
-                       judge_tagged, judge_prob, in_library
+                SELECT id, task_id, title, publish_date, publish_date_source, source_url,
+                       catalog, status, extracted_at, judge_tagged, judge_prob, in_library
                 FROM v_policy_results
                 WHERE task_id = %s
                 ORDER BY publish_date DESC NULLS LAST, id
@@ -279,16 +282,17 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                 await cur.execute(
                     """
                     INSERT INTO policy_document
-                        (task_id, title, publish_date, source_name, source_url,
-                         agency, doc_no, catalog, fetched_by, fetched_at,
-                         judge_tagged, judge_prob)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
+                        (task_id, title, publish_date, publish_date_source,
+                         source_name, source_url, agency, doc_no, catalog,
+                         fetched_by, fetched_at, judge_tagged, judge_prob, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s, %s::jsonb)
                     ON CONFLICT (task_id, source_url) DO NOTHING
                     """,
                     (
                         task_id,
                         policy["title"],
                         policy.get("publish_date"),
+                        policy.get("publish_date_source"),
                         policy.get("source_name"),
                         policy["source_url"],
                         policy.get("agency"),
@@ -297,17 +301,30 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                         policy.get("fetched_by"),
                         policy.get("judge_tagged"),
                         policy.get("judge_prob"),
+                        json.dumps(policy.get("metadata") or {}, ensure_ascii=False),
                     ),
                 )
 
 
 async def update_policy_from_fulltext(
-    policy_id: int, *, agency: str, doc_no: str, publish_date: date | None, fulltext: str | None = None
-) -> None:
+    policy_id: int,
+    *,
+    agency: str,
+    doc_no: str,
+    publish_date: date | None,
+    fulltext: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> Row | None:
     """用全文解析出的元信息回填；解析不到的字段保持原值（不写空值进去）。
 
     同时把全文正文存档到 `fulltext` 列（成果库详情页「政策正文」用）；
     正文只在非空时覆盖，重试时拿到空正文不会清掉旧存档。
+
+    `metadata` 用 JSONB 的 `||` **浅合并**：详情页字段规则取到的新键覆盖同名旧键，
+    没取到的键保留（与 `COALESCE` 同口径，不拿空字典把列表轮结果抹掉）。
+
+    返回回填后的 `publish_date`（调用方据此判断要不要让模型补提日期）；本条解析到了
+    日期时顺带把 `publish_date_source` 清回 NULL——页面解析的日期永远优先于旧模型值。
     """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
@@ -317,11 +334,46 @@ async def update_policy_from_fulltext(
                 SET agency       = COALESCE(NULLIF(%s, ''), agency),
                     doc_no       = COALESCE(NULLIF(%s, ''), doc_no),
                     publish_date = COALESCE(%s, publish_date),
-                    fulltext     = COALESCE(NULLIF(%s, ''), fulltext)
+                    publish_date_source = CASE
+                        WHEN %s::date IS NOT NULL THEN NULL
+                        ELSE publish_date_source
+                    END,
+                    fulltext     = COALESCE(NULLIF(%s, ''), fulltext),
+                    metadata     = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
                 WHERE id = %s
+                RETURNING publish_date
                 """,
-                (agency, doc_no, publish_date, fulltext or "", policy_id),
+                (
+                    agency,
+                    doc_no,
+                    publish_date,
+                    publish_date,
+                    fulltext or "",
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    policy_id,
+                ),
             )
+            return await cur.fetchone()
+
+
+async def fill_publish_date_from_model(policy_id: int, publish_date: date) -> bool:
+    """模型从页面内容补提的发布日期：**只填空值**，绝不覆盖结构解析的结果。
+
+    返回是否真的写入；`publish_date_source='model'` 让前端能标注「模型提取」，
+    与页面解析的日期区分开（用户核对原文时知道该看哪一个）。
+    """
+    async with get_pool().connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE policy_document
+                SET publish_date = %s,
+                    publish_date_source = 'model'
+                WHERE id = %s AND publish_date IS NULL
+                """,
+                (publish_date, policy_id),
+            )
+            return cur.rowcount > 0
 
 
 async def set_task_running(task_id: int, stage: str) -> None:
@@ -579,7 +631,8 @@ async def mark_extraction_failed(policy_id: int, error: str) -> None:
 _LIBRARY_LATEST_CTE = r"""
 WITH latest AS (
     SELECT DISTINCT ON (p.source_url)
-        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.source_url, p.source_name, p.created_at,
+        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.publish_date_source,
+        p.source_url, p.source_name, p.created_at,
         e.extracted_at, e.info_summary,
         (SELECT COUNT(*) FROM fact_item fi WHERE fi.extraction_id = e.id) AS fact_count,
         COALESCE(jsonb_array_length(e.info_points), 0) AS point_count,

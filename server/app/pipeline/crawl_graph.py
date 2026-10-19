@@ -41,7 +41,7 @@ from app.config import get_settings
 from app.db import repositories as repo
 from app.db.repositories import PolicyRow
 from app.pipeline import judge
-from app.pipeline.extract import extract_policy
+from app.pipeline.extract import extract_policy, extract_publish_date
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
@@ -374,6 +374,7 @@ async def _search_policies(
                     [it for it in page_fresh if not it.get("judge_tagged")],
                     mcp_timeout,
                     judge_stats,
+                    overrides=overrides,
                 )
                 for it in page_fresh:
                     if not it.get("judge_tagged"):
@@ -398,6 +399,7 @@ async def _preflight_bodies(
     items: list[dict[str, Any]],
     mcp_timeout: int,
     judge_stats: dict[str, int] | None,
+    overrides: dict[str, Any] | None = None,
 ) -> None:
     """正文预检：laya 通过的候选抓全文，清洗后正文「不达标」的同样标「不建议入库」。
 
@@ -412,6 +414,12 @@ async def _preflight_bodies(
     结果只写回 item 的 `judge_tagged` / `judge_reason`（内存标注，落库与确认面板置灰走
     既有判别通道）；此时 `policy_document` 行还没插，全文不落盘，提取阶段照旧重抓。
     抓取失败按不达标处理并单独计数——抓不到正文 = 不该入库，但日志里要说清。
+
+    顺带**把详情页的发布日期写回条目**（仅当来源声明 `fulltext_date_is_publish`、且列表轮
+    没有日期时）：配置化来源的列表页通常不带日期，不在这里补，结果表就要等提取阶段跑完
+    才显示发布日期。这次抓取本来就要取详情页，结构解析写回不增加任何请求。结构解析也
+    拿不到时，再用模型从整页文本里兜底补一个（`extract_publish_date`）并标
+    `date_source='model'`——这样确认面板在**提取之前**就能看到日期；模型也找不到就留空。
     """
     settings = get_settings()
     min_cjk = settings.pipeline_min_body_chars
@@ -437,6 +445,26 @@ async def _preflight_bodies(
                 _, clean = split_fulltext(result.body)
                 cjk, enders = body_metrics(clean)
                 imgs = result.image_count
+                # 配置化来源的列表轮不给日期（`entrypoints[].date_selector` 为空，日期只在
+                # 详情页）：预检既然已经取回了详情页，就把发布日期顺手写回条目——否则
+                # 确认面板/结果表要等提取阶段跑完才看得到日期。只在该来源声明「全文日期 =
+                # 发布日期」时写（gov.cn 报的是成文日期，不能顶替）；列表轮已有日期时保留原值。
+                if source.fulltext_date_is_publish and not it.get("date"):
+                    if result.date:
+                        it["date"] = result.date.isoformat()
+                    else:
+                        # 结构解析也没拿到：模型从整页文本兜底。放在预检阶段是为了让
+                        # 用户在**确认前**就能看到日期，而不是等提取跑完。
+                        parsed = await extract_publish_date(
+                            title=str(it.get("title") or result.title or ""),
+                            text=result.page_text or result.body,
+                            url=url,
+                            max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
+                            model_id=(overrides or {}).get("pipeline_model"),
+                        )
+                        if parsed:
+                            it["date"] = parsed.isoformat()
+                            it["date_source"] = "model"
             except Exception as exc:  # noqa: BLE001 - 单篇预检故障不能拖垮检索
                 logger.warning(
                     "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
@@ -471,6 +499,8 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
         "title": normalized.title,
         "source_url": normalized.url,
         "publish_date": normalized.date,
+        # 预检阶段模型补提的日期会带 date_source；结构解析/列表日期为 None（页面解析）
+        "publish_date_source": item.get("date_source"),
         "source_name": source,
         "agency": normalized.agency,
         "doc_no": normalized.doc_no,
@@ -479,6 +509,8 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
         # 检索循环内判别写回的标注（见 _search_policies）；未判别（服务停用）时为 None
         "judge_tagged": normalized.judge_tagged,
         "judge_prob": normalized.judge_prob,
+        # 列表条目字段规则取到的自定义元信息（索引号/成文日期…），JSONB 落库
+        "metadata": normalized.extra,
     }
 
 
@@ -559,6 +591,11 @@ async def _extract_one(
             knowledge_fields=list(payload.knowledge.fields),
             knowledge_extension=payload.knowledge.extension,
         )
+        # 结构解析没拿到发布日期时，用任务配置的提取模型从页面文本里再兜底补一个；
+        # 补不到就保持空值（前端展示「无日期」），不影响本篇提取成功。
+        await _backfill_model_publish_date(
+            task_id, index, policy_id, title, url, fulltext, overrides, extract_config
+        )
         await repo.add_task_log(
             task_id,
             f"第 {index} 篇提取成功（事实 {len(payload.facts)} · "
@@ -573,6 +610,55 @@ async def _extract_one(
     finally:
         # 无论成败都重算计数，保证进度面板与结果表格始终一致
         await repo.refresh_task_counts(task_id)
+
+
+async def _backfill_model_publish_date(
+    task_id: int,
+    index: int,
+    policy_id: int,
+    title: str,
+    url: str | None,
+    fulltext: dict[str, Any],
+    overrides: dict[str, Any] | None,
+    config: dict[str, Any] | None,
+) -> None:
+    """发布日期兜底：结构解析没拿到时，让模型从页面文本里找明确写出的发布日期。
+
+    只在缺日期时多一次模型调用（rare path）。模型给不出也不要紧：`publish_date`
+    保持 NULL，前端统一展示「无日期」；给出时写 `publish_date_source='model'`，
+    前端标注「模型提取」，让用户知道这个日期不是站点结构直接解析的。
+    """
+    if fulltext.get("publish_date"):
+        return
+
+    # 复用本篇提取的 trace config（callbacks/tags/session 不变），只换 run 名，
+    # 这样可选性上报里能看出「多花的这一次调用是去补日期」。
+    date_config = dict(config) if config else None
+    if date_config:
+        date_config["run_name"] = f"补提发布日期：{title[:40]}"
+
+    parsed = await extract_publish_date(
+        title=str(fulltext.get("title") or title),
+        text=str(fulltext.get("date_context") or fulltext.get("body") or ""),
+        url=url,
+        max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
+        model_id=(overrides or {}).get("pipeline_model"),
+        config=date_config,
+    )
+    if parsed is None:
+        await repo.add_task_log(
+            task_id,
+            f"第 {index} 篇未解析到发布日期，模型也未从页面内容中找到（按「无日期」展示）",
+            tone="info",
+        )
+        return
+
+    if await repo.fill_publish_date_from_model(policy_id, parsed):
+        await repo.add_task_log(
+            task_id,
+            f"第 {index} 篇发布日期由模型从页面内容补提：{parsed.isoformat()}（已标记为模型提取）",
+            tone="info",
+        )
 
 
 async def _fetch_fulltext(
@@ -610,12 +696,13 @@ async def _fetch_fulltext(
     # 按发布日期判的日期窗口对不上。成文日期没有丢：它照样从归档全文解析出来，详情页单独展示
     # （`FulltextMeta.signed_date`）。列表轮没给日期时这里传 None，那一行就诚实地留空，
     # 不拿另一个语义的日期顶上（`update_policy_from_fulltext` 的 COALESCE 只在非空时覆盖）。
-    await repo.update_policy_from_fulltext(
+    updated = await repo.update_policy_from_fulltext(
         policy_id,
         agency=(result.issuer or "").strip() or (meta.agency or ""),
         doc_no=(result.doc_no or "").strip() or (meta.doc_no or ""),
         publish_date=result.date if source.fulltext_date_is_publish else None,
         fulltext=body.strip(),
+        metadata=result.metadata,
     )
     return {
         "body": body,
@@ -623,6 +710,12 @@ async def _fetch_fulltext(
         "issuer": result.issuer,
         "doc_no": result.doc_no,
         "date": result.date,
+        # 回填后的**生效**发布日期：列表轮可能已写过、或 gov.cn 的全文日期不是发布日期。
+        # 模型兜底据此判断「这一行到底有没有日期」，而不是只看本次详情页解析结果。
+        "publish_date": (updated or {}).get("publish_date"),
+        # 模型兜底用的页面文本：配置化来源给整页文本（日期常在正文容器外），
+        # gov.cn 的 body 本身就是整页文本；都没有时退回清洗后的正文。
+        "date_context": result.page_text or result.body,
         "image_count": result.image_count,
     }
 
@@ -831,9 +924,14 @@ async def run_extraction_phase(task_id: int) -> None:
         ]
         # 覆盖参数从任务行重读（确认与检索可能隔了很久，创建请求早已结束）
         task_row = await repo.fetch_task(task_id) or {}
+        # `source` 必须一起带上：`_extract_one` 靠它解析抓取源适配器，缺了会回退到
+        # gov.cn——配置化来源的详情页规则（date_selectors / fields）就不会被执行，
+        # 而 gov.cn 的 `fulltext_date_is_publish=False` 又让 `publish_date` 永不回填，
+        # 症状就是「列表轮没日期 + 提取完仍没有日期」。
         await extract_node({"task_id": task_id, "policies": policies, **{
             key: task_row.get(key)
             for key in (
+                "source",
                 "pipeline_max_policies",
                 "pipeline_per_keyword_limit",
                 "pipeline_extract_concurrency",

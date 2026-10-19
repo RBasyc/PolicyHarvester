@@ -18,6 +18,8 @@ class PolicyResultItem(BaseModel):
     id: int
     title: str
     publish_date: date | None = None
+    # NULL = 抓取时从页面结构解析；'model' = 结构解析没拿到、提取阶段由模型从页面内容补提
+    publish_date_source: str | None = None
     source_url: str | None = None
     status: ExtractStatus
     extracted_at: datetime | None = None
@@ -31,6 +33,7 @@ class PolicyResultItem(BaseModel):
             id=row["id"],
             title=row["title"],
             publish_date=row["publish_date"],
+            publish_date_source=row.get("publish_date_source"),
             source_url=row["source_url"],
             status=row["status"],
             extracted_at=row.get("extracted_at"),
@@ -81,8 +84,13 @@ class PolicyMeta(BaseModel):
     agency: str | None = None
     doc_no: str | None = None
     publish_date: date | None = None
+    # 发布日期来源：NULL=页面解析，'model'=模型从页面内容补提（前端标注「模型提取」）
+    publish_date_source: str | None = None
     source_url: str | None = None
     fetched_by: str | None = None
+    # 字段规则（detail.fields / item_fields）取到的站点自定义元信息：
+    # 索引号 / 成文日期 / 主题分类 / 发文机关代字…。前端按「键：值」逐行展示。
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class FactOut(BaseModel):
@@ -160,6 +168,17 @@ def _info_points(raw: Any) -> list[str]:
     return points
 
 
+def _metadata(raw: Any) -> dict[str, str]:
+    """JSONB metadata → `{str: str}`；非字符串值统一转成字符串（前端只做展示）。"""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): str(value).strip()
+        for key, value in raw.items()
+        if key and str(value or "").strip()
+    }
+
+
 def build_extraction_response(detail: dict[str, Any]) -> PolicyExtractionResponse:
     """把 repositories 返回的裸行转成契约形状（含「无 extraction 行」的兜底）。"""
     row = detail["policy"]
@@ -170,8 +189,10 @@ def build_extraction_response(detail: dict[str, Any]) -> PolicyExtractionRespons
         agency=row.get("agency"),
         doc_no=row.get("doc_no"),
         publish_date=row.get("publish_date"),
+        publish_date_source=row.get("publish_date_source"),
         source_url=row.get("source_url"),
         fetched_by=row.get("fetched_by"),
+        metadata=_metadata(row.get("metadata")),
     )
 
     raw = detail["extraction"]
@@ -228,6 +249,7 @@ class LibraryPolicyItem(BaseModel):
     agency: str | None = None
     doc_type: str | None = None  # 由文号前缀推导（首个括号符之前，如 国发/粤府），推导不出为 null
     publish_date: date | None = None
+    publish_date_source: str | None = None  # NULL=页面解析，'model'=模型从页面内容补提
     summary: str | None = None  # 提取的摘要（信息栏）
     fact_count: int = 0
     point_count: int = 0
@@ -244,6 +266,7 @@ class LibraryPolicyItem(BaseModel):
             agency=row.get("agency"),
             doc_type=row.get("doc_type"),
             publish_date=row.get("publish_date"),
+            publish_date_source=row.get("publish_date_source"),
             summary=row.get("info_summary"),
             fact_count=int(row.get("fact_count") or 0),
             point_count=int(row.get("point_count") or 0),
