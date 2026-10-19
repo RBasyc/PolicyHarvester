@@ -8,6 +8,8 @@ import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import SelectMenu from './SelectMenu.vue'
 import {
+  clearAll,
+  clearing,
   libraryFilters,
   libraryItems,
   libraryLoading,
@@ -84,28 +86,69 @@ function hasFilter(): boolean {
       libraryFilters.year,
   )
 }
+
+/**
+ * 「清空」是**全库重置**（DELETE /api/tasks），不绑定任何单个任务：早先的
+ * `!task` 守卫会让按钮在浏览器端 task 过期时永久置灰——成果库是跨任务沉淀的，
+ * 而 task 只是最近一次抓取任务（清库后为 null、试运行/定时/另一个页面起的任务
+ * 也不会同步过来），于是库里还有数据、按钮却点不动。空库点击是安全的：
+ * 后端返回 deleted=0，前端提示「暂无可清空的数据」。
+ * 破坏性操作：先点一下变成确认态，再点「确认」才真的删。
+ */
+const confirmingClear = ref(false)
+
+async function onConfirmClear() {
+  confirmingClear.value = false
+  await clearAll()
+}
 </script>
 
 <template>
   <div class="library">
-    <!-- 库头部：标题 + 三项统计 -->
+    <!-- 库头部：标题 + 三项统计 + 全库重置（原先挂在全局顶栏右侧，见 TopBar.vue 的说明） -->
     <section class="lib-head">
       <div class="head-titles">
         <h1 class="head-title">政策成果库</h1>
         <p class="head-sub">跨抓取任务持久化沉淀 · 重新执行任务不影响已入库数据</p>
       </div>
-      <div class="head-stats" v-if="libraryMeta">
-        <div class="stat">
-          <p class="stat-value">{{ libraryMeta.total }}</p>
-          <p class="stat-label">总篇数</p>
+      <div class="head-side">
+        <div class="head-stats" v-if="libraryMeta">
+          <div class="stat">
+            <p class="stat-value">{{ libraryMeta.total }}</p>
+            <p class="stat-label">总篇数</p>
+          </div>
+          <div class="stat">
+            <p class="stat-value">{{ libraryMeta.agency_count }}</p>
+            <p class="stat-label">覆盖机构</p>
+          </div>
+          <div class="stat">
+            <p class="stat-value accent">{{ libraryMeta.month_new }}</p>
+            <p class="stat-label">本月新增</p>
+          </div>
         </div>
-        <div class="stat">
-          <p class="stat-value">{{ libraryMeta.agency_count }}</p>
-          <p class="stat-label">覆盖机构</p>
-        </div>
-        <div class="stat">
-          <p class="stat-value accent">{{ libraryMeta.month_new }}</p>
-          <p class="stat-label">本月新增</p>
+
+        <button
+          v-if="!confirmingClear"
+          class="ghost-btn danger"
+          type="button"
+          :disabled="clearing"
+          title="删除全部抓取任务与结果"
+          @click="confirmingClear = true"
+        >
+          <AppIcon name="trash-2" :size="13" />
+          <span>清空</span>
+        </button>
+        <div v-else class="confirm-group" role="alertdialog" aria-label="确认清空">
+          <span class="confirm-text">清空全部数据？</span>
+          <button
+            class="ghost-btn danger"
+            type="button"
+            :disabled="clearing"
+            @click="onConfirmClear()"
+          >
+            {{ clearing ? '清空中…' : '确认' }}
+          </button>
+          <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
         </div>
       </div>
     </section>
@@ -189,7 +232,14 @@ function hasFilter(): boolean {
           <span v-if="item.agency" class="card-tag">{{ item.agency }}</span>
           <span v-if="item.doc_type" class="card-tag">{{ item.doc_type }}</span>
           <span class="card-tag-spacer"></span>
-          <span v-if="item.publish_date" class="card-date">{{ item.publish_date }}</span>
+          <span class="card-date" :class="{ none: !item.publish_date }">
+            {{ item.publish_date ?? '无日期' }}
+            <span
+              v-if="item.publish_date_source === 'model'"
+              class="card-date-model"
+              title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
+            >模型提取</span>
+          </span>
         </div>
         <p class="card-summary">{{ summaryOf(item) }}</p>
         <div class="card-foot">
@@ -292,10 +342,65 @@ function hasFilter(): boolean {
   line-height: normal;
 }
 
+/* 统计与「清空」同排右对齐：清空与统计隔开，避免误点 */
+.head-side {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
 .head-stats {
   display: flex;
   align-items: center;
   gap: 24px;
+}
+
+/* 描边按钮（清空 / 确认 / 取消），与顶栏及各页页头保持同一套视觉 */
+.ghost-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ghost-btn.danger {
+  color: var(--accent);
+}
+
+.ghost-btn.danger:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.confirm-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .stat {
@@ -480,6 +585,21 @@ function hasFilter(): boolean {
   color: var(--text-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.card-date.none {
+  color: var(--text-tertiary);
+  opacity: 0.75;
+}
+
+.card-date-model {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 10px;
+  line-height: 1.7;
 }
 
 /*
@@ -682,6 +802,14 @@ function hasFilter(): boolean {
   .lib-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  /* 窄屏回退成左对齐的纵向堆叠：统计一行、清空按钮一行 */
+  .head-side {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
   }
 
   .head-stats {

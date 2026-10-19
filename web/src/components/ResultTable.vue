@@ -105,7 +105,14 @@ async function onRetry(policyId: number) {
             <span class="row-title">{{ row.title }}</span>
           </div>
           <div class="col date-col">
-            <span class="row-date">{{ row.publish_date ?? '—' }}</span>
+            <span class="row-date" :class="{ none: !row.publish_date }">
+              {{ row.publish_date ?? '无日期' }}
+            </span>
+            <span
+              v-if="row.publish_date_source === 'model'"
+              class="date-model"
+              title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
+            >模型提取</span>
           </div>
           <div class="col link-col">
             <a
@@ -208,7 +215,7 @@ async function onRetry(policyId: number) {
   display: flex;
   align-items: center;
   gap: 0;
-  min-width: 720px;
+  min-width: 760px;
 }
 
 .table-head {
@@ -250,8 +257,9 @@ async function onRetry(policyId: number) {
 }
 
 .date-col {
-  width: 110px;
+  width: 150px;
   flex-shrink: 0;
+  gap: 6px;
 }
 
 .link-col {
@@ -281,6 +289,20 @@ async function onRetry(policyId: number) {
 .row-date {
   font-size: 13px;
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.row-date.none {
+  color: var(--text-tertiary);
+}
+
+.date-model {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 10px;
+  line-height: 1.6;
   white-space: nowrap;
 }
 

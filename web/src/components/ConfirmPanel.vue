@@ -165,6 +165,11 @@ async function onConfirm(): Promise<void> {
         </div>
         <div class="col date-col">
           <span class="row-date">{{ row.publish_date ?? '—' }}</span>
+          <span
+            v-if="row.publish_date_source === 'model'"
+            class="flag model"
+            title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
+          >模型提取</span>
           <span v-if="row.in_library" class="flag lib">已在库</span>
           <span v-if="dateFlag(row) === 'out'" class="flag out">超出范围</span>
           <span v-else-if="dateFlag(row) === 'none'" class="flag none">无日期</span>
@@ -188,7 +193,7 @@ async function onConfirm(): Promise<void> {
 
     <footer class="confirm-foot">
       <p class="foot-note">
-        此处日期为检索结果给的<strong>发布日期</strong>，入库后保持不变；原文里的成文日期是另一个字段，在成果库详情页单独展示。
+        此处日期为检索结果给的<strong>发布日期</strong>，入库后保持不变；原文里的成文日期是另一个字段，在成果库详情页单独展示。标「模型提取」的日期由模型从页面内容补提，建议核对原文。
       </p>
       <div class="foot-actions">
         <button
@@ -409,6 +414,12 @@ async function onConfirm(): Promise<void> {
 .flag.none {
   background: #f1f2f4;
   color: var(--text-tertiary);
+}
+
+/* 模型补提的发布日期：与结果表/详情页同一套蓝色标注 */
+.flag.model {
+  background: var(--blue-bg);
+  color: var(--blue);
 }
 
 /* 已在成果库：中性灰标 */

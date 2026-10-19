@@ -60,6 +60,8 @@ export interface PolicyResultItem {
   id: number
   title: string
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提（前端标注「模型提取」） */
+  publish_date_source: string | null
   source_url: string | null
   /** 来源目录：gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读 */
   catalog: string | null
@@ -92,8 +94,12 @@ export interface PolicyMeta {
   agency: string | null
   doc_no: string | null
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  publish_date_source: string | null
   source_url: string | null
   fetched_by: string | null
+  /** 字段规则取到的站点自定义元信息（索引号 / 成文日期 / 主题分类…） */
+  metadata: Record<string, string>
 }
 
 export interface FactItem {
@@ -137,6 +143,8 @@ export interface LibraryPolicyItem {
    *  无括号时退回 gov.cn 名单，仍推不出为 null */
   doc_type: string | null
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  publish_date_source: string | null
   summary: string | null
   fact_count: number
   point_count: number
