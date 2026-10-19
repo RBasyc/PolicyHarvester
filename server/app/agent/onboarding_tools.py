@@ -33,26 +33,15 @@
 from __future__ import annotations
 
 import json
-from datetime import date
 from typing import Any
 
 from langchain_core.tools import tool
 
-# 工具返回值的长度上限（模型看的是结论，不是整页 HTML 分析；超了截断并说明）
-_MAX_CHARS = 6000
-
-
-def _dump(payload: Any, *, limit: int = _MAX_CHARS) -> str:
-    """把结果压成紧凑 JSON 文本；超长截断（并明确标注被截断，不假装完整）。"""
-    text = json.dumps(payload, ensure_ascii=False, default=str)
-    if len(text) > limit:
-        return text[:limit] + f" …（结果过长已截断，完整长度 {len(text)} 字符）"
-    return text
-
-
-def _error(message: str, **extra: Any) -> str:
-    """统一的失败返回（工具不抛异常）。"""
-    return _dump({"ok": False, "error": message, **extra})
+# 共用小工具（结果压缩 / 统一失败返回 / 日期参数校验）只有一份，见 `tool_utils`；
+# 这里起回原名，函数体一个字都不用改。
+from app.agent.tool_utils import dump as _dump
+from app.agent.tool_utils import error as _error
+from app.agent.tool_utils import parse_iso_date as _parse_date
 
 
 def _load_json(raw: str | dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -68,15 +57,6 @@ def _load_json(raw: str | dict[str, Any] | None) -> tuple[dict[str, Any] | None,
     if not isinstance(parsed, dict):
         return None, "JSON 顶层必须是对象（{...}）"
     return parsed, None
-
-
-def _parse_date(raw: str | None, field: str) -> tuple[date | None, str | None]:
-    if not raw:
-        return None, None
-    try:
-        return date.fromisoformat(raw.strip()), None
-    except ValueError:
-        return None, f"{field} 需要 YYYY-MM-DD 格式，收到：{raw}"
 
 
 def _candidates(rows: list[dict[str, Any]], keep: int = 3) -> list[dict[str, Any]]:
@@ -159,6 +139,7 @@ async def inspect_source(
             "list_candidates": _candidates(report.get("list_candidates") or [], 3),
             "detail_candidates": _candidates(report.get("detail_candidates") or [], 3),
             "meta_candidates": {k: v[:2] for k, v in meta.items()},
+            "field_candidates": (report.get("field_candidates") or [])[:8],
             "pagination": report.get("pagination"),
             "columns": (report.get("columns") or [])[:8],
             "feeds": report.get("feeds"),
@@ -247,19 +228,32 @@ async def analyze_content_structure(
     url: str | None = None,
     html: str | None = None,
     listed_as: str = "page",
+    include_outline: bool = True,
 ) -> str:
-    """分析**单个页面**的结构候选（正文容器 / 元信息 / 附件 / 翻页 / 栏目）。
+    """分析**单个页面**的结构候选（正文容器 / 元信息 / 字段 / 附件 / 翻页 / 栏目）。
 
     `url` 与 `html` 二选一：给 `html` 时完全离线分析（可用来复核已经取回的页面）。
+
+    **详情页补字段时重点看 `field_candidates` 与 `dom_outline`**：
+
+    - `field_candidates` 是页面实测的「标签 → 值」关系，每条带 `selector`（标签节点）、
+      `label`、`relation`（`label_child` / `label_sibling` / `inline`）、`value_from`
+      （`parent_own_text` / `next_sibling_text` / `self_text` / `parent_text`）与
+      `sample_value`。把 `field` + `label` + `selector` + `value_from` 直接写进
+      `detail.fields` 的 `FieldRule` 即可。
+    - `dom_outline` 是带**直接文本**的压缩 DOM：标签和值若分处不同节点，在这里能一眼看出
+      该用哪种 `value_from`（`text_content` 会把两者糊在一起，看不出来）。
 
     Args:
         url: 页面地址（会先做地址安全校验再取回）。
         html: 直接给出的 HTML 源码。
         listed_as: 这页是什么角色（如 entry / detail / level-1），只影响报告里的自我标注。
+        include_outline: 是否返回 DOM 提纲（默认 true；列表页可关掉省上下文）。
 
     Returns:
         JSON 文本：`list_candidates` / `detail_candidates` / `meta_candidates` /
-        `pagination` / `columns` / `feeds` / `search_forms` / `attachments`，均为候选。
+        `field_candidates` / `dom_outline` / `pagination` / `columns` / `feeds` /
+        `search_forms` / `attachments`，均为候选。
     """
     try:
         from app.services.onboarding import analyze_structure
@@ -270,7 +264,9 @@ async def analyze_content_structure(
         return _error("需要提供 url 或 html 之一")
 
     try:
-        report = await analyze_structure(url=url, html=html, listed_as=listed_as)
+        report = await analyze_structure(
+            url=url, html=html, listed_as=listed_as, include_outline=include_outline
+        )
     except Exception as exc:  # noqa: BLE001
         return _error(f"结构分析失败：{exc}")
 
@@ -287,6 +283,8 @@ async def analyze_content_structure(
             "list_candidates": _candidates(report.get("list_candidates") or [], 3),
             "detail_candidates": _candidates(report.get("detail_candidates") or [], 3),
             "meta_candidates": {k: v[:2] for k, v in meta.items()},
+            "field_candidates": (report.get("field_candidates") or [])[:12],
+            "dom_outline": report.get("dom_outline"),
             "pagination": report.get("pagination"),
             "columns": (report.get("columns") or [])[:6],
             "feeds": report.get("feeds"),
@@ -314,7 +312,9 @@ async def sample_content(
         url: 列表页地址（会先按 list_selector 取条目再逐篇取样），或直接给详情页地址。
         count: 取几篇样本（建议 3）。
         selectors_json: 解析规则 JSON（字段同配置里的 detail：container_selectors /
-            title_selectors / date_selectors / agency_selectors / doc_no_selectors）。
+            title_selectors / date_selectors / agency_selectors / doc_no_selectors；
+            以及语义化字段 `fields` —— 字段名 → FieldRule 列表，见 generate_source_config
+            的说明与 analyze_content_structure 返回的 `field_candidates`）。
             不给就用自动候选里得分最高的那组，并在报告里标明「auto-candidate（待确认）」。
         list_selector: 列表页的条目选择器（不给则用自动候选首选）。
         allowed_domains: 域名白名单；留空用 url 的主机名。
@@ -352,6 +352,7 @@ async def sample_content(
             "date": row.get("date"),
             "agency": row.get("agency"),
             "doc_no": row.get("doc_no"),
+            "fields": row.get("fields"),
             "body_cjk": row.get("body_cjk"),
             "sent_enders": row.get("sent_enders"),
             "body_ok": row.get("body_ok"),
@@ -373,7 +374,9 @@ async def sample_content(
             "next": (
                 "正文普遍 body_ok=true 且元信息能取到 → 用 generate_source_config 组装配置；"
                 "正文为空/过短 → 正文容器选择器不对，回 analyze_content_structure 换候选；"
-                "日期/机构全 0 → 换对应的 *_selectors（或该站确实没有这些字段，如实留着）。"
+                "日期/机构/文号取不到、而页面上明明有 → 多半是标签和值分处 `<span>`/父节点/兄弟节点，"
+                "按 analyze_content_structure 的 field_candidates 写 detail.fields（不要继续堆 "
+                "*_selectors）；该站确实没有这些字段就如实留着。"
             ),
         }
     )
@@ -395,10 +398,25 @@ async def generate_source_config(config_json: str) -> str:
             organization、source_type、engine（html_list）、
             scope{allowed_domains, start_urls, max_items_per_entry}、
             entrypoints[{name, url, list_selector, link_selector, title_selector,
-                         date_selector, pagination{kind,param,path_template,start,step,max_pages},
+                         date_selector, item_fields{字段名: [FieldRule]},
+                         pagination{kind,param,path_template,start,step,max_pages},
                          search{keyword_param,date_from_param,date_to_param,date_format,fixed_params}}]、
             detail{container_selectors, title_selectors, date_selectors, agency_selectors,
-                   doc_no_selectors, drop_selectors, min_body_chars}。
+                   doc_no_selectors, fields{字段名: [FieldRule]}, drop_selectors, min_body_chars}。
+
+            **`fields` / `item_fields` 是「标签 → 值」的语义化规则**，解决旧选择器链表达不了的
+            三种形状：标签在 `<span>`、值在父节点直接文本（`parent_own_text`）；标签与值分居
+            兄弟节点（`next_sibling_text`）；标签与值同节点（`self_text` + `drop_label`）。
+            每条规则：selector（通常指向标签节点）、label_equals / label_matches（标签比较前
+            忽略所有空白与末尾冒号）、value_from（上面三种 + `self_text`/`own_text`/
+            `parent_text`/`attr`）、可选 drop_label / pattern / group / reject / normalize
+            （`whitespace`|`none`|`date`）/ match_index / scope。规则链按顺序 fallback，
+            第一个取到非空值的获胜。字段名 `title`/`agency`/`doc_no`/`date`（= 发布日期）是
+            保留名，其余字段原样进 `policy_document.metadata`（索引号 / 成文日期 / 主题分类…）。
+            例（`<div><span class="fw-bold">文　　号：</span> 惠府〔2025〕13号</div>`）：
+            `"fields": {"doc_no": [{"selector": "span.fw-bold", "label_equals": "文号",
+             "value_from": "parent_own_text"}]}`。旧 `*_selectors` 可以继续保留作 fallback，
+            `fields` 取到值时会覆盖它们。
             例：{"key":"zj_gov","label":"浙江省人民政府门户","level":"province",
                  "engine":"html_list","scope":{"allowed_domains":["zj.gov.cn"]},
                  "entrypoints":[{"name":"政策文件","url":"https://www.zj.gov.cn/col/col1/index.html",
@@ -538,6 +556,8 @@ async def dry_run_ingestion(
             "body_ok": row.get("body_ok"),
             "date": row.get("date"),
             "agency": row.get("agency"),
+            "doc_no": row.get("doc_no"),
+            "fields": row.get("fields"),
             "error": row.get("error"),
         }
         for row in (report.get("details") or [])

@@ -42,14 +42,17 @@
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `name` | str | **是** | — | 入口名（1–60 字符）。**同时是「发布机构」筛选的匹配值**：抓取时选了机构，只有同名的入口会被取数 |
-| `url` | str | **是** | — | 入口地址。**必须是真正列出条目的那一页**（第 1 页就是它本身，翻页规则只作用于第 2 页起） |
+| `url` | str | **是** | — | 入口地址。**必须是真正列出条目的那一页**（第 1 页就是它本身，翻页规则只作用于第 2 页起）。命名区域入口若在 tab 上有栏目页证据（`analyze.regions[].column_url`），导入会**改接**到那个栏目页——页内区域只是门户页上的预览块，列几条就是几条 |
 | `list_selector` | str | **是** | — | 条目容器选择器，命中多个 = 多条 |
+| `scope_selector` | str | 否 | `null` | **同页多列表定位**：先按它定位作用域容器（可命中多个），再在各容器子树内跑 `list_selector`。典型用法是「命名区域」导入自动生成的 tab 面板/并列模块入口（`analyze.regions`）；引擎不支持 CSS 位置伪类，多个命中靠 `scope_index` 点名 |
+| `scope_index` | int | 否 | `null` | `scope_selector` 命中多个时取第几个（**0 起**）；不填 = 全部合并（退回旧的合并行为） |
 | `link_selector` | str | 否 | `a` | 相对条目容器的详情链接选择器 |
 | `title_selector` | str | 否 | `null` | 标题选择器；不填 = 用链接文本 |
 | `date_selector` | str | 否 | `null` | 列表页日期选择器；不填 = 列表不取日期（详情页再补） |
+| `item_fields` | object | 否 | `{}` | **列表条目**的语义化字段规则（与 `detail.fields` 同一套 DSL，见 §3.1）。典型用途：列表里的发布日期、发文机关、文号；`date` 会兼作 `publish_date` 的兜底，其余进 `metadata` |
 | `pagination` | object | 否 | `{"kind":"none"}` | 翻页规则，见下 |
 | `search` | object | 否 | `null` | **站内检索入口**：填了它，这个入口的关键词/日期送进站点自己的检索页（见下）。不填 = 普通栏目列表页 |
-| `notes` | str | 否 | `null` | 备注 |
+| `notes` | str | 否 | `null` | 备注。页面导入会把「单页声明未能提升为翻页、召回被截断在第 1 页」这类说明写在这里（同一句也进验收报告的 `coverage_limits`） |
 
 ### `search` —— 检索型入口（可选，但决定筛选能不能在服务端生效）
 
@@ -77,6 +80,54 @@
 解析出条目就自动加一个名为「站内检索」的入口（试不出来就不加，原因写进日志）。
 Agent 侧则照 `search_forms` 报告自己填（`config-schema.md` 这里给的就是那个形状）。
 
+### 3.1 字段规则 DSL（`item_fields` / `detail.fields`）
+
+旧的 `*_selectors` 只能表达「选择器命中什么文本」。政务详情页最常见的三种**标签/值分离**
+形状它表达不了，于是日期、文号、机构大量漏抓：
+
+| 形状 | HTML | 规则 |
+| --- | --- | --- |
+| 标签在子节点、值在父节点 | `<div><span class="fw-bold">文　　号：</span> 惠府〔2025〕13号</div>` | `value_from: "parent_own_text"` |
+| 标签与值分居兄弟 | `<dt>发布机构</dt><dd>惠州市政府办公室</dd>` | `value_from: "next_sibling_text"` |
+| 标签与值同节点 | `<div>发布日期：2025-03-10</div>` | `value_from: "self_text"` + `drop_label: true` |
+
+一条规则（`FieldRule`）的字段：
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `scope` | str | `null` | 先定位元信息块（如 `div.row.border`），再在子树内查找；防止在正文里误命中 |
+| `selector` | str | `*` | 候选节点，通常指向**标签节点** |
+| `label_equals` | str | `null` | 标签文本。比较前**去掉所有空白与末尾冒号**，`文　　号：` = `文号` = `文 号：`；也接受「标签以该文本开头」的同节点写法 |
+| `label_matches` | str | `null` | 标签正则（在去空白后的标签文本上匹配）；与 `label_equals` 二选一 |
+| `value_from` | enum | `self_text` | `self_text` / `own_text` / `parent_text` / `parent_own_text` / `next_sibling_text` / `attr` |
+| `attr` | str | `null` | `value_from=attr` 时取哪个属性 |
+| `drop_label` | bool | `false` | 从取值开头剥掉标签（`self_text` / `parent_text` 常需要） |
+| `pattern` / `group` | str / int | `null` / `0` | 正则截取与捕获组 |
+| `reject` | array | `[]` | 取值命中任一正则则跳过该候选 |
+| `normalize` | enum | `whitespace` | `whitespace` 压空白 / `none` 只 strip / `date` 解析成 ISO 日期（支持 `2026.9.8`、`2026年九月八日`、`二〇二五年九月八日`） |
+| `match_index` | int | `0` | 标签命中多个时从第几个开始尝试（0 起） |
+
+**规则链语义**：字段值是**规则列表**，按顺序尝试，第一个取到非空值的规则获胜
+（天然提供 fallback）。保留字段名：`title` / `agency` / `doc_no` / `date`（= 发布日期）；
+其余字段名原样写进 `policy_document.metadata`（JSONB），在详情抽屉里按「键：值」展示。
+
+```json
+"detail": {
+  "fields": {
+    "doc_no":  [{ "selector": "span.fw-bold", "label_equals": "文号", "value_from": "parent_own_text" }],
+    "date":    [{ "selector": "span.fw-bold", "label_equals": "发布日期", "value_from": "parent_own_text", "normalize": "date" }],
+    "agency":  [{ "selector": "span.fw-bold", "label_equals": "发文机关", "value_from": "parent_own_text" }],
+    "index_no":[{ "selector": "span.fw-bold", "label_equals": "索引号", "value_from": "parent_own_text" }],
+    "signed_date": [{ "selector": "span.fw-bold", "label_equals": "成文日期", "value_from": "parent_own_text", "normalize": "date" }]
+  },
+  "date_selectors": ["span.pubdate"]
+}
+```
+
+`fields` 取到值时覆盖旧的 `*_selectors`；取不到时回落旧链。两者可以并存，老配置不受影响。
+`analyze_content_structure` 的 `field_candidates` 已实测出 `selector` / `label` / `value_from`，
+优先照抄；它的 `dom_outline` 用直接文本展示 DOM，能看出标签与值是否分离。
+
 ### `pagination`
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -90,6 +141,14 @@ Agent 侧则照 `search_forms` 报告自己填（`config-schema.md` 这里给的
 
 `path_index` 缺 `path_template`、或模板里没有 `{page}`、或 `max_pages < 1` → 校验不通过。
 
+**「只有一页」必须由站点页面自己证明**（2026-10-16）：`none` 是默认值、不是结论。写 `none`
+之前先看报告里的 `pagination` 证据（`page_links` / `next_href`）——页面自己露出了页码链接或
+「下一页」链接，却说只有一页，就要么反推出规律填上、要么**明确说明召回被截断在第 1 页**
+（人看的地方是入口 `notes`，机读的地方是验收报告的 `coverage_limits`）。`analyze` 反推得出
+`query_param` / `path_index` 时才填；只看到「下一页」链接而规律认不出，**不要臆造** param
+或模板——猜错的参数会被站点忽略、把第 1 页原样回一遍，看上去翻了其实全是重复。页面「导入
+网址」会自己做这件事（真取第 2 页验出新条目才采纳，见 `sources/pagination_probe.py`）。
+
 ## 4. `detail` —— 详情页解析
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -99,6 +158,7 @@ Agent 侧则照 `search_forms` 报告自己填（`config-schema.md` 这里给的
 | `date_selectors` | array | `[]` | 发布日期候选链。**只有「第一个取到非空文本」的候选算数**（`_text_of`），所以链内顺序有意义：取得到文本却 `parse_date` 不了的候选会挡住后面的好候选。页面导入组装这条链时会**跨 3 篇样本页核对**：每篇都取到同一个值 → 当页脚/模板元素丢弃（结果可能为空数组，日志里会说明是哪个选择器、值是什么）；能解析出真实日期的候选自动提到前面（见 `source_import._verify_date_selectors`） |
 | `agency_selectors` | array | `[]` | 发布机构候选链 |
 | `doc_no_selectors` | array | `[]` | 文号候选链 |
+| `fields` | object | `{}` | **语义化字段规则**（字段名 → `FieldRule` 列表，DSL 见 §3.1）。优先级高于上面的 `*_selectors`：先跑 `fields`，取不到的保留字段再回落旧链；非保留字段进 `policy_document.metadata` |
 | `drop_selectors` | array | `[]` | 正文内要剔除的节点（分享条 / 相关阅读 / 打印提示）。**附件清单在剔除之前扫描**——把 `div.attach` 放这里不会导致附件丢失 |
 | `attachment_selector` | str | `null` | 附件链接选择器；不填 = 内置扩展名启发式（pdf/doc/docx/xls/xlsx/zip/rar/ofd） |
 | `min_body_chars` | int | `200` | 试运行时判定「正文过短」的 CJK 字数下限 |

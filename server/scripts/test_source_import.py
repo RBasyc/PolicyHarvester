@@ -37,8 +37,11 @@ from test_source_onboarding import (  # noqa: E402
     PASSED,
     SEARCH_PROBE_KEYWORD,
     SKIPPED,
+    build_column_portal_site,
     build_demo_site,
+    build_next_only_site,
     build_search_site,
+    build_tab_portal_site,
     check,
     install_fake_judge,
     install_fake_network,
@@ -440,6 +443,744 @@ async def test_search_entrypoint_skipped() -> None:
             si.JOBS.pop(job.job_id, None)
 
 
+# ---------- 8. 命名区域：同页多列表 → 多入口草案 ----------
+
+
+async def test_named_regions_import() -> None:
+    """tab 门户页（三个同签名面板）→ 导入草案含三个命名区域入口，验收逐入口探第 1 页。
+
+    这是「只抓政策解读 / 同时抓政府规章+市政府文件」的确定性通路：每个命名区域各成一个
+    入口（名字 = 栏目名），抓取页现成的「发布机构 = 入口名」筛选直接可用；试运行判据 1
+    逐入口真取第 1 页，任何一个区域解析不出条目都过不了验收。
+    """
+    print("\n=== 8. 命名区域：同页多列表 → 多入口 ===")
+
+    site = build_tab_portal_site()
+    install_fake_network(site)
+    install_fake_judge()
+    url = site.url("/zwgk/index.html")
+    request = si.SourceImportRequest(url=url, limit=3, pages=1)
+    job = si.ImportJob(job_id="import-regions-test", url=url)
+    si.JOBS[job.job_id] = job
+    await si.run_import_job(job, request)
+    try:
+        entrypoints = (job.config or {}).get("entrypoints") or []
+        named = [ep for ep in entrypoints if ep.get("scope_selector")]
+        check(
+            "作业跑完且配置通过校验",
+            job.status == "done" and job.config is not None,
+            f"status={job.status} error={job.error}",
+        )
+        check(
+            "三个命名区域各成一个入口（没有被合并成一个）",
+            sorted(ep.get("name") for ep in named) == ["市政府文件", "政府规章", "政策解读"],
+            str([(ep.get("name"), ep.get("scope_index")) for ep in entrypoints]),
+        )
+        zcjd = next((ep for ep in named if ep.get("name") == "政策解读"), {})
+        check(
+            "「政策解读」入口用 scope_index=2 定位到第 3 个面板",
+            zcjd.get("scope_index") == 2 and zcjd.get("list_selector") == "li",
+            str(zcjd),
+        )
+        check(
+            "三个入口同一页地址、不同序号，互不合并",
+            len({(ep.get("url"), ep.get("scope_index")) for ep in named}) == 3
+            and len({ep.get("url") for ep in named}) == 1,
+            str([(ep.get("url"), ep.get("scope_index")) for ep in named]),
+        )
+
+        region_candidates = [c for c in job.candidates if c.get("kind") == "region"]
+        check(
+            "候选清单里区域候选都带名字与样本（可切换重跑）",
+            len(region_candidates) >= 3
+            and all(c.get("name") and c.get("sample_url") for c in region_candidates),
+            str([(c.get("name"), c.get("rejected_reason")) for c in region_candidates]),
+        )
+        check(
+            "入选的区域都标了「当前使用」",
+            sum(1 for c in region_candidates if c.get("selected")) == 3,
+            str([(c.get("name"), c.get("selected")) for c in region_candidates]),
+        )
+
+        report = job.report or {}
+        per_entry = {row.get("name"): row.get("items") for row in report.get("entrypoints") or []}
+        check(
+            "试运行通过",
+            report.get("status") == "passed",
+            "；".join(f"{c['name']}={c['actual']}" for c in (report.get("criteria") or []) if not c["passed"]),
+        )
+        check(
+            "判据 1 逐入口探第 1 页：三个区域都真实取到条目（各 3 条）",
+            all(per_entry.get(name) == 3 for name in ("政府规章", "市政府文件", "政策解读")),
+            str(per_entry),
+        )
+    finally:
+        si.JOBS.pop(job.job_id, None)
+
+
+# ---------- 9. 重跑的替换范围：区域只换同位置那个，普通候选才整体重建 ----------
+
+
+async def test_rerun_region_preserves_siblings() -> None:
+    """点某个命名区域重跑 = 只纠错那一个入口，其它已接入栏目不许被静默丢掉。
+
+    旧语义是无条件整份重建——在多入口（Phase 17）落地后，这意味着用户一次误点就会把
+    已接入的其它命名区域全部弄丢。收窄后：区域候选只替换「同页 + 同 scope_selector」
+    的入口；普通列表候选维持原语义（整份重建，保留站内检索）。
+    """
+    print("\n=== 9. 重跑替换范围：区域保兄弟，普通候选才重建 ===")
+
+    site = build_tab_portal_site()
+    install_fake_network(site)
+    install_fake_judge()
+    url = site.url("/zwgk/index.html")
+
+    # 第一次导入：三个命名区域全部接入
+    request = si.SourceImportRequest(url=url, limit=3, pages=1)
+    job = si.ImportJob(job_id="import-rerun-scope-1", url=url)
+    si.JOBS[job.job_id] = job
+    await si.run_import_job(job, request)
+    check("前置：首次导入接入 3 个命名区域", job.status == "done" and job.config is not None, job.error)
+    base_config = job.config
+
+    # 区域重跑：拿「政府规章」那个区域候选再跑一遍
+    region_candidate = next(
+        (dict(c) for c in (job.candidates or []) if c.get("kind") == "region" and c.get("name") == "政府规章"),
+        None,
+    )
+    check("前置：清单里能找到政府规章区域候选", region_candidate is not None)
+    rerun = si.SourceImportRequest(
+        url=url, limit=2, pages=1, candidate=region_candidate, base_config=base_config
+    )
+    job2 = si.ImportJob(job_id="import-rerun-scope-2", url=url)
+    si.JOBS[job2.job_id] = job2
+    await si.run_import_job(job2, rerun)
+    entrypoints = (job2.config or {}).get("entrypoints") or []
+    names = sorted(ep.get("name") for ep in entrypoints if ep.get("scope_selector"))
+    check(
+        "区域重跑：其它命名区域全部保留（仍是 3 个栏目）",
+        job2.status == "done" and names == ["市政府文件", "政府规章", "政策解读"],
+        f"status={job2.status} names={names} error={job2.error}",
+    )
+    check(
+        "区域重跑：日志写明替换几个、保留几个",
+        any("保留其它命名区域" in row["message"] for row in job2.logs),
+        str([row["message"] for row in job2.logs][-4:]),
+    )
+
+    # 普通列表候选重跑：维持原语义——整份以它为准重建
+    plain_candidate = next(
+        (dict(c) for c in (job.candidates or []) if c.get("kind") == "list" and "common_newslist" in str(c.get("list_selector"))),
+        None,
+    )
+    check("前置：清单里能找到普通合并列表候选", plain_candidate is not None)
+    rerun2 = si.SourceImportRequest(
+        url=url, limit=2, pages=1, candidate=plain_candidate, base_config=base_config
+    )
+    job3 = si.ImportJob(job_id="import-rerun-scope-3", url=url)
+    si.JOBS[job3.job_id] = job3
+    await si.run_import_job(job3, rerun2)
+    entrypoints3 = (job3.config or {}).get("entrypoints") or []
+    scoped3 = [ep for ep in entrypoints3 if ep.get("scope_selector")]
+    check(
+        "普通候选重跑：整份重建为单个合并入口（旧语义，不带 scope）",
+        job3.status == "done" and len(entrypoints3) == 1 and not scoped3,
+        f"status={job3.status} entrypoints={[(ep.get('name'), ep.get('scope_selector')) for ep in entrypoints3]}",
+    )
+
+    for leftover in ("import-rerun-scope-1", "import-rerun-scope-2", "import-rerun-scope-3"):
+        si.JOBS.pop(leftover, None)
+
+
+# ---------- 10. 命名区域改接独立栏目页：召回不被页内预览块封顶 ----------
+
+
+async def test_region_prefers_column_page() -> None:
+    """tab 面板只是门户页上的预览块；tab 自己链接到的栏目页才是完整列表。
+
+    线上形状（2026-10-16）：门户 tab 区域接入后「抓到 9 篇就不抓了」——页内预览块列几条
+    就是几条，而且没有翻页。本用例考的是**通用**规则（不针对任何站点）：区域候选若自带
+    独立栏目页，就真取一页验证后**就地**改接过去；栏目页取不回时保留页内区域并写明原因。
+
+    这个 fixture 里被选中的是**页内区域**那个候选，改接的是**没被选中**的那个——展开同页
+    命名区域时必须把改接过的区域照样接成入口，不能因为在门户页上找不到它的 scope 就丢掉。
+    """
+    print("\n=== 10. 命名区域改接独立栏目页（页内预览块只列几条） ===")
+
+    site = build_column_portal_site()
+    install_fake_network(site)
+    install_fake_judge()
+    url = site.url("/zwgk/index.html")
+    request = si.SourceImportRequest(url=url, limit=3, pages=1)
+    job = si.ImportJob(job_id="import-column-page-test", url=url)
+    si.JOBS[job.job_id] = job
+    await si.run_import_job(job, request)
+    try:
+        entrypoints = (job.config or {}).get("entrypoints") or []
+        check(
+            "作业跑完且配置通过校验",
+            job.status == "done" and job.config is not None,
+            f"status={job.status} error={job.error}",
+        )
+        by_name = {ep.get("name"): ep for ep in entrypoints}
+        check(
+            "三个命名区域各成一个入口（改接过栏目页的那个不许在展开时被丢掉）",
+            set(by_name) == {"政府规章", "政策文件", "政策解读"},
+            str([(ep.get("name"), ep.get("url"), ep.get("scope_selector")) for ep in entrypoints]),
+        )
+
+        column = by_name.get("政策文件") or {}
+        check(
+            "有独立栏目页的区域：入口地址改成栏目页（不再是门户页）",
+            column.get("url") == site.url("/col/index.html"),
+            str(column.get("url")),
+        )
+        check(
+            "改接后不再需要 scope 定位（解析的是栏目页，不是门户页上的那一个模块）",
+            not column.get("scope_selector") and column.get("scope_index") is None,
+            f"scope={column.get('scope_selector')} index={column.get('scope_index')}",
+        )
+        check(
+            "用的是**栏目页自己的**列表结构（页内预览块的选择器在栏目页上取不到东西）",
+            "news-list" in str(column.get("list_selector")),
+            str(column.get("list_selector")),
+        )
+        check(
+            "栏目页自己的翻页规则一并带上（召回不再被预览块的长度封顶）",
+            (column.get("pagination") or {}).get("kind") == "path_index"
+            and (column.get("pagination") or {}).get("path_template") == "/col/index_{page}.html",
+            str(column.get("pagination")),
+        )
+        check(
+            "翻页上限与组装阶段同一口径（不是探测阶段自己拍一个）",
+            (column.get("pagination") or {}).get("max_pages") == si._PAGINATION_MAX_PAGES,
+            f"{column.get('pagination')} vs _PAGINATION_MAX_PAGES={si._PAGINATION_MAX_PAGES}",
+        )
+
+        others = [(by_name.get(n) or {}) for n in ("政府规章", "政策解读")]
+        check(
+            "栏目页取不回的两个：保留页内区域（地址仍是门户页 + 带 scope 定位）",
+            all(ep.get("url") == url and ep.get("scope_selector") for ep in others),
+            str([(ep.get("url"), ep.get("scope_selector")) for ep in others]),
+        )
+        check(
+            "「试了不行」与「没试」分得清：日志写明栏目页取回失败",
+            any("栏目页取回失败" in row["message"] for row in job.logs),
+            str([row["message"] for row in job.logs if "栏目页" in row["message"]][:2]),
+        )
+        check(
+            "改接这件事本身写进日志（人能看懂地址为什么变了）",
+            any("改用其独立栏目页" in row["message"] for row in job.logs),
+            str([row["message"] for row in job.logs if "栏目页" in row["message"]][:2]),
+        )
+
+        upgraded = [c for c in job.candidates if c.get("column_page")]
+        check(
+            "候选也一并改接（点它重跑时照栏目页跑，不会退回预览块）",
+            len(upgraded) == 1
+            and upgraded[0].get("page_url") == site.url("/col/index.html")
+            and not upgraded[0].get("scope_selector"),
+            str([(c.get("name"), c.get("page_url"), bool(c.get("column_page"))) for c in job.candidates if c.get("kind") == "region"]),
+        )
+
+        report = job.report or {}
+        criteria = {row["name"]: row for row in report.get("criteria") or []}
+        check(
+            "试运行通过（含逐入口探第 1 页）",
+            report.get("status") == "passed",
+            "；".join(f"{c['name']}={c['actual']}" for c in (report.get("criteria") or []) if not c["passed"]),
+        )
+        check(
+            "有入口声明了翻页 → 判据 5 真的跑了，且报出第 2 页的新增量",
+            criteria.get("翻页可用性", {}).get("passed") is True
+            and "政策文件" in str(criteria.get("翻页可用性", {}).get("actual")),
+            str(criteria.get("翻页可用性", {}).get("actual")),
+        )
+    finally:
+        si.JOBS.pop(job.job_id, None)
+
+
+# ---------- 11. 单页声明不能被静默接受：推不出翻页规律就如实说截断 ----------
+
+
+async def test_single_page_must_be_evidenced() -> None:
+    """分页条只有「下一页」链接时，配置仍只能是单页——但**这件事必须被说出来**。
+
+    这是「抓到 N 篇就不动了」的另一半：页面上明明写着还有下一页，只是地址规律反推不出来
+    （页码由 JS 拼参数）。此时绝不能把「单页」当结论静默落库：入口 notes、日志、验收报告的
+    覆盖范围三处都要看得见「召回被截断在第 1 页，请人工确认翻页规律」。
+    """
+    print("\n=== 11. 单页声明必须有页面证据，推不出规律就说清截断 ===")
+
+    site = build_next_only_site()
+    install_fake_network(site)
+    install_fake_judge()
+    url = site.url("/col/index.html")
+    request = si.SourceImportRequest(url=url, limit=3, pages=1)
+    job = si.ImportJob(job_id="import-next-only-test", url=url)
+    si.JOBS[job.job_id] = job
+    await si.run_import_job(job, request)
+    try:
+        check(
+            "作业跑完（截断不等于失败：站点有内容，只是取不到第 2 页）",
+            job.status == "done" and job.config is not None,
+            f"status={job.status} error={job.error}",
+        )
+        entrypoints = (job.config or {}).get("entrypoints") or []
+        check("只接一个栏目入口，仍是单页", len(entrypoints) == 1, str(len(entrypoints)))
+        entry = entrypoints[0] if entrypoints else {}
+        check(
+            "翻页规则没有臆造（保持 kind=none，不塞一个会被站点忽略的 ?page=2）",
+            (entry.get("pagination") or {}).get("kind") == "none",
+            str(entry.get("pagination")),
+        )
+        check(
+            "入口备注写清「召回被截断在第 1 页」以及人工要补什么",
+            "截断" in str(entry.get("notes")) and "pagination" in str(entry.get("notes")),
+            str(entry.get("notes")),
+        )
+        check(
+            "日志也点了这个入口（不是只写进配置没人看得见）",
+            any("截断" in row["message"] for row in job.logs),
+            str([row["message"] for row in job.logs][-3:]),
+        )
+
+        report = job.report or {}
+        limits = report.get("coverage_limits") or []
+        check(
+            "报告覆盖范围里带上该入口的备注（验收报告自己说清没覆盖到哪）",
+            any("入口「" in row and "备注" in row and "截断" in row for row in limits),
+            str([row for row in limits if "备注" in row]),
+        )
+        check(
+            "报告明写「有 N 个入口声明为单页、只取第 1 页」（不再让用户猜是站点没内容还是没翻页）",
+            any("个入口声明为单页" in row for row in limits),
+            str([row for row in limits if "单页" in row]),
+        )
+        criteria = {row["name"]: row for row in report.get("criteria") or []}
+        check(
+            "没有入口声明翻页 → 判据 5 如实记为「未测试」，不冒充通过",
+            "翻页可用性" not in criteria
+            and any("翻页" in item for item in report.get("untested") or []),
+            f"criteria={sorted(criteria)} untested={report.get('untested')}",
+        )
+        check(
+            "截断不改判定：状态仍是 passed（站点可达、正文可取）",
+            report.get("status") == "passed",
+            str(report.get("status")),
+        )
+    finally:
+        si.JOBS.pop(job.job_id, None)
+
+
+# ---------- 12. 重跑是「替换」不是「清除」：跨页栏目不许被丢掉 ----------
+
+
+async def test_rerun_keeps_other_page_entries() -> None:
+    """「这几个栏目我都要」的通路：重跑只替换它自己那一个位置，别处的栏目一律留着。
+
+    命名区域可能分布在**两张页面**上（门户首页的并列模块 + 它链接到的栏目页）。早先的保留
+    条件多挂了一条「同页」，于是点另一页的区域候选会把这一页的栏目丢掉——跨页的栏目永远
+    共处不了，点一个丢一个。这里直接调 `_rebuild_from_candidate`（要考的就是这一步的替换
+    范围，不必跑整条作业与真实验收），断言「别处的栏目与检索入口都还在」。
+    """
+    print("\n=== 12. 重跑只替换同位置，跨页栏目保留 ===")
+
+    site = build_tab_portal_site()
+    install_fake_network(site)
+    domains = ["demo.example.gov.cn"]
+    detail = {
+        "container_selectors": ["div#zoom"],
+        "title_selectors": ["h1"],
+        "date_selectors": ["span.pubdate"],
+    }
+    base = {
+        "key": "demo_portal",
+        "label": "演示门户",
+        "engine": "html_list",
+        "scope": {"allowed_domains": domains},
+        "entrypoints": [
+            {
+                "name": "政策文件",
+                "url": site.url("/col/index.html"),
+                "list_selector": "ul.news-list > li",
+                "link_selector": "a",
+                "pagination": {"kind": "none"},
+            },
+            {
+                "name": "政府规章",
+                "url": site.url("/zwgk/index.html"),
+                "list_selector": "li",
+                "link_selector": "a",
+                "scope_selector": "div.tab-panel",
+                "scope_index": 0,
+                "pagination": {"kind": "none"},
+            },
+            {
+                "name": "站内检索",
+                "url": site.url("/search.html"),
+                "list_selector": "ul.result-list > li",
+                "link_selector": "a",
+                "pagination": {"kind": "none"},
+                "search": {"keyword_param": "keyword"},
+            },
+        ],
+        "detail": detail,
+    }
+
+    # (1) 另一张页面上的区域候选：只该换掉它自己，另外两个栏目都得留着
+    cross_page = {
+        "page_url": site.url("/zwgk/other/index.html"),
+        "list_selector": "li",
+        "scope_selector": "div.tab-panel",
+        "scope_index": 1,
+        "name": "其它栏目",
+        "detail": detail,
+    }
+    job = si.ImportJob(job_id="import-rerun-cross-page", url=site.url("/zwgk/index.html"))
+    request = si.SourceImportRequest(
+        url=site.url("/zwgk/index.html"), candidate=cross_page, base_config=base
+    )
+    payload, _candidates, error = await si._rebuild_from_candidate(job, request, domains)
+    names = sorted(ep.get("name") for ep in (payload or {}).get("entrypoints") or [])
+    check(
+        "跨页区域候选：换上去的是它自己，另一页的栏目与检索入口原样保留",
+        error is None and set(names) == {"其它栏目", "政策文件", "政府规章", "站内检索"},
+        f"error={error} names={names}",
+    )
+
+    # (2) 已改接独立栏目页的区域（scope 被清空、只剩 column_page）：同样是「一个栏目」
+    upgraded = {
+        "page_url": site.url("/zwgk/index.html"),
+        "list_selector": "li",
+        "scope_selector": None,
+        "scope_index": None,
+        "column_page": True,
+        "region_page_url": site.url("/zwgk/index.html"),
+        "name": "政府规章",
+        "detail": detail,
+    }
+    job2 = si.ImportJob(job_id="import-rerun-column-page", url=site.url("/zwgk/index.html"))
+    request2 = si.SourceImportRequest(
+        url=site.url("/zwgk/index.html"), candidate=upgraded, base_config=base
+    )
+    payload2, _c2, error2 = await si._rebuild_from_candidate(job2, request2, domains)
+    names2 = sorted(ep.get("name") for ep in (payload2 or {}).get("entrypoints") or [])
+    check(
+        "改接过栏目页的区域：只替换同位置那一个，别处的栏目不被整份重建清掉",
+        error2 is None and set(names2) == {"政策文件", "政府规章", "站内检索"},
+        f"error={error2} names={names2}",
+    )
+
+    for leftover in ("import-rerun-cross-page", "import-rerun-column-page"):
+        si.JOBS.pop(leftover, None)
+
+
+# ---------- 13. 候选名额只管普通列表：命名区域不许被静默挤掉 ----------
+
+
+def test_region_candidates_not_capped() -> None:
+    """名额（`_MAX_CANDIDATES = 5`）是给「给人挑」的普通列表候选准备的。
+
+    命名区域是「同页全都要」：被名额挤掉的那一个**连候选都不出现**，于是永远不会被展开
+    ——静默少一个栏目，页面上一点痕迹都没有。区域自己的上限由分析器管（每页 8 个）。
+    """
+    print("\n=== 13. 候选名额：区域全留，普通列表候选才截断 ===")
+
+    page_url = "https://demo.example.gov.cn/zwgk/index.html"
+    regions = [
+        {
+            "name": f"栏目{i + 1}",
+            "scope_selector": "div.panel",
+            "scope_index": i,
+            "list_selector": "li",
+            "item_count": 3,
+            "sample_title": f"标题{i + 1}",
+            "sample_url": f"/zwgk/art{i + 1}.html",
+        }
+        for i in range(7)
+    ]
+    rows = [
+        {
+            "name_suggestion": f"列表{i + 1}",
+            "page_url": page_url,
+            "list_selector": f"ul.list{i + 1} > li",
+            "item_count": 5,
+            "sample_title": "样本",
+            "sample_url": f"/zwgk/x{i + 1}.html",
+            "pagination": {"kind": "none"},
+        }
+        for i in range(7)
+    ]
+    out = si._build_candidates(
+        {"pages": [{"url": page_url, "regions": regions}], "entrypoint_candidates": rows}
+    )
+    region_out = [c for c in out if c.get("kind") == "region"]
+    list_out = [c for c in out if c.get("kind") == "list"]
+    check(
+        "7 个命名区域一个不少（不再被 5 个名额截断）",
+        len(region_out) == 7 and [c.get("scope_index") for c in region_out] == list(range(7)),
+        str(len(region_out)),
+    )
+    check(
+        "普通列表候选仍按 _MAX_CANDIDATES 截断（名额是给它准备的）",
+        len(list_out) == si._MAX_CANDIDATES,
+        str(len(list_out)),
+    )
+    check(
+        "候选 index 与清单顺序一致（前端与重跑都靠它定位）",
+        [c.get("index") for c in out] == list(range(len(out))),
+        str([c.get("index") for c in out]),
+    )
+
+
+# ---------- 14. 语义字段规则：三种「标签 → 值」形状 + 规则链 ----------
+
+
+def _huizhou_like_detail(
+    *,
+    publish: str = "2026年九月八日",
+    signed: str = "二〇二六年九月一日",
+    footer: str = "2024-03-20",
+) -> str:
+    """模拟地方政务站详情页：三种标签/值形状各出现一次。
+
+    - 标签在 `<span>`、值在父节点的直接文本里（`parent_own_text`）；
+    - `<dt>`/`<dd>` 兄弟节点（`next_sibling_text`）；
+    - 「标签：值」同节点（`self_text` + `drop_label`）。
+    页脚再放一个固定日期——它是接入时最常见的误判来源，`_verify_field_rules` 要能识别。
+    """
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>关于印发《惠州市既有住宅增设电梯管理办法》的通知_惠州市人民政府门户网站</title></head>
+<body>
+<div class="header"><a href="/">首页</a><a href="/zwgk/">政务公开</a></div>
+<div class="detail-title-des"><h2>关于印发《惠州市既有住宅增设电梯管理办法》的通知</h2></div>
+<div class="article-info">
+  <div class="col-6"><span class="fw-bold">文　　号：</span> 惠府〔2025〕13号</div>
+  <div class="col-6"><span class="fw-bold">发布机构：</span> 惠州市人民政府办公室</div>
+  <div class="col-6"><span class="fw-bold">发布日期：</span> {publish}</div>
+  <div class="col-6"><span class="fw-bold">责任处室：</span> 市司法局</div>
+</div>
+<dl class="meta">
+  <dt>成文日期</dt><dd>{signed}</dd>
+  <dt>索引号</dt><dd>007208-01-2026-000123</dd>
+</dl>
+<div class="label-line">责任处室：市司法局</div>
+<div class="doccontent"><p>为规范既有住宅增设电梯工作，结合本市实际，制定本办法。</p></div>
+<div class="footer">本站维护日期：{footer}</div>
+</body></html>"""
+
+
+def test_field_rules() -> None:
+    print("\n=== 14. 语义字段规则：三种标签/值形状 + 规则链 + 日期归一 ===")
+
+    from app.sources.config import DetailConfig, FieldRule
+    from app.sources.field_rules import extract_field, extract_fields
+    from app.sources.html_source import parse_detail_page
+    from app.sources.htmlparse import parse_html
+
+    root = parse_html(_huizhou_like_detail())
+
+    doc_no = FieldRule(selector="span.fw-bold", label_equals="文 号", value_from="parent_own_text")
+    agency = FieldRule(selector="span.fw-bold", label_equals="发布机构", value_from="parent_own_text")
+    publish = FieldRule(
+        selector="span.fw-bold",
+        label_equals="发布日期",
+        value_from="parent_own_text",
+        normalize="date",
+    )
+    signed = FieldRule(
+        selector="dt", label_equals="成文日期", value_from="next_sibling_text", normalize="date"
+    )
+    index_no = FieldRule(selector="dt", label_equals="索引号", value_from="next_sibling_text")
+    owner = FieldRule(
+        selector="div.label-line",
+        label_equals="责任处室",
+        value_from="self_text",
+        drop_label=True,
+    )
+
+    check(
+        "标签在 <span>、值在父节点直接文本（全角空格/冒号归一后仍能对上）",
+        extract_field(root, [doc_no]) == "惠府〔2025〕13号",
+        str(extract_field(root, [doc_no])),
+    )
+    check(
+        "标签与值分居 dt/dd 兄弟节点",
+        extract_field(root, [index_no]) == "007208-01-2026-000123",
+        str(extract_field(root, [index_no])),
+    )
+    check(
+        "同节点「标签：值」——drop_label 后只剩值",
+        extract_field(root, [owner]) == "市司法局",
+        str(extract_field(root, [owner])),
+    )
+    check(
+        "中文数字日期归一成 ISO",
+        extract_field(root, [signed]) == "2026-09-01",
+        str(extract_field(root, [signed])),
+    )
+    check(
+        "规则链：第一条命中就赢（发布日期优先于成文日期）",
+        extract_field(root, [publish, signed]) == "2026-09-08",
+        str(extract_field(root, [publish, signed])),
+    )
+
+    fallback_root = parse_html(_huizhou_like_detail(publish="2026.9.8").replace(
+        '<div class="col-6"><span class="fw-bold">发布日期：</span> 2026.9.8</div>', ""
+    ))
+    check(
+        "规则链 fallback：页面没有发布日期时落到成文日期",
+        extract_field(fallback_root, [publish, signed]) == "2026-09-01",
+        str(extract_field(fallback_root, [publish, signed])),
+    )
+
+    fields = {
+        "title": [FieldRule(selector="div.detail-title-des > h2")],
+        "agency": [agency],
+        "doc_no": [doc_no],
+        "date": [publish, signed],
+        "索引号": [index_no],
+        "责任处室": [owner],
+    }
+    parsed = parse_detail_page(
+        _huizhou_like_detail(),
+        DetailConfig(container_selectors=["div.doccontent"], fields=fields),
+        "https://hz.example.gov.cn/art/2026/9/8/art_1.html",
+    )
+    check(
+        "详情页：保留字段按规则写回（标题/机构/文号）",
+        parsed.title == "关于印发《惠州市既有住宅增设电梯管理办法》的通知"
+        and parsed.agency == "惠州市人民政府办公室"
+        and parsed.doc_no == "惠府〔2025〕13号",
+        f"title={parsed.title!r} agency={parsed.agency!r} doc_no={parsed.doc_no!r}",
+    )
+    check(
+        "详情页：日期是规则归一后的 ISO（没有配 date_selectors 也照样取到）",
+        parsed.date_text == "2026-09-08",
+        str(parsed.date_text),
+    )
+    check(
+        "详情页：非保留字段进 extra（索引号/责任处室），正文本身不受影响",
+        parsed.extra == {"索引号": "007208-01-2026-000123", "责任处室": "市司法局"}
+        and "既有住宅" in parsed.body,
+        f"extra={parsed.extra} body={parsed.body[:40]!r}",
+    )
+
+    # 值里的正文句子不能被规则当成值：pattern 不命中就换下一条规则
+    check(
+        "pattern 不命中 → 该候选无效（返回 None 而不是把整段文本当值）",
+        extract_field(root, [FieldRule(selector="div.doccontent", pattern=r"(\d{10})")]) is None,
+    )
+
+
+# ---------- 15. 分析器 → 规则草案：自动落地三种形状，恒定日期被识破 ----------
+
+
+def test_field_rule_generation() -> None:
+    print("\n=== 15. 结构分析 → 规则草案：形状自动识别 + 恒定日期核对 ===")
+
+    from app.sources import analyze
+    from app.sources.config import FieldRule
+    from app.sources.field_rules import extract_fields, rules_from_field_candidates
+    from app.sources.htmlparse import parse_html
+
+    root = parse_html(_huizhou_like_detail())
+    candidates = analyze.field_candidates(root)
+    by_label = {c["label"]: c for c in candidates}
+    relations: dict[str, set[str]] = {}
+    for candidate in candidates:
+        relations.setdefault(candidate["label"], set()).add(candidate["relation"])
+
+    check(
+        "分析器认出「标签在子节点」（文号/发布机构/发布日期 都在）",
+        {"文号", "发布机构", "发布日期"} <= set(by_label),
+        str(sorted(by_label)),
+    )
+    check(
+        "文号的取值位置是 parent_own_text（值在父节点直接文本里）",
+        by_label.get("文号", {}).get("value_from") == "parent_own_text",
+        str(by_label.get("文号")),
+    )
+    check(
+        "无冒号的 dt/dd 也能认出（成文日期/索引号）",
+        by_label.get("成文日期", {}).get("value_from") == "next_sibling_text"
+        and by_label.get("索引号", {}).get("value_from") == "next_sibling_text",
+        str({k: by_label.get(k) for k in ("成文日期", "索引号")}),
+    )
+    check(
+        "站点自定义字段在两种写法下都能识别（责任处室：label_child + inline）",
+        {"label_child", "inline"} <= relations.get("责任处室", set()),
+        str(relations.get("责任处室")),
+    )
+
+    fields = rules_from_field_candidates(candidates)
+    check(
+        "保留字段排在最前（date/agency/doc_no），且 publish_date 统一成 date",
+        list(fields)[:3] == ["date", "agency", "doc_no"] and "publish_date" not in fields,
+        str(list(fields)),
+    )
+    check(
+        "日期规则带 normalize=date（2026年九月八日 → ISO）",
+        fields["date"][0].normalize == "date",
+        str(fields["date"][0].model_dump()),
+    )
+    values = extract_fields(root, fields)
+    check(
+        "自动生成的规则能原样跑出值（含 metadata 字段）",
+        values.get("date") == "2026-09-08"
+        and values.get("agency") == "惠州市人民政府办公室"
+        and values.get("doc_no") == "惠府〔2025〕13号"
+        and values.get("index_no") == "007208-01-2026-000123",
+        str(values),
+    )
+
+    # 确定性的接入路径把同一批候选组装成 DetailConfig 草案
+    analysis = {
+        "detail_candidates": [{"selector": "div.doccontent", "score": 100.0}],
+        "field_candidates": candidates,
+    }
+    detail, dropped = si._detail_from_analysis(analysis)
+    fields_draft = detail.get("fields") or {}
+    check(
+        "接入草案里带上了 fields（不再是只有标题/日期选择器）",
+        bool(fields_draft),
+        str(list(fields_draft)),
+    )
+    check(
+        "草案里每条规则都写成可序列化的 dict（能直接落进 config JSON）",
+        all(isinstance(raw, dict) for rules in fields_draft.values() for raw in rules),
+        str(fields_draft.get("date")),
+    )
+
+    # 跨样本核对：发布日期三篇各不相同 → 保留；页脚固定日期 → 丢弃
+    pages = [
+        _huizhou_like_detail(publish=value, footer="2024-03-20")
+        for value in ("2026年九月八日", "2026年九月九日", "2026年九月十日")
+    ]
+    check(
+        "前置：草案里的日期链同时有「发布日期」与页脚固定日期（这正是需要跨页核对的形状）",
+        {raw.get("label_equals") for raw in fields_draft.get("date") or []}
+        == {"发布日期", "本站维护日期"},
+        str(fields_draft.get("date")),
+    )
+    kept, notes = si._verify_field_rules(pages, {"date": fields_draft["date"]})
+    kept_labels = [raw.get("label_equals") for raw in kept.get("date") or []]
+    check(
+        "恒定日期（页脚维护日期）被丢弃，真实发布日期保留",
+        kept_labels == ["发布日期"] and any("恒为" in note for note in notes),
+        f"kept={kept_labels} notes={notes}",
+    )
+
+    # 丢弃后仍能执行：规则链里不能留下「恒为页脚日期」的第一条
+    revalidated = {name: [FieldRule.model_validate(raw) for raw in rules] for name, rules in kept.items()}
+    check(
+        "核对后的规则仍取到各篇自己的日期（不是页脚的 2024-03-20）",
+        extract_fields(parse_html(pages[1]), revalidated).get("date") == "2026-09-09",
+        str(extract_fields(parse_html(pages[1]), revalidated)),
+    )
+
+
 async def main() -> int:
     # 与 test_source_onboarding 同一套做法：假站点不需要礼貌限频，产物落到测试目录
     from app.config import get_settings
@@ -451,11 +1192,19 @@ async def main() -> int:
     try:
         test_selector_subset()
         test_detail_assembly()
+        test_field_rules()
+        test_field_rule_generation()
         test_url_guard()
         await test_pick_real_list()
         await test_rerun_without_base()
         await test_search_entrypoint_added()
         await test_search_entrypoint_skipped()
+        await test_named_regions_import()
+        await test_rerun_region_preserves_siblings()
+        await test_region_prefers_column_page()
+        await test_single_page_must_be_evidenced()
+        await test_rerun_keeps_other_page_entries()
+        test_region_candidates_not_capped()
     finally:
         net.set_resolver(None)
 

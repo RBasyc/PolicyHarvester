@@ -61,7 +61,7 @@ description: 把一个新的网站来源接进本项目的采集链路。当用�
 | --- | --- |
 | 正文 `body_ok=true`、日期机构也能取到 | 规则可用，进阶段 4 |
 | `body_cjk=0` 或正文为空 | 正文容器选择器不对。`analyze_content_structure(详情页URL)` 取新的 `detail_candidates`，挑次选重试 |
-| 日期/机构全 0 | 换对应的 `*_selectors`；该站确实没有这些字段 → 如实保留（不要编） |
+| 日期/机构全 0 | 先看 `analyze_content_structure` 返回的 `field_candidates` / `dom_outline`，按「标签 → 值」关系写 `detail.fields`（能表达 span 标签 + 父节点直接文本、`dt`/`dd` 兄弟、同节点三种形状）；仍取不到再换对应 `*_selectors`。该站确实没有这些字段 → 如实保留（不要编） |
 | 列表条目数为 0 | `list_selector` 不对，回 `analyze_content_structure` 换候选 |
 
 **不要**因为一页成功就宣布规则可用——至少看 3 篇；样本之间不一致要如实说。

@@ -54,6 +54,14 @@ class FulltextResult:
     `attachments` 是本页附带的原始文件清单（`{"url","name","ext"}`），元素形态由各源自行
     填充、消费方按 dict 取值——gov.cn 侧没有这项，配置化来源才产出。它只是**发现结果**：
     真正下载归档走 `source_artifact`（试运行阶段只记不落地，见 services/onboarding.py）。
+
+    `metadata` 是字段规则（`config.DetailConfig.fields`）取到的**非保留字段**，键值都是
+    字符串（索引号、成文日期、主题分类、发文机关……）。流水线把它合并进
+    `policy_document.metadata`（JSONB），不参与正文清洗，也不覆盖标准列。
+
+    `page_text` 是详情页的**整页文本**（导航噪声原样保留），只给「结构解析拿不到发布日期」
+    时的模型兜底用：发布日期常常在正文容器之外的页头/元信息块里，只给 `body` 模型看不到。
+    不落库、不参与清洗；来源没有提供时为 None（gov.cn 的 `body` 本身就是整页文本）。
     """
 
     body: str
@@ -63,6 +71,8 @@ class FulltextResult:
     date: date | None = None
     image_count: int = 0
     attachments: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
+    page_text: str | None = None
 
 
 class PolicySource:
