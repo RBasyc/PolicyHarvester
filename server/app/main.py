@@ -18,6 +18,7 @@ from app.db.pool import close_pool, open_pool
 from app.pipeline.crawl_graph import shutdown_pipelines
 from app.scheduler import shutdown_scheduler, start_scheduler
 from app.sources.registry import load_configured_from_db
+from app.tracing import flush_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ async def lifespan(app: FastAPI):
     await shutdown_scheduler()
     await shutdown_pipelines()
     await close_pool()
+    # 可观测性：trace 是后台批量上报的，不 flush 会丢掉最后几条（未启用时是空操作）
+    flush_tracing()
 
 
 def create_app() -> FastAPI:

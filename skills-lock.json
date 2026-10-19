@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "litefuse": {
+      "source": "litefuse/skills",
+      "sourceType": "github",
+      "skillPath": "skills/litefuse/SKILL.md",
+      "computedHash": "e4e15f110d3d232d38349e76f754dc84ac80e8b779d3c1716b2cb73b9a337f2f"
+    }
+  }
+}

@@ -116,6 +116,24 @@ class Settings(BaseSettings):
     source_artifact_dir: str = "server/.artifacts"
     source_max_artifacts_per_run: int = 20  # 单次试运行最多归档多少个附件（控体积与时长）
 
+    # --- 可观测性：Langfuse / Litefuse（Phase 21）---
+    # **自托管实例**（本仓默认 http://localhost:3000），trace 只发往这里，不出本机；
+    # Litefuse 与 Langfuse 的 SDK 兼容，所以沿用 LANGFUSE_* 这套变量名。
+    # 本组走 Settings（进程启动时读取），改 .env **需重启**（与 PIPELINE_MODELS 的热读不同）。
+    # 降级口径与 MCP / judge 一致：**观测层坏了绝不拖垮业务**——下面任一条件不满足就整体
+    # 不挂载（对话与抓取照常跑），只在启动日志里说一句：
+    #   ① LANGFUSE_ENABLED=false；② PUBLIC_KEY / SECRET_KEY 任一为空；③ 没装 langfuse 包。
+    langfuse_enabled: bool = True
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # 服务地址。**两个变量名都收**：官方 LangChain 集成文档用 LANGFUSE_HOST，
+    # 「数据区域」文档用 LANGFUSE_BASE_URL（本仓 .env 用的就是后者）——SDK 究竟认哪个
+    # 随版本变，这里先归一成一个字段，由 app/tracing.py 统一喂给 SDK。
+    langfuse_host: str = Field(
+        default="http://localhost:3000",
+        validation_alias=AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL"),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

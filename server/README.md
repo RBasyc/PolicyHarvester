@@ -152,3 +152,4 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 - **改流水线**：在 `app/pipeline/crawl_graph.py` 加节点与边；新增落库字段需同时改 `database/schema.sql`、`app/db/repositories.py`、`app/schemas/*.py` 与 `web/src/api/types.ts`（前端类型是手工镜像，不会自动生成）。
 - **换模型 / 网关**：修改根目录 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
 - **调流水线参数**：根目录 `.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）；页面「高级设置」可在创建任务时按任务覆盖（值落在 `crawl_task.pipeline_*` 列，NULL = 用全局默认）。
+- **接可观测性**：`app/tracing.py`（Langfuse / Litefuse，**自托管**）。在根目录 `.env` 配 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`（`LANGFUSE_HOST` 也认）即可，对话每轮一条 trace、每篇提取一条 trace；密钥不配或 `LANGFUSE_ENABLED=false` 就是关的，不影响业务。新调用点只要 `config.update(trace_config(...))`，关掉时它返回 `{}`。
