@@ -31,7 +31,13 @@ from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from app.config import get_settings
 from app.sources import net
 from app.sources.base import FulltextResult, PolicyItem, PolicySource
-from app.sources.config import DetailConfig, EntrypointConfig, PaginationConfig, SourceConfig
+from app.sources.config import (
+    DetailConfig,
+    EntrypointConfig,
+    PaginationConfig,
+    RenderConfig,
+    SourceConfig,
+)
 from app.sources.field_rules import extract_fields
 from app.sources.htmlparse import Node, parse_html, select, select_one
 from app.sources.util import parse_date
@@ -512,7 +518,8 @@ class HtmlListSource(PolicySource):
         self.fetched_by = f"html_list:{config.key}"
         # 配置化来源不套用 gov.cn 的文种白名单（见模块 docstring）
         self.doc_types: tuple[str, ...] = ()
-        self._cache: dict[str, tuple[float, str]] = {}
+        # 键带渲染签名：同一 URL 的原始 HTML 与渲染后 HTML 是两份内容，不能串用。
+        self._cache: dict[tuple[str, str], tuple[float, str]] = {}
         self._cache_ttl = max(0, get_settings().source_list_cache_ttl)
 
     # ---------- PolicySource 契约 ----------
@@ -557,7 +564,9 @@ class HtmlListSource(PolicySource):
             if url is None:
                 continue  # 该入口翻到底 / 检索入口本轮无关键词（等价于越界页回空列表）
             try:
-                html = await self._get_text(url, timeout)
+                html = await self._get_text(
+                    url, timeout, render=self.config.render_for_entrypoint(entry)
+                )
             except net.UnsafeURLError:
                 raise
             except net.FetchError as exc:
@@ -598,7 +607,9 @@ class HtmlListSource(PolicySource):
         self, url: str, policy_id: int | None = None, *, timeout: int | None = None
     ) -> FulltextResult:
         text = await self._get_text(
-            url, timeout if timeout else get_settings().pipeline_mcp_timeout
+            url,
+            timeout if timeout else get_settings().pipeline_mcp_timeout,
+            render=self.config.render_for_detail(),
         )
         detail = parse_detail_page(text, self.config.detail, url)
         if not detail.body:
@@ -668,20 +679,30 @@ class HtmlListSource(PolicySource):
 
     # ---------- 取数与缓存 ----------
 
-    async def _get_text(self, url: str, timeout: float | int) -> str:
+    async def _get_text(
+        self,
+        url: str,
+        timeout: float | int,
+        *,
+        render: RenderConfig | None = None,
+    ) -> str:
+        render = render or RenderConfig()
+        signature = render.model_dump_json() if render.enabled else ""
+        key = (url, signature)
         now = time.monotonic()
-        cached = self._cache.get(url)
+        cached = self._cache.get(key)
         if cached and now - cached[0] < self._cache_ttl:
             return cached[1]
         result = await net.fetch_text(
             url,
             allowed_domains=self.config.scope.allowed_domains,
             timeout=float(timeout),
+            render=render.to_options() if render.enabled else None,
         )
         if len(self._cache) >= _CACHE_MAX:
-            oldest = min(self._cache, key=lambda key: self._cache[key][0])
+            oldest = min(self._cache, key=lambda cache_key: self._cache[cache_key][0])
             self._cache.pop(oldest, None)
-        self._cache[url] = (now, result.text)
+        self._cache[key] = (now, result.text)
         return result.text
 
     def clear_cache(self) -> None:

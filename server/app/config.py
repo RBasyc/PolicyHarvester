@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     # 试运行 / 附件归档产物的落盘目录（相对仓库根；留空 = 不落盘，只在库里记 URL 与哈希）
     source_artifact_dir: str = "server/.artifacts"
     source_max_artifacts_per_run: int = 20  # 单次试运行最多归档多少个附件（控体积与时长）
+    # --- JS 渲染（可选；浏览器很重，默认关闭，按来源配置开启）---
+    # 还需要 `uv sync --extra render` + `uv run playwright install chromium`；缺任一项时
+    # 渲染路径抛 RenderUnavailable，不会静默退回原始 HTML。
+    source_render_enabled: bool = False
+    source_render_concurrency: int = 2  # 同时渲染的页面数上限；别照搬 HTTP 的 4
 
     # --- 可观测性：Langfuse / Litefuse（Phase 21）---
     # **自托管实例**（本仓默认 http://localhost:3000），trace 只发往这里，不出本机；

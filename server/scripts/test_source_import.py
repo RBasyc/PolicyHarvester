@@ -1181,6 +1181,140 @@ def test_field_rule_generation() -> None:
     )
 
 
+async def test_render_config() -> None:
+    print("\n=== 16. JS 渲染：配置合并 / 请求拦截口径 / 服务端开关 ===")
+
+    from app.config import get_settings
+    from app.sources import render
+    from app.sources.config import RenderConfig, SourceConfig, validate_source_config
+
+    base = {
+        "key": "demo_render",
+        "label": "渲染测试来源",
+        "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+        "entrypoints": [
+            {
+                "name": "栏目",
+                "url": "https://demo.example.gov.cn/col/index.html",
+                "list_selector": "ul.list li",
+                "render": {"enabled": True, "wait_for_selector": ".ready"},
+            }
+        ],
+        "detail": {
+            "container_selectors": ["div.content"],
+            "render": {"scroll": True},
+        },
+        # 站点级默认值：入口/详情只覆盖各自写出的字段
+        "render": {"enabled": False, "wait_until": "load", "timeout_ms": 30000},
+    }
+    config = SourceConfig.model_validate(base)
+
+    ep_render = config.render_for_entrypoint(config.entrypoints[0])
+    check(
+        "入口覆盖只改写出的字段（enabled/select 来自入口，wait_until/timeout 继承站点）",
+        ep_render.enabled
+        and ep_render.wait_for_selector == ".ready"
+        and ep_render.wait_until == "load"
+        and ep_render.timeout_ms == 30000,
+        str(ep_render.model_dump()),
+    )
+    detail_render = config.render_for_detail()
+    check(
+        "详情覆盖同理（scroll=true，enabled 继承站点默认 false）",
+        detail_render.scroll and not detail_render.enabled,
+        str(detail_render.model_dump()),
+    )
+    options = ep_render.to_options()
+    check(
+        "RenderOptions 与配置一一对应",
+        options.enabled and options.wait_until == "load" and options.wait_for_selector == ".ready",
+        str(options),
+    )
+
+    check(
+        "渲染的 wait_for_selector 不受 mini-DOM 子集限制（Playwright 支持伪类）",
+        RenderConfig.model_validate({"wait_for_selector": "li:nth-of-type(2)"}).wait_for_selector
+        == "li:nth-of-type(2)",
+        "",
+    )
+
+    def blocked(method: str, resource_type: str, url: str) -> str | None:
+        return render.blocked_reason(
+            method=method,
+            resource_type=resource_type,
+            url=url,
+            allowed_domains=["demo.example.gov.cn"],
+            block_resources=True,
+        )
+
+    check(
+        "白名单内的 GET 文档放行，白名单外的子资源拦截（子请求也守来源边界）",
+        blocked("GET", "document", "https://demo.example.gov.cn/a.html") is None
+        and blocked("GET", "script", "https://cdn.other.com/app.js") is not None,
+        "",
+    )
+    check(
+        "图片/字体/媒体默认拦截（block_resources=true）",
+        all(blocked("GET", kind, "https://demo.example.gov.cn/x") is not None
+            for kind in ("image", "font", "media")),
+        "",
+    )
+    check(
+        "非只读请求拦截（渲染过程不产生写副作用）",
+        blocked("POST", "fetch", "https://demo.example.gov.cn/api") is not None,
+        "",
+    )
+
+    fingerprint_a = SourceConfig.model_validate(base).config_fingerprint()
+    fingerprint_b = SourceConfig.model_validate(
+        {**base, "render": {"enabled": False, "wait_until": "networkidle", "timeout_ms": 30000}}
+    ).config_fingerprint()
+    check(
+        "渲染参数计入配置指纹（改了必须重新验收）",
+        fingerprint_a != fingerprint_b,
+        f"{fingerprint_a} / {fingerprint_b}",
+    )
+
+    settings = get_settings()
+    was_enabled = settings.source_render_enabled
+    try:
+        settings.source_render_enabled = False
+        problems = validate_source_config(config)
+        check(
+            "配置开了渲染但服务端开关没开 → 注册校验拒绝",
+            any("SOURCE_RENDER_ENABLED" in item for item in problems),
+            str(problems),
+        )
+        try:
+            await net.fetch_text(
+                "https://demo.example.gov.cn/a.html",
+                allowed_domains=["demo.example.gov.cn"],
+                render=ep_render.to_options(),
+            )
+        except render.RenderUnavailable:
+            check(
+                "开关关闭时 fetch_text 明确报 RenderUnavailable（不静默退回原始 HTML）",
+                True,
+                "",
+            )
+        else:
+            check(
+                "开关关闭时 fetch_text 明确报 RenderUnavailable（不静默退回原始 HTML）",
+                False,
+                "没有抛错",
+            )
+
+        settings.source_render_enabled = True
+        problems = validate_source_config(config)
+        check(
+            "开关打开后不再报渲染环境问题",
+            not any("SOURCE_RENDER_ENABLED" in item for item in problems),
+            str(problems),
+        )
+    finally:
+        settings.source_render_enabled = was_enabled
+
+
 async def main() -> int:
     # 与 test_source_onboarding 同一套做法：假站点不需要礼貌限频，产物落到测试目录
     from app.config import get_settings
@@ -1194,6 +1328,7 @@ async def main() -> int:
         test_detail_assembly()
         test_field_rules()
         test_field_rule_generation()
+        await test_render_config()
         test_url_guard()
         await test_pick_real_list()
         await test_rerun_without_base()

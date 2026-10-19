@@ -149,7 +149,11 @@ async def inspect_source(
             "note": "以上均为**候选**，未经 sample_content 取样与 dry_run_ingestion 试运行验证，不得当成已确认的接入配置。",
             "next": (
                 "若 list_candidates 为空，说明这页不是列表页（首页/正文页）或列表由 JS 渲染："
-                "用 discover_content 追一层栏目，或换栏目列表页地址。"
+                "用 discover_content 追一层栏目，或换栏目列表页地址；"
+                "确认是 JS 空壳（正文文本极少、列表容器里只有 loading）时，在配置里写 "
+                "render.enabled=true（服务端需 SOURCE_RENDER_ENABLED=true 且已装 Playwright/Chromium），"
+                "再用 dry_run_ingestion 验证——**勘察/取样工具本身仍只取原始 HTML**，"
+                "不要因为这里没有候选就断言引擎不支持渲染。"
                 "若 list_candidates 有结果，用 sample_content 取几篇详情页核对字段。"
             ),
         }
@@ -215,6 +219,9 @@ async def discover_content(
                 if entrypoints
                 else "没找到成组条目结构：确认该栏目是否需要 JS 渲染、是否需要翻到更深的栏目页，"
                 "或改用站内检索 / RSS（inspect_source 的 feeds 与 search_forms）。"
+                "若确认列表由浏览器渲染，在配置里写 render.enabled=true（服务端需 "
+                "SOURCE_RENDER_ENABLED=true 且已装 Playwright/Chromium），再用 dry_run_ingestion "
+                "验证；本工具仍按原始 HTML 分析。"
             ),
         }
     )
@@ -374,6 +381,8 @@ async def sample_content(
             "next": (
                 "正文普遍 body_ok=true 且元信息能取到 → 用 generate_source_config 组装配置；"
                 "正文为空/过短 → 正文容器选择器不对，回 analyze_content_structure 换候选；"
+                "若页面由 JS 渲染（正文文本极少、容器里只有 loading）→ 配置里给 detail.render "
+                "开 enabled，最终以 dry_run_ingestion 为准（本工具仍取原始 HTML）；"
                 "日期/机构/文号取不到、而页面上明明有 → 多半是标签和值分处 `<span>`/父节点/兄弟节点，"
                 "按 analyze_content_structure 的 field_candidates 写 detail.fields（不要继续堆 "
                 "*_selectors）；该站确实没有这些字段就如实留着。"
@@ -396,6 +405,9 @@ async def generate_source_config(config_json: str) -> str:
         config_json: 配置 JSON 文本。字段：
             key（英文唯一标识）、label（展示名，全局唯一）、level（national/province/city）、
             organization、source_type、engine（html_list）、
+            render{enabled, wait_until, wait_for_selector, wait_ms, scroll, max_scrolls,
+                   block_resources, timeout_ms, on_error}（JS 渲染，顶层默认值；
+                   entrypoints[] / detail 里可局部覆盖，只覆盖写出的字段）、
             scope{allowed_domains, start_urls, max_items_per_entry}、
             entrypoints[{name, url, list_selector, link_selector, title_selector,
                          date_selector, item_fields{字段名: [FieldRule]},
@@ -439,6 +451,16 @@ async def generate_source_config(config_json: str) -> str:
             ② 参数名照 `inspect_source` 报告的 `search_forms`（`field` / `params` / `method`）填，
             别猜；`method` 是 post 的表单当前引擎不支持，只能用 GET。无关键词的那一轮检索入口
             不取数（检索页没有关键词参数时返回空结果页），这是设计如此、不是缺陷。
+
+            **`render` 是 JS 渲染，属于取数方式、不是新引擎**：`engine` 仍是 `html_list`，
+            渲染后的 HTML 走同一套选择器与字段规则。只有「纯 HTTP 取回空壳、浏览器执行脚本后
+            才有内容」的页面才需要。典型写法：`"render": {"enabled": true, "wait_until":
+            "networkidle", "wait_for_selector": "真实条目选择器", "scroll": true}`；列表要渲染、
+            详情不要，就在 `entrypoints[].render` / `detail.render` 写 `{"enabled": false}`
+            或只写要改的字段。**前提**：服务端 `.env` 的 `SOURCE_RENDER_ENABLED=true` 且已装
+            Playwright/Chromium（`uv sync --extra render` + `uv run playwright install chromium`），
+            否则 `validate_source_config` 直接拒绝。`wait_for_selector` 是 Playwright 选择器，
+            必须与页面真实 DOM 对得上，写错会超时。
 
     Returns:
         JSON 文本：`ok`（能否执行）、`problems`（不可执行的原因，逐条给出修复指引）、
@@ -496,6 +518,10 @@ async def dry_run_ingestion(
     - `blocked` 当前环境或站点不允许（robots 禁止 / 401 / 403 / 内网地址）——按接入规范不绕过。
 
     它**不建抓取任务、不写正式结果表**（那是注册后正式抓取的事）。
+
+    配置里 `render.enabled=true` 时，试运行的列表探测、第 2 页探测与详情取样**都走浏览器
+    渲染**（与正式抓取同一口径）；服务端没开 `SOURCE_RENDER_ENABLED` / 没装 Playwright 会在
+    `error` 里给出安装命令。勘察与取样工具（inspect_source / sample_content）仍是原始 HTML。
 
     Args:
         config_json: 与 generate_source_config 相同的配置 JSON。

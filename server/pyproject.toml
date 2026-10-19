@@ -16,7 +16,18 @@ dependencies = [
     "langfuse>=5.0.2",
 ]
 
+[project.optional-dependencies]
+# JS 渲染（app/sources/render.py）按需安装；装完还需 `uv run playwright install chromium`。
+# 只有来源配置里 render.enabled=true 时才会用到，普通 HTML 抓取不需要它。
+render = [
+    "playwright>=1.49",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
 ]
+
+[index]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

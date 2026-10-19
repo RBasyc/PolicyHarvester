@@ -47,7 +47,7 @@ description: 把一个新的网站来源接进本项目的采集链路。当用�
 - `ok=false` 且 `kind=failed` → 地址多半写错了，让用户确认。
 - `ok=true` → 看 `list_candidates`：
   - 有候选 → 进阶段 3。
-  - 没有候选 → 这页是首页/正文页，或列表由 JS 渲染。用 `discover_content` 追一层栏目（`follow=1`）拿到真正列出条目的栏目页；仍然没有 → 看 `feeds` / `search_forms`：`search_forms` 里的 GET 检索表单可以做成**检索型入口**（见阶段 4，真取一页验证后写进 `entrypoints[].search`），`feeds` 目前没有对应引擎（RSS 源只能当普通列表页抓）；都没有 → 如实说「本引擎只能解析服务端渲染的静态 HTML，该站需要浏览器渲染能力（当前未实现）」。
+  - 没有候选 → 这页是首页/正文页，或列表由 JS 渲染。用 `discover_content` 追一层栏目（`follow=1`）拿到真正列出条目的栏目页；仍然没有 → 看 `feeds` / `search_forms`：`search_forms` 里的 GET 检索表单可以做成**检索型入口**（见阶段 4，真取一页验证后写进 `entrypoints[].search`），`feeds` 目前没有对应引擎（RSS 源只能当普通列表页抓）；都没有 → 若取回的 HTML 是空壳（可见文本极少、列表容器为空），给入口加 `"render": {"enabled": true}`（字段见 `references/config-schema.md` §2.1；服务端需装 Playwright 并开 `SOURCE_RENDER_ENABLED`），再用 `dry_run_ingestion` 验证——**注意阶段 A 的 `inspect_source` / `sample_content` 仍走纯 HTTP**，它们本身看不到渲染后的内容；仍然没有 → 如实说「该站需要登录/接口或本引擎未覆盖的交互」。
 
 如果用户给的是网站首页而不是栏目页，先 `discover_content(url, follow=1)` 找到栏目入口，再从候选里挑与目标主题最相关的栏目当 `entrypoints`。
 
@@ -134,15 +134,16 @@ description: 把一个新的网站来源接进本项目的采集链路。当用�
 
 ## 已知能力边界（要主动告诉用户）
 
-- 只能解析**服务端返回的静态 HTML**；JS 动态渲染的站点需要浏览器渲染能力（未实现）。
+- **默认只解析服务端返回的静态 HTML**；JS 动态渲染的页面可在来源配置里开 `render.enabled`（可选依赖 Playwright/Chromium，服务端 `SOURCE_RENDER_ENABLED=true`，需重启）。渲染只是**取数方式**，解析与字段规则不变；开关没开会注册校验直接拒绝，不会静默退回空壳。**不会自动识别** JS 壳页面——需要你看取回的 HTML 是否为空壳后手动打开。
 - 附件目前**只做可达性与归档验证**，不做 PDF/OFD 文字抽取（正文抽取是已知缺口）。
 - 图片版红头文件（正文全是图片）会被正文指标判为「不达标」并标注，不会当成有效正文入库。
 - 登录 / 验证码 / 付费墙之后的内容不采集（规范不允许绕过）；有站点还会对**非浏览器客户端**直接
   回 403（2026-10-15 实测：`www.gov.cn/zhengce/zhengceku/` 对 curl 默认 UA、我们的 UA、Chrome UA
   三种请求**都是 403**）——这类一律如实报 `blocked`，不换 UA 去绕。
 - **已是内置来源的站点不需要重新接入**：gov.cn（国务院政策文件库）在来源下拉里本来就是
-  `builtin=true` / `active`，用户问「导入 gov.cn 显示不通过怎么办」→ 直接告诉他不用导，
-  报出来的 `blocked`（403）或「未通过」（栏目页列表由 JS 渲染）都是如实结论。
+  `builtin=true` / `active`，用户问「导入 gov.cn 显示不通过怎么办」→ 直接告诉他不用导。
+  报出来的 `blocked`（403）是如实结论；「未通过（栏目页列表由 JS 渲染）」先确认是否需要给
+  入口开 `render`，别把可修的问题当成最终结论。
 - 全站历史存量不在一次试运行覆盖范围内（每次只试抓少量样本）。
 
 ## 交付与留痕

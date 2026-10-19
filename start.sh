@@ -265,9 +265,28 @@ install_deps() {
     return 0
   fi
 
-  step "同步后端依赖（uv sync）..."
-  ( cd "$SERVER_DIR" && uv sync ) || die "uv sync 失败，请检查网络或 uv 环境。"
+  # 可选依赖是**严格同步**的：不带 --extra render 的 uv sync 会把 playwright 卸掉
+  # （实测「Uninstalled 3 packages」= playwright / greenlet / pyee）。.env 开了渲染就必须
+  # 带上 extras，否则每次用启动脚本都会把渲染能力悄悄拆掉，试运行时才报「未安装 playwright」。
+  local render_flag=""
+  local render_enabled="${SOURCE_RENDER_ENABLED:-$(env_value SOURCE_RENDER_ENABLED)}"
+  render_enabled="${render_enabled%%#*}"  # .env 行尾注释不属于值（env_value 不做这一步）
+  render_enabled="$(printf '%s' "$render_enabled" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  case "$render_enabled" in
+    true|1|yes|on) render_flag="--extra render" ;;
+  esac
+  step "同步后端依赖（uv sync ${render_flag}）..."
+  # shellcheck disable=SC2086  # 为空时必须不传参数，不能加引号
+  ( cd "$SERVER_DIR" && uv sync $render_flag ) || die "uv sync 失败，请检查网络或 uv 环境。"
   ok "后端依赖就绪"
+
+  if [ -n "$render_flag" ]; then
+    step "检查 Playwright 浏览器内核（JS 渲染）..."
+    # 已安装时该命令只做校验、很快返回；首次会下载 Chromium。
+    ( cd "$SERVER_DIR" && uv run --extra render playwright install chromium ) \
+      || warn "Chromium 下载失败：需要渲染的来源会报「Chromium 启动失败」，可稍后手动重跑该命令"
+    ok "渲染依赖就绪"
+  fi
 
   step "检查前端依赖 ..."
   if [ -d "$WEB_DIR/node_modules" ] && [ ! "$WEB_DIR/pnpm-lock.yaml" -nt "$WEB_DIR/node_modules" ]; then

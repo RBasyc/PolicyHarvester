@@ -25,13 +25,16 @@ import re
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
 
 from app.config import get_settings
+
+if TYPE_CHECKING:  # 仅类型提示：运行时会 → render，避免 net ↔ render 的导入环
+    from app.sources.render import RenderOptions
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +303,48 @@ async def robots_status(url: str) -> dict[str, object]:
 # ---------- 抓取 ----------
 
 
+async def precheck(
+    url: str,
+    *,
+    allowed_domains: list[str] | None = None,
+    respect_robots: bool | None = None,
+    allow_private: bool | None = None,
+) -> str:
+    """渲染路径的入口门禁：`check_url` + 异步 DNS 复验 + robots.txt。
+
+    纯 HTTP 路径在每个重定向跳点上重复这套校验；浏览器自己跟跳转，所以我们只在
+    入口做一次，其余请求交给 `render._guard_route()` 逐请求复核。
+    """
+    settings = get_settings()
+    if allow_private is None:
+        allow_private = settings.source_allow_private_hosts
+    if respect_robots is None:
+        respect_robots = settings.source_respect_robots
+
+    checked = check_url(url, allowed_domains=allowed_domains, allow_private=allow_private)
+    if not allow_private:
+        host = (urlsplit(checked).hostname or "").lower()
+        # 异步路径再解析一次：入口校验是同步 DNS，解析结果可能已经变了。
+        for ip in await _resolve_host_async(host):
+            if _blocked_ip(ip):
+                raise UnsafeURLError(
+                    f"拒绝访问非公网地址：{host} → {ip}"
+                    "（确需抓内网站点请设 SOURCE_ALLOW_PRIVATE_HOSTS=true）"
+                )
+    if respect_robots:
+        parsed = urlsplit(checked)
+        async with httpx.AsyncClient(
+            timeout=5.0,
+            follow_redirects=False,
+            trust_env=False,
+            headers={"User-Agent": settings.source_user_agent},
+        ) as client:
+            parser = await _robots_for(client, parsed.scheme, parsed.hostname or "")
+        if not _robots_allows(parser, checked):
+            raise UnsafeURLError(f"robots.txt 不允许抓取：{checked}")
+    return checked
+
+
 async def fetch_bytes(
     url: str,
     *,
@@ -325,8 +370,26 @@ async def fetch_text(
     timeout: float | None = None,
     max_bytes: int | None = None,
     respect_robots: bool | None = None,
+    render: "RenderOptions | None" = None,
 ) -> FetchResult:
-    """抓取一个 URL 并解码成文本（HTML 页面用，编码嗅探见 `htmlparse.decode_html`）。"""
+    """抓取一个 URL 并解码成文本（HTML 页面用，编码嗅探见 `htmlparse.decode_html`）。
+
+    `render` 非空且 `enabled=True` 时走浏览器渲染取数（`app/sources/render.py`）——
+    渲染是**取数方式**，返回值仍是同一种 `FetchResult`，解析层无感知。渲染不可用时抛
+    `RenderUnavailable`，**不会**静默退回原始 HTML（那会得到一页空壳并静默解析失败）。
+    """
+    if render is not None and render.enabled:
+        from app.sources.render import fetch_text as render_fetch_text
+
+        return await render_fetch_text(
+            url,
+            allowed_domains=allowed_domains,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            options=render,
+            respect_robots=respect_robots,
+        )
+
     result = await _fetch_raw(
         url,
         allowed_domains=allowed_domains,

@@ -28,12 +28,14 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.config import get_settings
 from app.sources.htmlparse import selector_supported
 from app.sources.net import domain_allowed
 
 SourceLevel = Literal["national", "province", "city", "county", "other"]
 SourceType = Literal["government_portal", "open_api", "rss", "mixed"]
 SourceEngine = Literal["html_list"]
+RenderWaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
 # 落库状态机：draft（草案，仅试运行）→ validated（试运行通过）→ active（已注册启用）
 #                                  ↘ disabled（人工停用，可再启用）
@@ -45,6 +47,66 @@ SourceStatus = Literal["draft", "validated", "active", "disabled"]
 # 页面导入（`services/source_import.py`）与试运行验收（`services/onboarding.py`）共用同一个，
 # 两处口径必须一致，否则「导入时试通了、验收时又不通」会变成一场没有结论的排查。
 SEARCH_PROBE_KEYWORD = "通知"
+
+
+class RenderConfig(BaseModel):
+    """JS 渲染取数（可选，**默认关闭**）。
+
+    只对「纯 HTTP 取回的是空壳、浏览器执行脚本后才有内容」的页面开启。渲染一次的成本
+    远高于纯 HTTP，所以按来源、按入口分别开关；站点级 `render` 是默认值，
+    `entrypoints[].render` / `detail.render` 只覆盖显式写出的字段（`exclude_unset`）。
+
+    服务端还需要 `SOURCE_RENDER_ENABLED=true` 且装好 Playwright/Chromium，否则注册
+    校验直接报错——不做「配置开了、运行时静默退回原始 HTML」这种降级。
+    """
+
+    enabled: bool = False
+    # networkidle 最稳（等 XHR 把列表填完），但长轮询页面可能永远不 idle；
+    # 这类页面用 `load` + `wait_for_selector` 更可控。
+    wait_until: RenderWaitUntil = "networkidle"
+    wait_for_selector: str | None = Field(
+        None, description="等这个 CSS 选择器出现再取 HTML（Playwright 选择器，不受 mini-DOM 子集限制）"
+    )
+    wait_ms: int = Field(0, ge=0, le=30_000, description="额外固定等待毫秒数")
+    scroll: bool = Field(False, description="滚到底触发懒加载列表")
+    max_scrolls: int = Field(5, ge=0, le=50)
+    block_resources: bool = Field(True, description="拦截图片/字体/媒体（对取文本无用，最吃带宽）")
+    timeout_ms: int = Field(45_000, ge=1_000, le=120_000)
+    # raise = 渲染失败即报错（默认）；raw_fallback = 退回纯 HTTP，并写日志——
+    # 只给「有渲染增强更好、没有也能用」的站点。
+    on_error: Literal["raise", "raw_fallback"] = "raise"
+
+    @field_validator("wait_for_selector")
+    @classmethod
+    def _clean_selector(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    def merged(self, override: "RenderConfig | None") -> "RenderConfig":
+        """站点级默认值 + 局部覆盖（只覆盖显式写出的字段）。"""
+        if override is None:
+            return self
+        payload = self.model_dump()
+        payload.update(override.model_dump(exclude_unset=True))
+        return RenderConfig.model_validate(payload)
+
+    def to_options(self) -> Any:
+        """转成取数层的 `RenderOptions`（延迟导入，避免 config ↔ render 的导入环）。"""
+        from app.sources.render import RenderOptions
+
+        return RenderOptions(
+            enabled=self.enabled,
+            wait_until=self.wait_until,
+            wait_for_selector=self.wait_for_selector,
+            wait_ms=self.wait_ms,
+            scroll=self.scroll,
+            max_scrolls=self.max_scrolls,
+            block_resources=self.block_resources,
+            timeout_ms=self.timeout_ms,
+            on_error=self.on_error,
+        )
+
 
 class PaginationConfig(BaseModel):
     """列表页翻页规则。
@@ -253,6 +315,8 @@ class EntrypointConfig(BaseModel):
     )
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
     search: SearchConfig | None = None  # 非空 = 站内检索入口（关键词/日期进服务端）
+    # 本入口的渲染覆盖（只覆盖写出的字段；None = 完全用站点级 `SourceConfig.render`）
+    render: RenderConfig | None = None
     notes: str | None = None
 
     @property
@@ -288,6 +352,8 @@ class DetailConfig(BaseModel):
     attachment_selector: str | None = Field(
         None, description="附件链接选择器；不填 = 用内置扩展名启发式（pdf/doc/docx/xls/xlsx/zip/rar/ofd）"
     )
+    # 详情页的渲染覆盖（列表页 SSR、详情页 CSR 是很常见的组合）
+    render: RenderConfig | None = None
     min_body_chars: int = 200  # 试运行时判定「正文过短」的 CJK 字数下限
 
 
@@ -322,6 +388,8 @@ class SourceConfig(BaseModel):
     scope: ScopeConfig
     entrypoints: list[EntrypointConfig] = Field(..., min_length=1)
     detail: DetailConfig = Field(default_factory=DetailConfig)
+    # JS 渲染的站点级默认值；入口/详情可用各自的 `render` 局部覆盖
+    render: RenderConfig = Field(default_factory=RenderConfig)
     # 文号前缀 → 文种（如 {"浙政发": "浙政发"}）；空 = 不做文种归类
     doc_type_patterns: dict[str, str] = Field(default_factory=dict)
     # 列表页关键词复核口径：`substring` = 标题须含完整关键词；`any_char` = 至少共享一个字。
@@ -359,6 +427,14 @@ class SourceConfig(BaseModel):
     def entrypoint_urls(self) -> list[str]:
         return [ep.url for ep in self.entrypoints]
 
+    def render_for_entrypoint(self, entrypoint: EntrypointConfig) -> RenderConfig:
+        """某入口实际生效的渲染配置（站点默认值 + 入口覆盖）。"""
+        return self.render.merged(entrypoint.render)
+
+    def render_for_detail(self) -> RenderConfig:
+        """详情页实际生效的渲染配置（站点默认值 + 详情覆盖）。"""
+        return self.render.merged(self.detail.render)
+
     def capabilities(self) -> dict[str, Any]:
         """这份配置的筛选能力（见 `capability_summary`）。"""
         return capability_summary(self.model_dump())
@@ -388,6 +464,7 @@ class SourceConfig(BaseModel):
             "pagination": sorted({ep.pagination.kind for ep in self.entrypoints}),
             "filters": capability_summary(self.model_dump()),
             "attachments": bool(self.detail.attachment_selector) or "扩展名启发式",
+            "render": self.render.enabled,
             "fingerprint": self.config_fingerprint(),
         }
 
@@ -444,6 +521,20 @@ def validate_source_config(config: SourceConfig) -> list[str]:
         if not ok:
             problems.append(f"detail.attachment_selector 不可用：{reason}")
     _validate_field_rules("detail.fields", config.detail.fields, problems)
+
+    # JS 渲染要服务端总开关 + 浏览器依赖都在位。配置开了而环境没开时，注册就该拒绝，
+    # 而不是等第一次抓取才在流水线里抛「渲染不可用」。
+    render_enabled = (
+        config.render.enabled
+        or any(ep.render is not None and ep.render.enabled for ep in config.entrypoints)
+        or (config.detail.render is not None and config.detail.render.enabled)
+    )
+    if render_enabled and not get_settings().source_render_enabled:
+        problems.append(
+            "配置启用了 JS 渲染，但服务端 SOURCE_RENDER_ENABLED=false："
+            "在仓库根 .env 打开并重启（另需 cd server && uv sync --extra render "
+            "&& uv run playwright install chromium）"
+        )
 
     if not config.detail.container_selectors:
         problems.append(

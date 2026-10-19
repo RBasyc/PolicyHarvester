@@ -41,6 +41,7 @@
 | 20 | 对话里直接入库（`ingest_policies` 工具 + 服务层抽取） | 🟨 进行中（代码完成，未构建未运行；见下） | — |
 | 21 | 可观测性：对话与流水线接入 Langfuse / Litefuse（自托管） | 🟨 进行中（根 span 泄漏修复完成，待重启验收） | — |
 | 22 | 字段提取通用化（FieldRule DSL + 结构分析自动生成 + metadata 落库） | 🟨 进行中（代码与离线用例完成，**未构建未运行**；待实机验收） | — |
+| 23 | JS 渲染抓取（阶段 A：取数层 + 按来源开关） | 🟨 进行中（代码与离线用例完成，**未安装依赖、未运行**；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1005,4 +1006,29 @@ pnpm dev
 - [x] **发布日期模型兜底（2026-10-19）**：结构解析拿不到发布日期时，由模型从页面内容补提一个；补不到就留空、前端统一显示「无日期」，补到时明确标注「模型提取」。**补提放在正文预检阶段（确认之前）**，确认面板即可看到日期；预检关闭/模型不可用时提取阶段再兜底一次。实现：`prompts/extract_date.md`（只认页面明确写出的发布日期，禁止拿成文/施行日期顶替或推测）+ `pipeline/extract.py::extract_publish_date`（独立小调用、只认 `YYYY-MM-DD`、未来/过早日期丢弃、失败 fail-open）+ `crawl_graph._preflight_bodies`（详情页结构没解析到日期时用整页文本 `FulltextResult.page_text` 补提，写回 `it["date"]` + `it["date_source"]="model"`）+ `crawl_graph._backfill_model_publish_date`（提取阶段兜底，仅在 `publish_date` 仍为空时触发）+ `policy_document.publish_date_source`（NULL=页面解析，`model`=模型补提；预检结果经 `insert_policies` 落库）+ 四处镜像（`repositories` / `schemas` / `types.ts` / `v_policy_results`）+ 前端确认面板、结果表、详情抽屉、成果库卡片/详情标注。**待用户 `database/init.sh` 补列 + 重启 server 后重抓验收**；历史行不会自动补提，需要重新提取
 - [ ] **待实机验收**：① `cd server && uv run python scripts/test_source_import.py`（§14–15 应全过；其余离线用例不受影响）；② `database/init.sh` 补 `metadata` 列后重跑一次「导入网址」——详情页抽屉应出现索引号/成文日期等自定义字段；③ 找一个 `dt/dd` 或 `span 标签 + 父节点值` 的真实站，确认日期/机构/文号不再为空；④ 老来源（仅有 `*_selectors`）行为不变；⑤ 构造一篇页面无日期/日期在正文容器外的政策，确认结果表出现「模型提取」标注、原文确实写了该日期
 - [ ] **本阶段不做（有意）**：让模型生成/执行任意代码（规则仍是数据）；伪类 / `+` / `~` 选择器（引擎能力边界）；对非日期字段做跨样本恒定值核对（同栏目同机构恒定是合理的）
+
+---
+
+## Phase 23 — JS 渲染抓取（阶段 A：取数层 + 按来源开关）
+
+**状态**：🟨 进行中（阶段 A 代码与离线用例完成，**未安装依赖、未构建、未运行**，待实机验收） ｜ **目标**：让「纯 HTTP 取回空壳、浏览器执行脚本后才有内容」的来源也能接入，同时**不新增引擎、不改变解析与字段规则**。
+
+**设计决定**：渲染是**取数方式**，不是 `engine="js_list"`。浏览器最终产出的仍是 HTML，因此 `htmlparse` / `analyze` / `FieldRule` / 流水线完全无感知；渲染能力收口在 `net.fetch_text(render=...)` → `sources/render.py`，`HtmlListSource._get_text()` 仍是列表页与详情页的唯一取数入口。
+
+- [x] **渲染层**（新增 `app/sources/render.py`）：Playwright async + 进程级懒启动 Chromium（`_ensure_browser`，进程/事件循环变化时丢弃旧实例）；每次抓取独立 `BrowserContext`；`RenderOptions` 携带 `wait_until` / `wait_for_selector` / `wait_ms` / `scroll` / `max_scrolls` / `block_resources` / `timeout_ms` / `on_error`；渲染后 `page.content()` → `net.FetchResult`（`url` = 最终地址、`raw` = UTF-8 字节、仍受 `SOURCE_FETCH_MAX_BYTES` 截断）
+- [x] **安全门禁不放宽**：入口走新增的 `net.precheck()`（`check_url` + 异步 DNS 公网复验 + robots.txt，口径与 `_fetch_raw` 一致）；浏览器**每个子请求**由 `render._guard_route()` 拦截——只放行 http/https + `allowed_domains`，非 GET/HEAD 一律 abort，图片/字体/媒体默认 abort。**残余风险已在模块与文档中写明**：Chromium 自己解析 DNS，Python 侧校验是 TOCTOU，`allowed_domains` 仍是主边界
+- [x] **配置模型**（`app/sources/config.py`）：新增 `RenderConfig`；`SourceConfig.render` 为站点级默认，`EntrypointConfig.render` / `DetailConfig.render` 为局部覆盖（`merged()` 用 `exclude_unset`，**只覆盖写出的字段**；`render_for_entrypoint()` / `render_for_detail()`）；渲染参数进 `config_fingerprint()`（改动会触发重新验收）；`summary()["render"]` 标出是否启用
+- [x] **取数接线**（`app/sources/net.py` + `html_source.py`）：`net.fetch_text(..., render=RenderOptions)` 分派；`HtmlListSource._get_text(url, timeout, render=...)` 在列表轮用 `render_for_entrypoint(entry)`、详情轮用 `render_for_detail()`；**列表缓存键带渲染签名**，原始 HTML 与渲染 HTML 不串用。试运行的探测（`onboarding._probe_entries` / `_probe_page2` / `_probe_detail`）也按同一口径传渲染选项，并捕获 `RenderUnavailable`——否则开了渲染的配置会在验收里被原始 HTML 判成「列表为空 / 正文不达标」
+- [x] **失败语义**：开关关闭 / 未装 Playwright / 浏览器启动失败 → `RenderUnavailable`（含安装命令），**绝不静默退回原始 HTML**；`render.on_error="raw_fallback"` 是逐来源显式选择，且只兜渲染失败、不兜安全拒绝
+- [x] **服务端开关**（`app/config.py`）：`SOURCE_RENDER_ENABLED`（默认 false）+ `SOURCE_RENDER_CONCURRENCY`（默认 2，独立信号量）；`validate_source_config()` 在「配置开了渲染但服务端开关没开」时直接拒绝注册
+- [x] **生命周期**：`app/main.py` lifespan 收尾调用 `render.shutdown()`（在流水线关停之后）；未启用时是空操作
+- [x] **可选依赖**：`server/pyproject.toml` 新增 `[project.optional-dependencies] render = ["playwright>=1.49"]`；默认 `uv sync` 不装，普通 HTML 抓取零影响
+- [x] **离线用例**（`server/scripts/test_source_import.py` §16）：配置合并（入口/详情只覆盖写出字段）、`to_options`、站点级默认继承、指纹随渲染参数变化、请求拦截口径（白名单外主机 / 图片字体媒体 / POST 被拦）、`wait_for_selector` 不受 mini-DOM 子集限制、开关关闭时 `fetch_text` 抛 `RenderUnavailable`、注册校验拒绝/放行
+- [x] **镜像同步**：`.claude/skills/website-source-onboarding/references/config-schema.md`（§1/§2.1/§3/§4 字段表）、`acceptance-criteria.md`（覆盖范围限制改为「试运行/正式抓取按 `render.enabled` 取数，勘察/取样仍取原始 HTML」）、`tool-map.md`（§3 缺口表改为「阶段 A 已实现（可选）」）、`SKILL.md`（JS 空壳的处置与能力边界）、`docs/architecture/source-onboarding.md`、`docs/guides/commands.md`、`.env.example`；`onboarding.py` 的覆盖范围限制与 `diagnose_source` 建议、`source_import.py` 的静态页提示同步改为提到 `render.enabled`
+- [x] **Agent 工具文案补 render（2026-10-19）**：用户在 Agent 页问「能使用服务端渲染吗」，Agent 断言「配置 schema 没有 render / 引擎只有 html_list」——`generate_source_config` 的字段说明当时确实没写 `render`，模型据此把已有能力说成不存在。已补：顶层 `render{enabled, wait_until, wait_for_selector, wait_ms, scroll, max_scrolls, block_resources, timeout_ms, on_error}`、`entrypoints[]`/`detail` 局部覆盖、前提（`SOURCE_RENDER_ENABLED=true` + Playwright/Chromium）、`wait_for_selector` 必须与真实 DOM 对得上；`inspect_source` / `discover_content` / `sample_content` 的 `next` 与 `dry_run_ingestion` docstring 统一改成「勘察/取样仍取原始 HTML，JS 空壳直接写 render 后试运行验证」。**需重启 server**（工具 docstring 在 import 时读取）
+- [x] **启动脚本不再卸载渲染依赖（2026-10-19）**：用户用 `start.sh` 启动时看到 `uv sync` 输出 `Uninstalled 3 packages`，随后试运行报「未安装 playwright」。根因是脚本里的普通 `uv sync` 会**严格同步**默认依赖集，把可选 extras（playwright / greenlet / pyee）卸掉。已改为读取 `.env` 的 `SOURCE_RENDER_ENABLED`：为真时执行 `uv sync --extra render` 并补装 Chromium，否则维持普通同步；`docs/guides/commands.md` 写明该行为。另修 `crawl_graph` 的报错包装：`RenderUnavailable` 不再被套成「连接 … 超时或异常，请确认本地服务已启动」（那会把环境问题引向错误方向），直接原样报出安装命令。`bash -n start.sh` 通过；**未执行脚本**（硬规则 1）。**回归**：`.env` 行尾带注释（`SOURCE_RENDER_ENABLED=true  # …`）时首版解析把注释也当成值，`case` 匹配不上又退回普通 `uv sync`，用户复跑仍报「未安装 playwright」——已加去注释 + 去空白，实测解析结果为 `true`
+- [x] **Windows 事件循环冲突修复（2026-10-19）**：用户实机试运行报「渲染抓取失败（NotImplementedError: ）」（run_id 511）。根因：`app/__init__.py` 为 psycopg 异步把 Windows 全局策略设为 `WindowsSelectorEventLoopPolicy`，而 Playwright 启动浏览器驱动要用 `create_subprocess_exec`——Selector 循环在 Windows 上不支持子进程，抛出的正是**空消息 `NotImplementedError`**。两边都不能改（psycopg 不能用 Proactor，Playwright 不能用 Selector）。已修：`render.py` 在 Windows 下把渲染请求派到专用的 Proactor 事件循环线程（进程内单例 daemon，`run_coroutine_threadsafe` + `wrap_future`，取消可传播），浏览器单例/并发信号量只在该循环里使用；`shutdown()` 回该循环关闭浏览器后再停线程；`on_error="raw_fallback"` 的纯 HTTP 回退移到主循环执行（`net` 的限流锁/信号量可能已绑定主循环，跨循环 await 会报 Future attached to a different loop）；`async_playwright().start()` 失败统一包成 `RenderUnavailable` 并附安装命令。非 Windows 平台仍在当前循环执行，行为不变。**需重启 server 后复跑江苏来源试运行验证**
+- [x] **静态检查**：9 个改动/新增 Python 文件 `ast.parse` 全通过（**未导入、未安装依赖、未起服务、未跑用例**——硬规则 1）
+- [ ] **待实机验收**：① `cd server && uv sync --extra render && uv run playwright install chromium`；② `.env` 设 `SOURCE_RENDER_ENABLED=true` 并重启 server；③ 选一个真实 JS 空壳页面，配置 `render.enabled=true`（必要时加 `wait_for_selector` / `scroll`），试运行应取到条目；④ 关掉 `SOURCE_RENDER_ENABLED` 重启 → 该来源抓取应明确报「渲染未启用」，而不是悄悄抓到空列表；⑤ 未安装 Playwright 的机器上服务仍能启动、普通 HTML 来源照常抓取（import 是懒的）；⑥ 观察渲染并发不超过 `SOURCE_RENDER_CONCURRENCY`，同一 URL 在一次检索内只渲染一次
+- [ ] **本阶段不做（有意）**：接入流程的 **JS 壳自动识别**（原始 vs 渲染文本长度对比，阶段 B）；`fill` / `click` 等交互动作 DSL（阶段 C；只做受约束动作，不做任意脚本）；拦截 XHR JSON 的 `api_list` 引擎（数据本来就来自接口时，渲染只是过渡方案）；登录墙 / 验证码 / 付费墙一律不绕；`--no-sandbox` 等容器参数不默认打开（按部署环境由运维决定）
 

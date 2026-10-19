@@ -19,6 +19,7 @@
 | `organization` | str | 否 | `null` | 发布机构（展示用） |
 | `source_type` | enum | 否 | `government_portal` | `government_portal` / `open_api` / `rss` / `mixed`（当前引擎均为 HTML 取数，此项仅供归类与未来分流） |
 | `engine` | enum | 否 | `html_list` | 取数引擎。**目前只有 `html_list`** |
+| `render` | object | 否 | `{"enabled": false}` | **JS 渲染**（可选，见 §2.1）：站点级默认值；入口/详情可局部覆盖。开启前需服务端 `SOURCE_RENDER_ENABLED=true` + 装好 Playwright/Chromium，否则注册校验直接拒绝 |
 | `scope` | object | **是** | — | 来源边界，见下 |
 | `entrypoints` | array | **是** | — | ≥1 个内容入口，入口名不能重复 |
 | `detail` | object | 否 | 见下 | 详情页解析规则 |
@@ -37,6 +38,29 @@
 | `request_interval_ms` | int | 否 | `null` | 本来源的抓取间隔（毫秒，0–60000）；`null` = 用全局 `SOURCE_REQUEST_INTERVAL_MS`。**只能调大不能调小**，别为了跑通去压这个值 |
 | `max_items_per_entry` | int | 否 | `50` | 单个入口最多取多少条（1–500） |
 
+### 2.1 JS 渲染（`render`）—— 可选，默认关闭
+
+只有「纯 HTTP 取回的是空壳、浏览器执行脚本后才有内容」的页面才需要。渲染一次的成本
+远高于纯 HTTP（内存 / CPU / 耗时），按来源开启；列表页 SSR、详情页 CSR 很常见，所以入口与
+详情都能局部覆盖（只覆盖**写出的字段**，其余继承站点级 `render`）。
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | 是否用 Playwright/Chromium 渲染后再解析 |
+| `wait_until` | enum | `networkidle` | `commit` / `domcontentloaded` / `load` / `networkidle`。长轮询页面永远不 idle 时改用 `load` + `wait_for_selector` |
+| `wait_for_selector` | str | `null` | 等这个选择器出现再取 HTML（Playwright 选择器，**不受 §6 的 mini-DOM 子集限制**） |
+| `wait_ms` | int | `0` | 额外固定等待（0–30000） |
+| `scroll` | bool | `false` | 滚到底触发懒加载列表 |
+| `max_scrolls` | int | `5` | 最多滚几次（高度不再增长就提前停） |
+| `block_resources` | bool | `true` | 拦图片 / 字体 / 媒体；只留文档、脚本、样式与 XHR |
+| `timeout_ms` | int | `45000` | 单页导航 + 等待超时（1000–120000） |
+| `on_error` | enum | `raise` | `raise` = 渲染失败即报错；`raw_fallback` = 退回纯 HTTP（写日志）。**默认不降级**——空壳页面静默解析失败比报错更难查 |
+
+启用条件（缺一项注册校验直接拒绝）：服务端 `.env` 的 `SOURCE_RENDER_ENABLED=true`；
+`cd server && uv sync --extra render && uv run playwright install chromium`。安全口径不变：
+入口与**每个子请求**都过协议 / 白名单 / 公网地址校验，robots.txt 照守，非 GET 请求一律拦截。
+渲染后的 HTML 仍走 §6 的同一套解析与字段规则——渲染只是取数方式，不是新引擎。
+
 ## 3. `entrypoints[]` —— 内容入口
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
@@ -52,6 +76,7 @@
 | `item_fields` | object | 否 | `{}` | **列表条目**的语义化字段规则（与 `detail.fields` 同一套 DSL，见 §3.1）。典型用途：列表里的发布日期、发文机关、文号；`date` 会兼作 `publish_date` 的兜底，其余进 `metadata` |
 | `pagination` | object | 否 | `{"kind":"none"}` | 翻页规则，见下 |
 | `search` | object | 否 | `null` | **站内检索入口**：填了它，这个入口的关键词/日期送进站点自己的检索页（见下）。不填 = 普通栏目列表页 |
+| `render` | object | 否 | `null` | 本入口的**渲染覆盖**（字段见 §2.1；只覆盖写出的字段，`null` = 用站点级 `render`） |
 | `notes` | str | 否 | `null` | 备注。页面导入会把「单页声明未能提升为翻页、召回被截断在第 1 页」这类说明写在这里（同一句也进验收报告的 `coverage_limits`） |
 
 ### `search` —— 检索型入口（可选，但决定筛选能不能在服务端生效）
@@ -161,6 +186,7 @@ Agent 侧则照 `search_forms` 报告自己填（`config-schema.md` 这里给的
 | `fields` | object | `{}` | **语义化字段规则**（字段名 → `FieldRule` 列表，DSL 见 §3.1）。优先级高于上面的 `*_selectors`：先跑 `fields`，取不到的保留字段再回落旧链；非保留字段进 `policy_document.metadata` |
 | `drop_selectors` | array | `[]` | 正文内要剔除的节点（分享条 / 相关阅读 / 打印提示）。**附件清单在剔除之前扫描**——把 `div.attach` 放这里不会导致附件丢失 |
 | `attachment_selector` | str | `null` | 附件链接选择器；不填 = 内置扩展名启发式（pdf/doc/docx/xls/xlsx/zip/rar/ofd） |
+| `render` | object | `null` | 详情页的**渲染覆盖**（字段见 §2.1）；列表页 SSR、详情页 CSR 时只给它开 |
 | `min_body_chars` | int | `200` | 试运行时判定「正文过短」的 CJK 字数下限 |
 
 ## 5. `governance`

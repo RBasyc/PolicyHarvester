@@ -53,6 +53,7 @@ from app.sources.html_source import (
     parse_list_page,
 )
 from app.sources.registry import get, get_by_label, register_configured, unregister
+from app.sources.render import RenderUnavailable
 from app.sources.util import parse_date
 
 logger = logging.getLogger(__name__)
@@ -1015,11 +1016,18 @@ async def dry_run_ingestion(
             )
 
     # ---- 覆盖范围限制（必须写清楚这次**没**验证什么） ----
+    render_on = config.render_for_detail().enabled or any(
+        config.render_for_entrypoint(entry).enabled for entry in config.entrypoints
+    )
     limits.extend(
         [
             f"只试抓了 {len(details)} 篇 / 每个入口前 {pages} 页，未覆盖全站历史存量",
             "未验证登录/验证码/付费墙后的内容（按接入规范不绕过访问控制）",
-            "未验证 JS 动态渲染出来的内容（本引擎只解析服务端返回的静态 HTML）",
+            (
+                "本次验证基于浏览器渲染后的页面（render.enabled）；勘察/取样阶段仍只取服务端原始 HTML"
+                if render_on
+                else "未验证 JS 动态渲染出来的内容（默认只解析服务端返回的静态 HTML；列表由 JS 加载时可在来源配置开 render.enabled）"
+            ),
         ]
     )
     if any(row["image_count"] > 0 and row["body_cjk"] < 100 for row in details):
@@ -1129,9 +1137,15 @@ async def _probe_entries(
                  "error": "第 1 页地址为空"}
             )
             continue
+        # 与正式检索同一取数口径：入口开了 render 就渲染后再解析（配置见 render_for_entrypoint）。
+        render = config.render_for_entrypoint(entry)
         try:
-            fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
-        except (net.FetchError, net.UnsafeURLError) as exc:
+            fetched = await net.fetch_text(
+                url,
+                allowed_domains=config.scope.allowed_domains,
+                render=render.to_options() if render.enabled else None,
+            )
+        except (net.FetchError, net.UnsafeURLError, RenderUnavailable) as exc:
             errors.append(f"{entry.name}：{exc}")
             rows.append({"name": entry.name, "kind": kind, "url": url, "items": 0, "error": str(exc)})
             continue
@@ -1209,9 +1223,13 @@ async def _probe_one_page2(
     url = build_entry_url(entry, keyword=keyword, date_from=date_from, date_to=date_to, page=2)
     if url is None:
         return {"passed": False, "detail": "第 2 页地址为空（max_pages=1？）", "note": None}
+    render = config.render_for_entrypoint(entry)
+    render_options = render.to_options() if render.enabled else None
     try:
-        fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
-    except (net.FetchError, net.UnsafeURLError) as exc:
+        fetched = await net.fetch_text(
+            url, allowed_domains=config.scope.allowed_domains, render=render_options
+        )
+    except (net.FetchError, net.UnsafeURLError, RenderUnavailable) as exc:
         return {"passed": False, "detail": "第 2 页取回失败", "note": str(exc)}
     items2 = parse_list_page(fetched.text, entry, fetched.url)
     if not items2:
@@ -1222,9 +1240,11 @@ async def _probe_one_page2(
         }
     page1 = build_entry_url(entry, keyword=keyword, date_from=date_from, date_to=date_to, page=1)
     try:
-        first = await net.fetch_text(str(page1), allowed_domains=config.scope.allowed_domains)
+        first = await net.fetch_text(
+            str(page1), allowed_domains=config.scope.allowed_domains, render=render_options
+        )
         items1 = parse_list_page(first.text, entry, first.url)
-    except (net.FetchError, net.UnsafeURLError):
+    except (net.FetchError, net.UnsafeURLError, RenderUnavailable):
         items1 = []
     urls1 = {item["url"] for item in items1}
     fresh = [item for item in items2 if item["url"] not in urls1]
@@ -1262,9 +1282,14 @@ async def _probe_detail(item: dict[str, Any], config: SourceConfig) -> dict[str,
         "warnings": [],
         "error": None,
     }
+    render = config.render_for_detail()
     try:
-        fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
-    except (net.FetchError, net.UnsafeURLError) as exc:
+        fetched = await net.fetch_text(
+            url,
+            allowed_domains=config.scope.allowed_domains,
+            render=render.to_options() if render.enabled else None,
+        )
+    except (net.FetchError, net.UnsafeURLError, RenderUnavailable) as exc:
         row["error"] = f"取回失败：{exc}"
         row["warnings"].append(row["error"])
         return row
@@ -1856,7 +1881,9 @@ async def diagnose(
     if not list_ok:
         out["suggestions"].append(
             "该页可能不是列表页（是首页或正文页），或列表由 JS 动态渲染——"
-            "改抓栏目列表页，或确认站点是否提供 RSS / 检索接口"
+            "改抓栏目列表页，或确认站点是否提供 RSS / 检索接口；若确认是 JS 空壳，"
+            "可给入口加 render.enabled（需服务端安装 Playwright 并开 SOURCE_RENDER_ENABLED；"
+            "本诊断本身仍按原始 HTML 分析）"
         )
 
     # ④ 正文容器

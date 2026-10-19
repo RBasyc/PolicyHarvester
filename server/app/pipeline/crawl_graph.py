@@ -45,6 +45,7 @@ from app.pipeline.extract import extract_policy, extract_publish_date
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
+from app.sources.render import RenderUnavailable
 from app.tracing import isolated_context, trace_config
 
 logger = logging.getLogger(__name__)
@@ -310,6 +311,10 @@ async def _search_policies(
                     timeout=mcp_timeout,
                 )
             except SourceError as exc:
+                raise PipelineError(f"抓取失败：{exc}") from exc
+            except RenderUnavailable as exc:
+                # 渲染能力缺失是**环境问题**，原文已经带了安装命令；套上「超时或异常 /
+                # 请确认本地服务已启动」只会把人引到错误方向（2026-10-19 实测踩到）。
                 raise PipelineError(f"抓取失败：{exc}") from exc
             except Exception as exc:  # noqa: BLE001 - 统一转成设计稿要求的提示文案
                 raise PipelineError(

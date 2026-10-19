@@ -100,8 +100,9 @@ _MAX_CANDIDATES = 5
 # 静态引擎在这些页面上只能看到站点的骨架（导航/页脚）——要说清楚这是能力边界，
 # 不是「我们没配好」，也不是「站点拒绝我们」（后者会走 blocked）。
 _STATIC_ONLY_HINT = (
-    "本引擎只解析服务端返回的静态 HTML：列表由 JS 动态加载的站点解析不到条目"
-    "（这是已知能力边界，需要无头浏览器渲染支持，当前未实现）"
+    "导入勘察只解析服务端返回的静态 HTML：列表由 JS 动态加载的站点在这一步看不到条目"
+    "（可选能力：导入后在来源配置开 render.enabled，需服务端安装 Playwright 并开 "
+    "SOURCE_RENDER_ENABLED；导入流程本身不会自动识别或开启渲染）"
 )
 _PAGINATION_MAX_PAGES = 10
 _DETAIL_CONTAINER_LIMIT = 3
