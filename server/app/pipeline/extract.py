@@ -12,6 +12,11 @@
 2. 模型没调工具时回退到「要求输出 JSON」的纯文本提示 + 宽松解析。
 
 两条都失败则抛异常，由流水线把该篇标记为 `failed`（不影响其他篇）。
+
+另有一个**按需**的小入口 `extract_publish_date()`：结构解析没拿到发布日期时，流水线
+单独调它从页面文本里找明确写出的发布日期（见 `crawl_graph._backfill_model_publish_date`）。
+它不属于上面的三区提取，失败也不影响提取结果；补到的日期带 `publish_date_source='model'`
+标记，前端显示「模型提取」。
 """
 
 from __future__ import annotations
@@ -121,11 +126,17 @@ async def extract_policy(
     url: str | None = None,
     max_body_chars: int | None = None,
     model_id: str | None = None,
+    config: RunnableConfig | None = None,
 ) -> tuple[ExtractionPayload, str]:
     """提取一篇政策的「事实/信息/知识」。
 
     `max_body_chars` / `model_id` 均为任务级覆盖（页面高级设置）；不传时用 .env 的全局默认
     （`model_id=None` → 注册表第一项）。返回 `(结果, 使用的模型名)`；失败时抛异常。
+
+    `config` 是 LangChain 的 run config（可观测性用，见 `app/tracing.py`）：**显式往下传**
+    而不是让模型自己继承——调用方（`_extract_one`）传进来一个挂了 Langfuse callback 的 config，
+    这里再原样递给 `llm.ainvoke`，这篇提取才会和它的两次尝试（工具 / JSON 回退）归在同一条
+    trace 下。不传 = 不上报（`None` 对 LangChain 就是「没有 config」）。
     """
     settings = get_settings()
     limit = max_body_chars if max_body_chars else settings.pipeline_max_body_chars
@@ -147,16 +158,18 @@ async def extract_policy(
     entry = resolve_model_entry(model_id)
     llm = _build_extract_llm(entry)
     try:
-        result = await _extract_via_tool(llm, messages)
+        result = await _extract_via_tool(llm, messages, config=config)
         return result, entry.model
     except Exception as exc:  # noqa: BLE001 - 回退到纯文本 JSON 路径
         logger.warning("工具调用结构化输出失败（%s），回退到 JSON 文本解析", exc)
 
-    payload = await _extract_via_json(llm, messages)
+    payload = await _extract_via_json(llm, messages, config=config)
     return payload, entry.model
 
 
-async def _extract_via_tool(llm: Any, messages: list) -> ExtractionPayload:
+async def _extract_via_tool(
+    llm: Any, messages: list, *, config: RunnableConfig | None = None
+) -> ExtractionPayload:
     """首选路径：把 schema 绑成一个工具，让模型自己决定调用。
 
     刻意**不**走 `with_structured_output`——它会强制 `tool_choice={"type": "tool", ...}`，
@@ -166,28 +179,25 @@ async def _extract_via_tool(llm: Any, messages: list) -> ExtractionPayload:
     不指定 `tool_choice` 时模型照样会调用该工具（实测 stop_reason=tool_use），
     真没调再回退纯文本 JSON，所以这里不必强制。
     """
-    response = await llm.bind_tools([ExtractionPayload]).ainvoke(messages)
+    response = await llm.bind_tools([ExtractionPayload]).ainvoke(messages, config=config)
     for call in response.tool_calls or []:
         if call.get("name") == ExtractionPayload.__name__:
             return ExtractionPayload.model_validate(call["args"])
     raise ValueError("模型没有返回工具调用")
 
 
-async def _extract_via_json(llm: Any, messages: list) -> ExtractionPayload:
+async def _extract_via_json(
+    llm: Any, messages: list, *, config: RunnableConfig | None = None
+) -> ExtractionPayload:
     """回退路径：让模型直接吐 JSON，再宽松解析。"""
     schema_hint = json.dumps(
         ExtractionPayload.model_json_schema(), ensure_ascii=False, indent=2
     )
     instructed = [
         *messages,
-        HumanMessage(
-            content=(
-                "不要解释、不要 Markdown 代码块，只输出一个 JSON 对象，"
-                f"严格符合下面的 JSON Schema：\n{schema_hint}"
-            )
-        ),
+        HumanMessage(content=f"{JSON_FALLBACK_INSTRUCTION}\n{schema_hint}"),
     ]
-    response = await llm.ainvoke(instructed)
+    response = await llm.ainvoke(instructed, config=config)
     text = response.content if isinstance(response.content, str) else _blocks_to_text(response.content)
     return ExtractionPayload.model_validate(_loads_lenient(text))
 

@@ -45,6 +45,7 @@ from app.pipeline.extract import extract_policy
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
+from app.tracing import isolated_context, trace_config
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +511,17 @@ async def _extract_one(
     title = policy["title"]
     url = policy.get("source_url")
 
+    # 可观测性（app/tracing.py）：**一篇一条 trace**，按任务归到同一个 session。
+    # 刻意不做成「整个任务一条大 trace」——检索段（图 A）与提取段之间隔着人工确认、是两个
+    # 独立进程片段，硬套一条 trace 反而丢上下文；一篇一条既贴合「这次提取花了多少 token、
+    # 有没有走 JSON 回退」的实际排查问题，也让并发的多篇各自干净。未启用时这里是 `{}`。
+    extract_config = trace_config(
+        name=f"提取：{title[:40]}",
+        session_id=f"task-{task_id}",
+        tags=["pipeline", "extract"],
+        metadata={"task_id": task_id, "policy_id": policy_id},
+    )
+
     # 干净起点：清掉旧结果（重跑/重试时幂等）
     await repo.reset_extraction(policy_id)
     await repo.set_task_stage(
@@ -532,6 +544,7 @@ async def _extract_one(
             url=url,
             max_body_chars=_effective(overrides, "pipeline_max_body_chars"),
             model_id=(overrides or {}).get("pipeline_model"),
+            config=extract_config,
         )
         await repo.save_extraction(
             policy_id,
@@ -692,7 +705,9 @@ def get_pipeline_graph():
 
 def _track(task_id: int, coro, name: str) -> asyncio.Task:
     """登记一个后台任务，结束后自动从 `_running` 摘除（空桶一并删掉）。"""
-    task = asyncio.create_task(coro, name=name)
+    # 独立执行上下文：流水线图不要继承发起方（请求 / 调度循环）里残留的 OTel 活动 span，
+    # 否则 trace 没有真正的根（见 tracing.isolated_context）
+    task = asyncio.create_task(coro, name=name, context=isolated_context())
     _running.setdefault(task_id, set()).add(task)
 
     def _discard(finished: asyncio.Task) -> None:
@@ -864,7 +879,18 @@ async def run_pipeline(task_id: int) -> None:
         "pipeline_model": task_row.get("pipeline_model"),
     }
     try:
-        await get_pipeline_graph().ainvoke(state)
+        # 图 A（检索段）自身不调大模型，但 fetch 节点的 MCP 检索 / 判别会走工具——挂上
+        # callback 后这几步会作为子 span 出现在 trace 里，正好补上「检索为什么慢 / 打了
+        # 几次 MCP」的视野。未启用可观测性时 trace_config 返回 {}。
+        await get_pipeline_graph().ainvoke(
+            state,
+            config=trace_config(
+                name=f"任务 {task_id}·检索段",
+                session_id=f"task-{task_id}",
+                tags=["pipeline", "fetch"],
+                metadata={"task_id": task_id},
+            ),
+        )
     except asyncio.CancelledError:  # 服务关停
         logger.info("任务 %s 的流水线被取消", task_id)
         await repo.finish_task(task_id, "failed", "服务重启导致任务中断，请重试")
