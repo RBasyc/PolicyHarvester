@@ -657,3 +657,23 @@ export interface SourceTrialPayload {
   keywords?: string[]
   max_policies?: number
 }
+
+// ---------- 对话 Agent（Phase 19） ----------
+
+/**
+ * 对话流事件（对应 server/app/api/routes/agent.py::chat_stream）。
+ *
+ * 只有三种，**没有** task / import 流那种快照事件：对话流不发工具调用事件
+ * （用户决定，见 TODO Phase 19 的范围），服务端只推模型输出的文本片段，
+ * `done` 是正常收尾（客户端主动断开时服务端不发）。
+ */
+export type ChatStreamEvent =
+  | { type: 'token'; content: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
+/** 对话请求体（镜像 server/app/schemas/chat.py::ChatRequest）。 */
+export interface ChatRequest {
+  message: string
+  thread_id: string
+}

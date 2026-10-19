@@ -8923,6 +8923,1565 @@
       "width": 0,
       "height": 0,
       "content": "小屏（<1024px）时，详情抽屉改为全宽，三栏上下堆叠展示。"
+    },
+    {
+      "type": "frame",
+      "id": "Ry4ES",
+      "x": 4334,
+      "y": 0,
+      "name": "Agent 入口页（首页）",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "rACdA",
+          "name": "顶部栏",
+          "width": "fill_container",
+          "height": 60,
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "padding": [
+            0,
+            20
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "onAkt",
+              "name": "品牌区",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Gmo8R",
+                  "name": "Logo",
+                  "width": 36,
+                  "height": 36,
+                  "fill": "$primary",
+                  "cornerRadius": 9,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "r0ku0",
+                      "name": "图标",
+                      "width": 20,
+                      "height": 20,
+                      "icon": "wheat",
+                      "library": "lucide",
+                      "fill": "#FFFFFF"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "EQSiN",
+                  "name": "标题组",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "iVh4s",
+                      "name": "产品名",
+                      "fill": "$text-primary",
+                      "content": "PolicyHarvester",
+                      "fontFamily": "$font",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "tXPZs",
+                      "name": "副标题",
+                      "fill": "$text-tertiary",
+                      "content": "国务院政策抓取 · 大模型结构化提取 Demo",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "R9S6N",
+              "name": "导航",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "S3Xll",
+                  "name": "导航-政策助手",
+                  "fill": "$accent-soft",
+                  "cornerRadius": 8,
+                  "gap": 6,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "brZqJ",
+                      "name": "图标",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "sparkles",
+                      "library": "lucide",
+                      "fill": "$primary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "j45MRP",
+                      "name": "文字",
+                      "fill": "$primary",
+                      "content": "政策助手",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "I3DwDE",
+                  "name": "导航-采集任务",
+                  "cornerRadius": 8,
+                  "gap": 6,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "JhF2r",
+                      "name": "图标",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "radar",
+                      "library": "lucide",
+                      "fill": "$text-tertiary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "gCrBB",
+                      "name": "文字",
+                      "fill": "$text-secondary",
+                      "content": "采集任务",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "EChOx",
+                  "name": "导航-政策库",
+                  "cornerRadius": 8,
+                  "gap": 6,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "mm2bH",
+                      "name": "图标",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "database",
+                      "library": "lucide",
+                      "fill": "$text-tertiary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "J2guHi",
+                      "name": "文字",
+                      "fill": "$text-secondary",
+                      "content": "政策库",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ybUKF",
+                  "name": "导航-来源管理",
+                  "cornerRadius": 8,
+                  "gap": 6,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "s25qV",
+                      "name": "图标",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "server",
+                      "library": "lucide",
+                      "fill": "$text-tertiary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "t2PWM",
+                      "name": "文字",
+                      "fill": "$text-secondary",
+                      "content": "来源管理",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "O0cQMM",
+              "name": "右侧操作",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "rJZXm",
+                  "name": "工具链状态",
+                  "fill": "$green-bg",
+                  "cornerRadius": 999,
+                  "gap": 6,
+                  "padding": [
+                    5,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "p3idv",
+                      "name": "图标",
+                      "width": 12,
+                      "height": 12,
+                      "icon": "circle-check",
+                      "library": "lucide",
+                      "fill": "$green"
+                    },
+                    {
+                      "type": "text",
+                      "id": "jtfZS",
+                      "name": "文字",
+                      "fill": "$green",
+                      "content": "工具链已连接",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "JEIhH",
+                  "name": "用户头像",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "$primary",
+                  "cornerRadius": 999,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "FYL0L",
+                      "name": "图标",
+                      "width": 16,
+                      "height": 16,
+                      "icon": "user",
+                      "library": "lucide",
+                      "fill": "#FFFFFF"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "L3yP1i",
+          "name": "主区域",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 20,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "I8hVs",
+              "name": "历史会话栏",
+              "width": 264,
+              "height": "fill_container",
+              "fill": "$card",
+              "cornerRadius": 12,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 14,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "c1IMTn",
+                  "name": "新建对话按钮",
+                  "width": "fill_container",
+                  "fill": "$accent",
+                  "cornerRadius": 8,
+                  "gap": 8,
+                  "padding": [
+                    10,
+                    0
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "lpcbQ",
+                      "name": "图标",
+                      "width": 15,
+                      "height": 15,
+                      "icon": "plus",
+                      "library": "lucide",
+                      "fill": "#FFFFFF"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lT0hZ",
+                      "name": "文字",
+                      "fill": "#FFFFFF",
+                      "content": "新建对话",
+                      "fontFamily": "$font",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "iYS1O",
+                  "name": "会话列表",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "r4c15T",
+                      "name": "分组-今天",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": [
+                        6,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "zdRz2",
+                          "name": "分组头",
+                          "width": "fill_container",
+                          "padding": [
+                            2,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "BJCA9",
+                              "name": "分组名",
+                              "fill": "$text-tertiary",
+                              "content": "今天",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "z0HVD3",
+                          "name": "会话-人工智能政策梳理",
+                          "width": "fill_container",
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "t2qbd",
+                              "name": "图标",
+                              "width": 13,
+                              "height": 13,
+                              "icon": "message-square",
+                              "library": "lucide",
+                              "fill": "$primary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "mCjOt",
+                              "name": "标题",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "人工智能政策梳理",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "K36s1w",
+                          "name": "会话-医保发〔2026〕19号要点",
+                          "width": "fill_container",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "CxFVJ",
+                              "name": "图标",
+                              "width": 13,
+                              "height": 13,
+                              "icon": "message-square",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "r3tNv2",
+                              "name": "标题",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "医保发〔2026〕19号要点",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fhYMy",
+                          "name": "会话-2025 年发文量统计",
+                          "width": "fill_container",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "aBYs7",
+                              "name": "图标",
+                              "width": 13,
+                              "height": 13,
+                              "icon": "message-square",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "RWWoR",
+                              "name": "标题",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "2025 年发文量统计",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "V70PR",
+                      "name": "分组-更早",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": [
+                        6,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "YwaQy",
+                          "name": "分组头",
+                          "width": "fill_container",
+                          "padding": [
+                            2,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "d66pE",
+                              "name": "分组名",
+                              "fill": "$text-tertiary",
+                              "content": "更早",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "zefGh",
+                          "name": "会话-新能源补贴两轮政策对比",
+                          "width": "fill_container",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "hFi2t",
+                              "name": "图标",
+                              "width": 13,
+                              "height": 13,
+                              "icon": "message-square",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "m2VGXQ",
+                              "name": "标题",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "新能源补贴两轮政策对比",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "asZrZ",
+                          "name": "会话-国务院公报检索冒烟测试",
+                          "width": "fill_container",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "xzGWG",
+                              "name": "图标",
+                              "width": 13,
+                              "height": 13,
+                              "icon": "message-square",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "DhQHO",
+                              "name": "标题",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "国务院公报检索冒烟测试",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "NqUOC",
+                  "name": "用户信息",
+                  "width": "fill_container",
+                  "stroke": "$divider",
+                  "strokeWidth": {
+                    "top": 1
+                  },
+                  "padding": [
+                    12,
+                    4,
+                    2,
+                    4
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "h7y5XZ",
+                      "name": "用户",
+                      "gap": 10,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "m7ntb",
+                          "name": "头像",
+                          "width": 30,
+                          "height": 30,
+                          "fill": "$blue-bg",
+                          "cornerRadius": 999,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "S1mgy",
+                              "name": "图标",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "user",
+                              "library": "lucide",
+                              "fill": "$blue"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "BS1rs",
+                          "name": "名称组",
+                          "layout": "vertical",
+                          "gap": 1,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "OmGW0",
+                              "name": "用户名",
+                              "fill": "$text-primary",
+                              "content": "demo-user",
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "ZpdOX",
+                              "name": "说明",
+                              "fill": "$text-tertiary",
+                              "content": "内存会话 · 重启后清空",
+                              "fontFamily": "$font",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon",
+                      "id": "amCLK",
+                      "name": "设置",
+                      "width": 16,
+                      "height": 16,
+                      "icon": "settings",
+                      "library": "lucide",
+                      "fill": "$text-tertiary"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QNvlL",
+              "name": "对话入口区",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 24,
+              "padding": [
+                0,
+                40
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "PPyCU",
+                  "name": "欢迎区",
+                  "width": 720,
+                  "layout": "vertical",
+                  "gap": 14,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "k3agb5",
+                      "name": "能力徽章",
+                      "fill": "$accent-soft",
+                      "cornerRadius": 999,
+                      "gap": 6,
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "h6kl6",
+                          "name": "图标",
+                          "width": 13,
+                          "height": 13,
+                          "icon": "sparkles",
+                          "library": "lucide",
+                          "fill": "$primary"
+                        },
+                        {
+                          "type": "text",
+                          "id": "AyCMg",
+                          "name": "文字",
+                          "fill": "$primary",
+                          "content": "ReAct Agent · 国务院政策工具链已就绪",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "sMd3y",
+                      "name": "主标题",
+                      "fill": "$text-primary",
+                      "content": "你好，我是政策研究助手",
+                      "fontFamily": "$font",
+                      "fontSize": 34,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "qdow9",
+                      "name": "副标题",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": 620,
+                      "content": "接入国务院政策检索工具链，支持最新政策查询、全文要点提取与分面统计，回答流式输出。",
+                      "lineHeight": 1.7,
+                      "textAlign": "center",
+                      "fontFamily": "$font",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "dlhi1",
+                  "name": "输入卡片",
+                  "width": 720,
+                  "fill": "$card",
+                  "cornerRadius": 14,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "#1F232914",
+                    "offset": {
+                      "x": 0,
+                      "y": 8
+                    },
+                    "blur": 24
+                  },
+                  "layout": "vertical",
+                  "gap": 14,
+                  "padding": [
+                    16,
+                    18
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "XyG9y",
+                      "name": "占位提示",
+                      "fill": "$text-tertiary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "输入政策研究问题，例如：帮我梳理 2025 年以来人工智能相关的国务院政策，并总结各自的核心条款…",
+                      "lineHeight": 1.6,
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "SdsPN",
+                      "name": "工具行",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "KxADQ",
+                          "name": "工具标签组",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "RYhF9",
+                              "name": "工具-政策检索",
+                              "fill": "$bg",
+                              "cornerRadius": 999,
+                              "gap": 6,
+                              "padding": [
+                                6,
+                                11
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "aLoqq",
+                                  "name": "图标",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "search",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "q9eD2",
+                                  "name": "文字",
+                                  "fill": "$text-secondary",
+                                  "content": "政策检索",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "NHMQW",
+                              "name": "工具-全文阅读",
+                              "fill": "$bg",
+                              "cornerRadius": 999,
+                              "gap": 6,
+                              "padding": [
+                                6,
+                                11
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "zlSF3",
+                                  "name": "图标",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "file-text",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "SFVj4",
+                                  "name": "文字",
+                                  "fill": "$text-secondary",
+                                  "content": "全文阅读",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "rQLcl",
+                              "name": "工具-分面统计",
+                              "fill": "$bg",
+                              "cornerRadius": 999,
+                              "gap": 6,
+                              "padding": [
+                                6,
+                                11
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "jJUnA",
+                                  "name": "图标",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "chart-column",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "W2bDj",
+                                  "name": "文字",
+                                  "fill": "$text-secondary",
+                                  "content": "分面统计",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "ikhA4",
+                              "name": "工具-流式输出",
+                              "fill": "$bg",
+                              "cornerRadius": 999,
+                              "gap": 6,
+                              "padding": [
+                                6,
+                                11
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "ofZCp",
+                                  "name": "图标",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "zap",
+                                  "library": "lucide",
+                                  "fill": "$text-tertiary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "yHfNu",
+                                  "name": "文字",
+                                  "fill": "$text-secondary",
+                                  "content": "流式输出",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "TI7BR",
+                          "name": "发送按钮",
+                          "width": 36,
+                          "height": 36,
+                          "fill": "$accent",
+                          "cornerRadius": 999,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "OFP2w",
+                              "name": "图标",
+                              "width": 16,
+                              "height": 16,
+                              "icon": "arrow-up",
+                              "library": "lucide",
+                              "fill": "#FFFFFF"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "hhoEs",
+                  "name": "建议问题",
+                  "width": 720,
+                  "layout": "vertical",
+                  "gap": 10,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "o1JSsi",
+                      "name": "行1",
+                      "width": "fill_container",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "tHf8B",
+                          "name": "建议-查询最新发布",
+                          "width": "fill_container",
+                          "fill": "$card",
+                          "cornerRadius": 10,
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 14,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "fjuPu",
+                              "name": "图标底",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "$accent-soft",
+                              "cornerRadius": 8,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "Ygs3Y",
+                                  "name": "图标",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "newspaper",
+                                  "library": "lucide",
+                                  "fill": "$primary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "L7nNr",
+                              "name": "文字",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "查询最新发布的国务院政策文件，按发文日期排序列出",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "S383t",
+                          "name": "建议-打开一份政策",
+                          "width": "fill_container",
+                          "fill": "$card",
+                          "cornerRadius": 10,
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 14,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "EJQTI",
+                              "name": "图标底",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "$accent-soft",
+                              "cornerRadius": 8,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "T4VOEX",
+                                  "name": "图标",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "file-text",
+                                  "library": "lucide",
+                                  "fill": "$primary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "a26nZ",
+                              "name": "文字",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "打开一份政策全文，提取发文机关、文号与核心条款",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fTv58",
+                      "name": "行2",
+                      "width": "fill_container",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "PbRGy",
+                          "name": "建议-按部门与年份",
+                          "width": "fill_container",
+                          "fill": "$card",
+                          "cornerRadius": 10,
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 14,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "CLZpz",
+                              "name": "图标底",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "$accent-soft",
+                              "cornerRadius": 8,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "ITbXc",
+                                  "name": "图标",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "chart-column",
+                                  "library": "lucide",
+                                  "fill": "$primary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "LZwSf",
+                              "name": "文字",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "按部门与年份统计发文数量，生成政策分面概览",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "yFDGb",
+                          "name": "建议-对比两段时期",
+                          "width": "fill_container",
+                          "fill": "$card",
+                          "cornerRadius": 10,
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 14,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "tsTXb",
+                              "name": "图标底",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "$accent-soft",
+                              "cornerRadius": 8,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "EwpfU",
+                                  "name": "图标",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "scale",
+                                  "library": "lucide",
+                                  "fill": "$primary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "JDzZD",
+                              "name": "文字",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "对比两段时期人工智能相关政策表述的变化",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Gr8d3",
+                  "name": "快捷入口",
+                  "width": 720,
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "MxqER",
+                      "name": "入口-发起采集任务",
+                      "width": "fill_container",
+                      "fill": "$card",
+                      "cornerRadius": 12,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "TuuFf",
+                          "name": "头部",
+                          "width": "fill_container",
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Sz2aa",
+                              "name": "图标底",
+                              "width": 34,
+                              "height": 34,
+                              "fill": "$blue-bg",
+                              "cornerRadius": 9,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "sqb9z",
+                                  "name": "图标",
+                                  "width": 17,
+                                  "height": 17,
+                                  "icon": "radar",
+                                  "library": "lucide",
+                                  "fill": "$blue"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "icon",
+                              "id": "lrujv",
+                              "name": "箭头",
+                              "width": 15,
+                              "height": 15,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "eoPq7",
+                          "name": "标题",
+                          "fill": "$text-primary",
+                          "content": "发起采集任务",
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "cpvyj",
+                          "name": "描述",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "按关键词与时间范围批量抓取，结构化入库",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Pytdj",
+                          "name": "路由",
+                          "fill": "$text-tertiary",
+                          "content": "/crawl",
+                          "fontFamily": "$font-mono",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "z5RPR",
+                      "name": "入口-浏览政策库",
+                      "width": "fill_container",
+                      "fill": "$card",
+                      "cornerRadius": 12,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "rCHev",
+                          "name": "头部",
+                          "width": "fill_container",
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "UuGoG",
+                              "name": "图标底",
+                              "width": 34,
+                              "height": 34,
+                              "fill": "$green-bg",
+                              "cornerRadius": 9,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "fG0U4",
+                                  "name": "图标",
+                                  "width": 17,
+                                  "height": 17,
+                                  "icon": "database",
+                                  "library": "lucide",
+                                  "fill": "$green"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "icon",
+                              "id": "Kk4mb",
+                              "name": "箭头",
+                              "width": 15,
+                              "height": 15,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "TDR4X",
+                          "name": "标题",
+                          "fill": "$text-primary",
+                          "content": "浏览政策库",
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "FuwEt",
+                          "name": "描述",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "查看已入库政策原文与结构化提取结果",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "u1VHLQ",
+                          "name": "路由",
+                          "fill": "$text-tertiary",
+                          "content": "/library",
+                          "fontFamily": "$font-mono",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "xXC26",
+                      "name": "入口-管理政策来源",
+                      "width": "fill_container",
+                      "fill": "$card",
+                      "cornerRadius": 12,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "PrM8N",
+                          "name": "头部",
+                          "width": "fill_container",
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "La9sQ",
+                              "name": "图标底",
+                              "width": 34,
+                              "height": 34,
+                              "fill": "$purple-bg",
+                              "cornerRadius": 9,
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "UfUcR",
+                                  "name": "图标",
+                                  "width": 17,
+                                  "height": 17,
+                                  "icon": "server",
+                                  "library": "lucide",
+                                  "fill": "$purple"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "icon",
+                              "id": "bzmv0",
+                              "name": "箭头",
+                              "width": 15,
+                              "height": 15,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$text-tertiary"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "ii9AZ",
+                          "name": "标题",
+                          "fill": "$text-primary",
+                          "content": "管理政策来源",
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "SdroQ",
+                          "name": "描述",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "维护检索来源、调度周期与运行配置",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Ct6J9",
+                          "name": "路由",
+                          "fill": "$text-tertiary",
+                          "content": "/sources",
+                          "fontFamily": "$font-mono",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {

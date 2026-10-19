@@ -1,84 +1,29 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
-import {
-  canCancel,
-  cancelTask,
-  clearAll,
-  clearing,
-  enabledScheduleCount,
-  form,
-  ingestMode,
-  libraryMeta,
-  openScheduleModal,
-  startTask,
-  starting,
-  stopping,
-  task,
-} from '../store'
-import type { TaskStatus } from '../api/types'
 
 const route = useRoute()
 const router = useRouter()
 
-const isCrawl = computed(() => route.name === 'crawl')
+/** 政策详情页也归属「政策库」这一项 */
 const isLibraryFamily = computed(
   () => route.name === 'library' || route.name === 'library-detail',
 )
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: '排队中',
-  running: '运行中',
-  awaiting_confirmation: '待确认',
-  completed: '已完成',
-  failed: '失败',
-}
-
-const STATUS_TONE: Record<TaskStatus, string> = {
-  pending: 'wait',
-  running: 'run',
-  awaiting_confirmation: 'wait',
-  completed: 'ok',
-  failed: 'fail',
-}
-
-const label = computed(() => (task.value ? STATUS_LABEL[task.value.status] : '尚未抓取'))
-const tone = computed(() => (task.value ? STATUS_TONE[task.value.status] : 'wait'))
-const spinning = computed(() => task.value?.status === 'running')
-/** 停在「待确认」时后台并没有东西在跑，此时的「终止」语义上其实是「放弃本次抓取」。 */
-const cancelLabel = computed(() =>
-  task.value?.status === 'awaiting_confirmation' ? '放弃' : '终止',
-)
-const cancelTitle = computed(() =>
-  task.value?.status === 'awaiting_confirmation'
-    ? '放弃本次抓取（丢弃已检索到的候选篇目）'
-    : '终止正在运行的抓取任务',
-)
-const keywordHint = computed(() =>
-  form.keywords.length ? `关键词 ${form.keywords.length} 个` : '未设置关键词',
-)
-
 /**
- * 关键词是可选范围而非前置条件：留空时后端会按筛选条件（发布机构/文种/时间）浏览发文，
- * 所以这里不再拦截——用户「不输关键词、只看某机构近期发文」是合法用法。
+ * 顶部导航——对齐 design.pen「Agent 入口页（首页）」的顶部栏，**全站同一套**：
+ * 比旧版多一个「政策助手」，且「抓取任务 / 成果库」按设计稿改名为「采集任务 / 政策库」。
+ * 四页共用一条导航，「政策助手」切走再切回来不会再消失。
  */
-function onStart() {
-  if (ingestMode.value === 'schedule') {
-    // 定时模式：不直接提交，打开弹窗配置调度参数（抓取配置取当前表单快照）
-    openScheduleModal('create')
-    return
-  }
-  void startTask()
-}
+const navItems = [
+  { label: '政策助手', icon: 'sparkles', name: 'agent' },
+  { label: '采集任务', icon: 'radar', name: 'crawl' },
+  { label: '政策库', icon: 'database', name: 'library' },
+  { label: '来源管理', icon: 'server', name: 'sources' },
+] as const
 
-/** 「清空」是破坏性操作：先点一下变成确认态，再点「确认」才真的删。 */
-const confirmingClear = ref(false)
-
-async function onConfirmClear() {
-  confirmingClear.value = false
-  await clearAll()
-}
+const activeNav = computed(() => (isLibraryFamily.value ? 'library' : route.name))
 </script>
 
 <template>
@@ -92,189 +37,108 @@ async function onConfirmClear() {
         <p class="subtitle">国务院政策抓取 · 大模型结构化提取 Demo</p>
       </div>
     </div>
-    <div class="page-tabs" role="tablist" aria-label="页面切换">
+
+    <nav class="page-tabs" role="tablist" aria-label="页面切换">
       <button
+        v-for="item in navItems"
+        :key="item.name"
         class="tab"
-        :class="{ active: isCrawl }"
+        :class="{ active: activeNav === item.name }"
         type="button"
         role="tab"
-        :aria-selected="isCrawl"
-        @click="router.push({ name: 'crawl' })"
+        :aria-selected="activeNav === item.name"
+        @click="router.push({ name: item.name })"
       >
-        <AppIcon name="radar" :size="13" />
-        <span>抓取任务</span>
+        <AppIcon :name="item.icon" :size="14" />
+        <span>{{ item.label }}</span>
       </button>
-      <button
-        class="tab"
-        :class="{ active: isLibraryFamily }"
-        type="button"
-        role="tab"
-        :aria-selected="isLibraryFamily"
-        @click="router.push({ name: 'library' })"
-      >
-        <AppIcon name="database" :size="13" />
-        <span>成果库</span>
-      </button>
-      <button
-        class="tab"
-        :class="{ active: route.name === 'sources' }"
-        type="button"
-        role="tab"
-        :aria-selected="route.name === 'sources'"
-        title="接入新网站 / 管理已有抓取来源 / 复核接入记录"
-        @click="router.push({ name: 'sources' })"
-      >
-        <AppIcon name="globe" :size="13" />
-        <span>来源管理</span>
-      </button>
-    </div>
-    <div class="actions">
-      <!-- 抓取任务页：状态 + 定时任务入口 / 终止 / 开始抓取（清空按钮在成果库页） -->
-      <template v-if="isCrawl">
-        <div class="status-tag" :class="tone">
-          <AppIcon name="loader-circle" :size="12" :class="{ spin: spinning }" />
-          <span>{{ label }}</span>
-        </div>
-        <span class="hint">{{ keywordHint }}</span>
+    </nav>
 
-        <button
-          class="ghost-btn schedule-entry"
-          type="button"
-          title="查看与管理定时入库任务"
-          @click="openScheduleModal('list')"
-        >
-          <AppIcon name="timer" :size="13" />
-          <span>定时任务</span>
-          <span v-if="enabledScheduleCount" class="schedule-badge">{{ enabledScheduleCount }}</span>
-        </button>
-
-        <button
-          v-if="canCancel"
-          class="ghost-btn"
-          type="button"
-          :disabled="stopping"
-          :title="cancelTitle"
-          @click="cancelTask()"
-        >
-          <AppIcon name="square" :size="13" />
-          <span>{{ stopping ? '处理中…' : cancelLabel }}</span>
-        </button>
-
-        <button
-          class="start-btn"
-          type="button"
-          :disabled="starting"
-          :title="ingestMode === 'schedule' ? '用当前配置创建定时任务' : `抓取源：${form.source}`"
-          @click="onStart"
-        >
-          <AppIcon :name="ingestMode === 'schedule' ? 'timer' : 'play'" :size="14" />
-          <span>{{ ingestMode === 'schedule' ? '定时入库' : starting ? '提交中…' : '开始抓取' }}</span>
-        </button>
-      </template>
-
-      <!-- 成果库 / 详情页：入库计数 + 清空（来源管理页不需要动作区） -->
-      <template v-else-if="isLibraryFamily">
-        <div class="status-tag">
-          <AppIcon name="database" :size="12" />
-          <span>已入库 {{ libraryMeta?.total ?? 0 }} 篇</span>
-        </div>
-
-        <!--
-          「清空」是**全库重置**（DELETE /api/tasks），不绑定任何单个任务：早先的
-          `!task` 守卫会让按钮在浏览器端 task 过期时永久置灰——成果库是跨任务沉淀的，
-          而 task 只是最近一次抓取任务（清库后为 null、试运行/定时/另一个页面起的任务
-          也不会同步过来），于是库里还有数据、按钮却点不动。空库点击是安全的：
-          后端返回 deleted=0，前端提示「暂无可清空的数据」。
-        -->
-        <button
-          v-if="!confirmingClear"
-          class="ghost-btn danger"
-          type="button"
-          :disabled="clearing"
-          title="删除全部抓取任务与结果"
-          @click="confirmingClear = true"
-        >
-          <AppIcon name="trash-2" :size="13" />
-          <span>清空</span>
-        </button>
-        <div v-else class="confirm-group" role="alertdialog" aria-label="确认清空">
-          <span class="confirm-text">清空全部数据？</span>
-          <button
-            class="ghost-btn danger"
-            type="button"
-            :disabled="clearing"
-            @click="onConfirmClear()"
-          >
-            {{ clearing ? '清空中…' : '确认' }}
-          </button>
-          <button class="ghost-btn" type="button" @click="confirmingClear = false">取消</button>
-        </div>
-      </template>
-    </div>
+    <!--
+      右侧占位：与左侧品牌等分剩余空间，四个 tab 才会恒定落在顶栏正中——
+      早先这里挂的是页面级动作区，各页长度不一，切页时 tab 会左右跳动。
+      那些动作已下放到各页自己的页头（CrawlPage / LibraryPage）。
+    -->
+    <div class="spacer" aria-hidden="true"></div>
   </header>
 </template>
 
 <style scoped>
+/* 高度与内边距取设计稿的 60 / 0 20；不再用旧版的灰底胶囊容器 */
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 24px;
-  padding: 16px 32px;
+  height: 60px;
+  flex-shrink: 0;
+  padding: 0 20px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
 }
 
-/* 页面切换胶囊：抓取任务 / 成果库 */
+/* 品牌与右侧占位都是 flex:1 / basis 0：两侧分到等宽空白，导航自然居中 */
+.brand {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* 页面切换：政策助手 / 采集任务 / 政策库 / 来源管理 */
 .page-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-right: auto;
-  padding: 3px;
-  background: #eff0f3;
-  border-radius: 9px;
+  justify-content: center;
+  gap: 6px;
+  /* 顶栏过窄时由导航自己横向滚动兜底（≤1100px 会整行换行，见下） */
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 8px 14px;
   background: none;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--text-secondary);
   line-height: normal;
   white-space: nowrap;
 }
 
-.tab:hover {
-  color: var(--text-primary);
+.tab svg {
+  color: var(--text-tertiary);
 }
 
+.tab:hover {
+  background: var(--bg);
+}
+
+/* 选中态：品牌色浅底 + 图标/文字转品牌色（与设计稿一致） */
 .tab.active {
-  background: var(--card);
-  font-weight: 600;
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px #00000014;
+  background: var(--accent-soft);
+  font-weight: 500;
+  color: var(--primary);
 }
 
 .tab.active svg {
-  color: var(--accent);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  color: var(--primary);
 }
 
 .logo {
   width: 36px;
   height: 36px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -302,146 +166,25 @@ async function onConfirmClear() {
   line-height: normal;
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.status-tag {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-tag.wait {
-  background: #f1f2f4;
-  color: var(--text-secondary);
-}
-
-.status-tag.run {
-  background: var(--blue-bg);
-  color: var(--blue);
-}
-
-.status-tag.ok {
-  background: var(--green-bg);
-  color: var(--green);
-}
-
-.status-tag.fail {
-  background: var(--red-bg);
-  color: var(--accent);
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+/* 窄屏：定高改自适应并让导航独占一行（四页共用一条导航，不能藏）。
+   右侧占位留在品牌那一行，高度为 0，不影响换行后的布局。 */
+@media (max-width: 1100px) {
+  .topbar {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 16px;
   }
-}
 
-.hint {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
-/* 次要操作（终止 / 清空）：描边按钮，与主按钮拉开层级 */
-.ghost-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  line-height: normal;
-  white-space: nowrap;
-}
-
-.ghost-btn:hover:not(:disabled) {
-  border-color: var(--text-tertiary);
-  color: var(--text-primary);
-}
-
-.ghost-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.ghost-btn.danger {
-  color: var(--accent);
-}
-
-.ghost-btn.danger:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.confirm-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 定时任务入口徽标：启用中的任务数 */
-.schedule-badge {
-  min-width: 16px;
-  padding: 1px 5px;
-  background: var(--accent);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #ffffff;
-  text-align: center;
-  line-height: normal;
-}
-
-.confirm-text {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-
-.start-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 16px;
-  background: var(--accent);
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #ffffff;
-  line-height: normal;
-}
-
-.start-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
+  .page-tabs {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+  }
 }
 
 @media (max-width: 640px) {
-  .topbar {
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 14px 16px;
-  }
-
-  .subtitle,
-  .hint {
+  .subtitle {
     display: none;
   }
 }
