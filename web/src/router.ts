@@ -4,6 +4,7 @@ import {
   createWebHistory,
   type RouteRecordRaw,
 } from 'vue-router'
+import AgentPage from './views/AgentPage.vue'
 import CrawlPage from './views/CrawlPage.vue'
 import SourcesPage from './views/SourcesPage.vue'
 import LibraryPage from './components/LibraryPage.vue'
@@ -20,7 +21,9 @@ import LibraryDetailPage from './components/LibraryDetailPage.vue'
  * 被详情页当成坏 id（与后端 `/meta` 先于 `/{id}` 注册的坑同款思路）。
  */
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/crawl' },
+  // Agent 入口页是设计里的「首页」，所以根路径落在它上面；想回到旧入口就把下面这行改回 '/crawl'
+  { path: '/', redirect: '/agent' },
+  { path: '/agent', name: 'agent', component: AgentPage },
   { path: '/crawl', name: 'crawl', component: CrawlPage },
   { path: '/library', name: 'library', component: LibraryPage },
   {
@@ -30,7 +33,7 @@ const routes: RouteRecordRaw[] = [
     props: (route) => ({ policyId: Number(route.params.id) }),
   },
   { path: '/sources', name: 'sources', component: SourcesPage },
-  { path: '/:pathMatch(.*)*', redirect: '/crawl' },
+  { path: '/:pathMatch(.*)*', redirect: '/agent' },
 ]
 
 export const router = createRouter({

@@ -63,8 +63,12 @@ export const confirming = ref(false)
 /** 结果表格刷新中（不阻塞整页） */
 export const refreshing = ref(false)
 
+/** 提示类型：决定图标与配色（成功=绿勾 / 失败=红叉 / 信息=蓝i） */
+export type ToastKind = 'success' | 'error' | 'info'
+
 export const toast = ref<{
   message: string
+  kind: ToastKind
   /** 提示附带的动作按钮（不传则该条 Toast 只有文本） */
   retry?: () => void
   /** 动作按钮的文案；默认「重试」（多数场景就是重试失败的那一步） */
@@ -208,15 +212,33 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null
  */
 let manualStop = false
 
-function showToast(message: string, retry?: () => void, actionLabel = '重试'): void {
-  toast.value = { message, retry, actionLabel }
+function showToast(
+  message: string,
+  kind: ToastKind = 'error',
+  retry?: () => void,
+  actionLabel = '重试',
+): void {
+  toast.value = { message, kind, retry, actionLabel }
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = null), 8000)
 }
 
-/** 组件里的一般性提示（表单导入成功/失败等）；给 `action` 时附一个动作按钮。 */
-export function notify(message: string, action?: () => void, actionLabel?: string): void {
-  showToast(message, action, actionLabel)
+/**
+ * 组件里的一般性提示；`kind` 决定图标与配色，不传默认 error（红叉）——
+ * 不带 kind 的调用点绝大多数是「某某失败」，成功/中性提示请用 notifySuccess / 显式 kind。
+ */
+export function notify(
+  message: string,
+  action?: () => void,
+  actionLabel?: string,
+  kind: ToastKind = 'error',
+): void {
+  showToast(message, kind, action, actionLabel)
+}
+
+/** 成功 / 完成类提示（绿勾），如「已删除」「已提交」。 */
+export function notifySuccess(message: string, action?: () => void, actionLabel?: string): void {
+  showToast(message, 'success', action, actionLabel)
 }
 
 export function dismissToast(): void {
@@ -313,9 +335,10 @@ async function pollCurrentTask(): Promise<void> {
             `有新的抓取任务 #${current.id}「${current.source}」已开始`,
             () => void syncTask(),
             '查看',
+            'info',
           )
         } else {
-          notify('当前任务已被删除', () => void syncTask(), '刷新')
+          notify('当前任务已被删除', () => void syncTask(), '刷新', 'info')
         }
       }
       return
@@ -497,10 +520,10 @@ export function subscribe(taskId: number): void {
       // 手动终止 / 清空自己会给提示，这里不再弹「抓取失败」
       if (manualStop) return
       if (final.status === 'failed') {
-        showToast(`抓取失败：${final.stage ?? '未知原因'}`, () => void startTask())
+        showToast(`抓取失败：${final.stage ?? '未知原因'}`, 'error', () => void startTask())
       }
     },
-    onError: (message) => showToast(message, () => void startTask()),
+    onError: (message) => showToast(message, 'error', () => void startTask()),
   })
 }
 
@@ -528,7 +551,7 @@ export async function startTask(): Promise<void> {
     summary.value = { ...EMPTY_SUMMARY }
     subscribe(task_id)
   } catch (error) {
-    showToast(`抓取失败：${errorText(error)}`, () => void startTask())
+    showToast(`抓取失败：${errorText(error)}`, 'error', () => void startTask())
   } finally {
     starting.value = false
   }
@@ -539,7 +562,7 @@ export async function confirmSelection(policyIds: number[]): Promise<void> {
   const current = task.value
   if (!current || confirming.value) return
   if (!policyIds.length) {
-    showToast('请至少勾选一篇要抓取的政策')
+    showToast('请至少勾选一篇要抓取的政策', 'info')
     return
   }
   confirming.value = true
@@ -565,7 +588,7 @@ export async function cancelTask(): Promise<void> {
     task.value = await api.cancelTask(current.id)
     stopSubscription()
     await Promise.all([refreshPolicies(current.id), refreshLogs()])
-    showToast('已终止本次抓取')
+    showToast('已终止本次抓取', 'success')
   } catch (error) {
     // 失败时保持订阅不变（如 409「任务已结束」），由 SSE 继续同步真实状态
     showToast(`终止失败：${errorText(error)}`)
@@ -588,7 +611,7 @@ export async function clearAll(): Promise<void> {
     logs.value = []
     policies.value = []
     summary.value = { ...EMPTY_SUMMARY }
-    showToast(deleted ? `已清空 ${deleted} 个抓取任务` : '暂无可清空的数据')
+    showToast(deleted ? `已清空 ${deleted} 个抓取任务` : '暂无可清空的数据', 'success')
     // 按钮在成果库/详情页顶栏：库里的条目随任务级联删除，列表与计数要跟着刷新
     void loadLibraryMeta()
     // 页面切换已由路由负责：详情页随任务级联删除时回列表；列表页原地重拉
@@ -676,7 +699,7 @@ export function buildSchedulePayload(): Omit<ScheduleCreatePayload, 'schedule_ki
 export async function createSchedule(payload: ScheduleCreatePayload): Promise<boolean> {
   try {
     const job = await api.createSchedule(payload)
-    showToast(`已创建定时任务「${job.name}」，下次触发：${formatRunAt(job.next_run_at)}`)
+    showToast(`已创建定时任务「${job.name}」，下次触发：${formatRunAt(job.next_run_at)}`, 'success')
     await loadSchedules()
     return true
   } catch (error) {
@@ -689,7 +712,7 @@ export async function toggleScheduleJob(job: ScheduleJobDTO): Promise<void> {
   try {
     const { job: next } = await api.toggleSchedule(job.id)
     schedules.value = schedules.value.map((item) => (item.id === next.id ? next : item))
-    showToast(next.enabled ? `「${next.name}」已启用` : `「${next.name}」已停用`)
+    showToast(next.enabled ? `「${next.name}」已启用` : `「${next.name}」已停用`, 'success')
   } catch (error) {
     showToast(`切换失败：${errorText(error)}`)
   }
@@ -699,7 +722,7 @@ export async function deleteScheduleJob(job: ScheduleJobDTO): Promise<void> {
   try {
     await api.deleteSchedule(job.id)
     schedules.value = schedules.value.filter((item) => item.id !== job.id)
-    showToast(`已删除定时任务「${job.name}」`)
+    showToast(`已删除定时任务「${job.name}」`, 'success')
   } catch (error) {
     showToast(`删除失败：${errorText(error)}`)
   }
@@ -709,7 +732,7 @@ export async function deleteScheduleJob(job: ScheduleJobDTO): Promise<void> {
 export async function runScheduleNow(job: ScheduleJobDTO): Promise<void> {
   try {
     await api.runSchedule(job.id)
-    showToast(`「${job.name}」已触发，进度见抓取进度面板`)
+    showToast(`「${job.name}」已触发，进度见抓取进度面板`, 'success')
     void bootstrap()
   } catch (error) {
     showToast(`触发失败：${errorText(error)}`)
@@ -853,7 +876,7 @@ export async function reextractLibraryPolicy(policyId: number): Promise<void> {
   libraryReextracting.value = true
   try {
     await api.reextractPolicy(policyId)
-    notify('已提交重新提取，正在后台重新解析该篇')
+    notifySuccess('已提交重新提取，正在后台重新解析该篇')
     if (libraryDetail.value) {
       libraryDetail.value = {
         ...libraryDetail.value,

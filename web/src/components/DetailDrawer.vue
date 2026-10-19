@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 import ExtractionColumns from './ExtractionColumns.vue'
-import { loadExtraction, notify, reextractPolicy } from '../store'
+import { loadExtraction, notify, notifySuccess, reextractPolicy } from '../store'
 import type { ExtractStatus, PolicyExtractionResponse } from '../api/types'
 
 const props = defineProps<{ open: boolean; policyId: number | null }>()
@@ -29,6 +29,33 @@ const detail = ref<PolicyExtractionResponse | null>(null)
 const loading = ref(false)
 const failed = ref(false)
 const reextracting = ref(false)
+
+/**
+ * 站点自定义元信息的中文名。键由字段规则定义（`detail.fields`），来自模型对页面
+ * 结构的解读，因此用一张**展示别名表**兜底：认得的键显示中文，不认得的原样显示
+ * 键名（不做翻译猜测——猜错比显示原文更糟）。
+ */
+const META_LABELS: Record<string, string> = {
+  index_no: '索引号',
+  signed_date: '成文日期',
+  issue_date: '成文日期',
+  theme: '主题分类',
+  subject: '主题分类',
+  doc_type: '公文种类',
+  source: '来源',
+  keywords: '关键词',
+  effective_date: '施行日期',
+  validity: '有效性',
+  author: '作者',
+  issuing_agency: '发文机关',
+}
+
+const metaEntries = computed(() => {
+  const metadata = detail.value?.policy?.metadata ?? {}
+  return Object.entries(metadata)
+    .filter(([, value]) => String(value ?? '').trim())
+    .map(([key, value]) => ({ key, label: META_LABELS[key] ?? key, value }))
+})
 
 const STATUS_LABEL: Record<ExtractStatus, string> = {
   pending: '未提取',
@@ -93,7 +120,7 @@ async function onReextract() {
   reextracting.value = true
   try {
     await reextractPolicy(props.policyId)
-    notify('已提交重新提取，正在后台重新解析该篇')
+    notifySuccess('已提交重新提取，正在后台重新解析该篇')
     await fetchDetail(props.policyId)
   } catch (error) {
     notify(`重新提取失败：${error instanceof Error ? error.message : String(error)}`)
@@ -140,8 +167,18 @@ function formatDateTime(value: string | null): string {
           <h2 class="drawer-title">{{ meta?.title ?? '加载中…' }}</h2>
           <div class="meta-row">
             <span v-if="meta?.agency">发文机关：{{ meta.agency }}</span>
-            <span v-if="meta?.publish_date">发布日期：{{ meta.publish_date }}</span>
+            <span v-if="meta">
+              发布日期：{{ meta.publish_date ?? '无日期' }}
+              <span
+                v-if="meta.publish_date_source === 'model'"
+                class="model-date-tag"
+                title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
+              >模型提取</span>
+            </span>
             <span v-if="meta?.doc_no">文号：{{ meta.doc_no }}</span>
+            <span v-for="entry in metaEntries" :key="entry.key">
+              {{ entry.label }}：{{ entry.value }}
+            </span>
           </div>
           <div class="action-row">
             <a
@@ -415,6 +452,18 @@ function formatDateTime(value: string | null): string {
   flex-wrap: wrap;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.model-date-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: nowrap;
 }
 
 .action-row {

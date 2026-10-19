@@ -30,11 +30,17 @@
 | 9 | 检索结果人工确认环节 | 🟨 进行中（代码完成，待实机验收） | — |
 | 10 | 成果库两页改版（成果库 + 政策详情页） | 🟨 进行中（代码完成，待实机验收） | — |
 | 11 | 定时自动入库（调度器 + 弹窗管理） | 🟨 进行中（代码完成，待实机验收） | — |
-| 12 | 提取模型可选（高级设置下拉 + DeepSeek 接入） | 🟨 进行中（代码完成，待实机验收） | — |
+| 12 | 提取模型可选（高级设置下拉 + DeepSeek 接入） | 🟨 进行中（代码完成，待实机验收；2026-10-16 配置统一为「单个 `ANTHROPIC_API_KEY` + 全部 DeepSeek」，见下方变更块） | — |
 | 13 | 检索全库去重/续抓 + 入库判别（judge）+ 定时防重入 | 🟨 进行中（代码完成，待实机验收） | — |
 | 14 | 网站来源接入（配置化来源 + 接入 Skill 与工具） | 🟨 进行中（离线 + 落库用例已跑通；2026-10-15 修掉 `decode_html` 三处整页乱码缺陷、改进正文解析三项、新增检索型入口与能力声明、试运行的日期命中率判据补「值恒定 = 假命中」提示，见下方变更，待实机验收） | — |
 | 15 | 页面内「导入网址」入口 + 来源下拉（确定性版） | 🟨 进行中（后端完成；2026-10-15 修复两个系统性缺陷后已在真实站点跑通验收，同日增量：自动探测站内检索 + 筛选能力声明 + 日期候选跨页核对 + 启用闸门凭据改按指纹全表查（「已停用 → 再启用」不再被误拒），见下方变更块；前端待 `pnpm build`） | — |
 | 16 | vue-router 全站迁移 + 来源管理独立页面（含批量导入） | 🟨 进行中（代码完成，待实机验收；离线字段核对已过，前端待 `pnpm build`） | — |
+| 17 | 命名区域（同页多列表 → 多入口，纯确定性） | 🟨 进行中（离线用例全过；待实机验收） | — |
+| 18 | Agent 入口页（首页）静态还原 + 顶栏全站合并 | 🟨 进行中（静态还原完成；对话接线已由 Phase 19 接手；前端待 `pnpm build`） | — |
+| 19 | 对话 Agent 接入（LangGraph SSE 流式 + 前端接线 + 提示词集中） | 🟨 进行中（代码完成，未构建未运行；见下） | — |
+| 20 | 对话里直接入库（`ingest_policies` 工具 + 服务层抽取） | 🟨 进行中（代码完成，未构建未运行；见下） | — |
+| 21 | 可观测性：对话与流水线接入 Langfuse / Litefuse（自托管） | 🟨 进行中（根 span 泄漏修复完成，待重启验收） | — |
+| 22 | 字段提取通用化（FieldRule DSL + 结构分析自动生成 + metadata 落库） | 🟨 进行中（代码与离线用例完成，**未构建未运行**；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -471,6 +477,18 @@ cd ../database && bash init.sh    # 幂等补 pipeline_model 列（不重置数�
 5. 定时任务弹窗创建时快照当前表单的模型选择，触发轮次用它提取
 6. `GET /api/config/pipeline` 返回 `models` + `default_model`；故意把 `pipeline_model` 提交成不存在的 id → 422 `未知提取模型：…`
 
+**2026-10-16 变更（用户指示：统一用 api_key，默认全部 DeepSeek）**：
+
+背景是排查对话「看起来不是流式」（见 Phase 19 同日记录）——`kimi-for-coding` 网关默认开 thinking、且是 Bearer-only 网关，两者都可能是「等很久然后一次性出字」的来源。用户决定把两套配置收敛成一套。
+
+- **`.env` 模型段重写**（第 1–30 行）：认证只留 **一个 `ANTHROPIC_API_KEY`**（值 = 原 `DEEPSEEK_API_KEY`，以 x-api-key 发出），删掉 `DEEPSEEK_API_KEY` 这个变量；`ANTHROPIC_BASE_URL` → `https://api.deepseek.com/anthropic`；`MODEL_NAME` → `deepseek-flash`；`ANTHROPIC_AUTH_TOKEN` / Kimi 的 base_url 与模型名**整段注释保留**在末尾「备选网关：Kimi（Bearer 认证，当前未启用）」块里，附启用步骤与「两套只能生效一套」的警告（`.env` 原文那条「同时发两个头 → invalid x-api-key」的踩坑说明保留在头部）。
+- **注册表简化为纯 DeepSeek 两项**：`deepseek-flash`（第一项 = 默认）/ `deepseek-v4-pro`，**都不再写 `base_url` / `api_key_env`** —— 按 `_build_llm` 的既有优先级自动继承 `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY`。字段说明里保留「要另用一把 key 就填 `api_key_env`」的写法（如 `DEEPSEEK_API_KEY`）。
+- **`.env.example` 同步**（这条是入版本库的镜像，硬规则 5）：认证段从「二选一」改写为「统一 x-api-key + DeepSeek 默认」，Bearers-only 网关（Kimi）降级成一句旁注；注册表示例行同步成两项 DeepSeek。
+- **代码一行未改**：`nodes.py` 的 `elif settings.anthropic_auth_token`（Bearer 分支）与 `config.py` 的 `anthropic_auth_token` 字段**保留**（用户裁定「保留不动」）——它是 Kimi 这类 Bearer-only 网关的唯一通路，删了就回不去；`README.md` / `CLAUDE.md` / `docs/guides/commands.md` / `docs/architecture/data-pipeline.md` 里「两种认证方式」的说法因此**依然成立**，未改。
+- ⚠️ **本次变更需要重启 server**：`MODEL_NAME` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` 都走 `Settings`（`@lru_cache get_settings()`），与注册表的**热读**不同。
+- **验证证据（静态）**：用脚本改写 `.env`，密钥值只在脚本内搬运、**未打印进对话**（仅打印长度）；改写后 `json.loads` 校验 `PIPELINE_MODELS` 通过——解析出 2 项，`id`/`label`/`model` 齐全，`base_url`/`api_key_env` 均为 `None`（= 继承），默认项 `deepseek-flash`；`ANTHROPIC_BASE_URL` / `MODEL_NAME` / `MAX_TOKENS` 读回确认；`ANTHROPIC_AUTH_TOKEN` 确认已注释、`DEEPSEEK_API_KEY` 确认已不在。**未起服务、未发请求**。
+- **上面的验收清单第 1/3 条已被本变更取代**：下拉现在只有「DeepSeek Flash（默认）/ DeepSeek V4 Pro」两项，第 3 条的 Kimi 分支只有在把末尾备选块启用后才会重现。**待实机确认**：重启后 ① `/agent` 发一句能正常出字（对话现在走 `deepseek-flash`）② 高级设置下拉只剩两项、默认 Flash ③ 跑一个抓取任务，`extraction.model` 记 `deepseek-flash` 且提取正常 ④ `deepseek-flash` 的工具调用稳定（共 14 个：`get_current_time` + 9 个来源接入 + 1 个入库（`ingest_policies`）+ 3 个 MCP 国务院检索）——若发现工具调用不稳，把 `MODEL_NAME` 换成 `deepseek-v4-pro` 即可（注册表里已有，无需改代码）。
+
 ---
 
 ## Phase 13 — 检索全库去重/续抓 + 入库判别（judge）+ 定时防重入
@@ -810,4 +828,181 @@ pnpm dev
 
 > 明细已抽到 **[docs/progress/log.md](docs/progress/log.md)**（2026-10-12 起，按时间正序，只增不改）。
 > 每完成一个 Phase（或发生阻塞 / 范围变更）在该文件追加一行；本文档只保留上面的清单与状态。
+
+## Phase 17 — 命名区域（同页多列表 → 多入口，纯确定性）
+
+**状态**：🟨 进行中（离线用例全过；待实机验收） ｜ **目标**：解决「一张页面多个同签名列表（tab 标签页 / 并列栏目模块）无法只取其一」——旧模型一个 `list_selector` 全页命中、合并、无选择开关（用户实例：gz.gov.cn 政务公开页四个 tab 面板「政府规章/市政府文件/市府办公厅文件/政策解读」）。**全程确定性、零 LLM**：归纳在分析器（一次性、带证据），运行期仍是纯 CSS 子集解析。
+
+**范围决定**（用户已确认）：① 先做确定性流程，agent 参与后续再说（「就不要做agent先，先把确定性流程跑通」）；② 区域入口与栏目页入口并存——有独立栏目页时仍优先栏目页（翻页稳），页内区域是兜底通路。
+
+- [x] **引擎**：`app/sources/config.py` `EntrypointConfig` 新增 `scope_selector`（先定位作用域容器再在子树内跑 `list_selector`）+ `scope_index`（0 起，多命中点名；不填 = 全部合并，旧行为不变）；`validate_source_config` 校验 scope 选择器
+- [x] **解析**：`app/sources/html_source.py` 新增 `_select_entry_containers`（scope 子树解析 + 越界序号返回空），`parse_list_page` 改走它；不依赖 CSS 位置伪类（引擎本就不支持 `:nth-of-type`）
+- [x] **归纳**：`app/sources/analyze.py` 抽取 `_content_groups`（list_candidates 与区域共用分组口径）；新增 `region_candidates()`——tab 配对（`ul[role=tablist]` 第 N 个 `<li>` ↔ 文档序第 N 个 `[role=tabpanel]`，**数量不等就不配对**；名字取 `wzades`/`aria-label`/链接文本；tab 的 `<a href>` 作栏目页地址证据）+ 标题邻近模块（向上三层找 h1-h4 / class 含 tit/head/hd 短文本；**骨架 class header/nav/footer 排除**，否则站头导航串会被当栏目名；**只在普通选择器有歧义时归纳**，单一列表页零区域）；`analyze_page` 输出带证据的 `regions`
+- [x] **导入**：`app/services/source_import.py` `_build_candidates` 把命名区域排成 `kind="region"` 候选（普通列表候选之前）；`_expand_named_regions` 把入选候选**同页**的其它命名区域各经「真取一页按 scope 组合解析」验证后接成独立入口，共享一份正文规则；`_mark_selected` 匹配键带 scope；`_sibling_detail_pages`/`_entrypoint` 透传 scope 字段——「只抓政策解读 / 同时抓多个栏目」由抓取页现成的「发布机构 = 入口名」筛选完成
+- [x] **前端**：`web/src/api/types.ts` `SourceImportCandidate` 加 `kind`/`scope_selector`/`scope_index`；`ImportSection.vue` 候选行显示「命名区域」标记与 scope 定位
+- [x] **镜像**：`.claude/skills/website-source-onboarding/references/config-schema.md` 入口字段表、`docs/architecture/source-onboarding.md` 新条目
+- [x] **回归用例**：`test_source_onboarding.py` 新增 scope 解析 6 项 + 区域归纳 8 项（tab 配对/命名/序号/栏目页证据/模块区域/单一列表页零区域）；`test_source_import.py` 新增第 8 节端到端（tab 门户页 → 3 个命名区域入口、判据 1 逐入口探第 1 页全过）；假站点设施新增 `tab_portal_html()`/`build_tab_portal_site()`
+
+**验收证据（离线）**：`uv run python scripts/test_source_import.py` 59/59 通过（含新第 8 节）；`uv run python scripts/test_source_onboarding.py` 143 通过 / **1 项失败为改动前已存在的 `日期写法校验` 用例**（`SearchConfig` 校验器接受 `%Y-%m-%d %H:%M`，与本 Phase 无关，未动）/ 5 跳过（需数据库）。
+
+**待实机验收**：导入一个真实 tab 门户页（如 gz.gov.cn 政务公开页），确认草案含各命名区域入口、试运行逐入口通过；抓取页按栏目勾选只抓「政策解读」。
+
+### Phase 17 增量 a — 重跑破坏面收窄 + 候选区折叠（2026-10-16）
+
+- [x] **后端**：`_rebuild_from_candidate` 点**命名区域**候选重跑时只替换「同页 + 同 scope_selector + 同 scope_index」的那一个入口（多个 tab 面板共享 scope 选择器，匹配键必须带序号），其它命名区域与站内检索原样保留；普通列表候选维持整份重建语义
+- [x] **前端**：`ImportSection.vue` 候选区默认折叠（验收通过且已接入 ≥2 个命名区域时），标题与徽标写明「命名区域已自动全部接入，无需再选」
+- [x] **回归用例**：`test_source_import.py` 新增第 9 节（区域重跑保兄弟、普通候选重跑仍整份重建）；`uv run python scripts/test_source_import.py` 65/65 通过
+
+### Phase 17 增量 b — 区域命名防导航串污染（2026-10-16）
+
+- [x] **归纳**：`analyze.py` `_module_label` 新增 `_is_nav_bar`（标题候选里 ≥2 个内容链接 = 导航条，拒绝）与 `_heading_text`（剥掉「更多>>」类噪声）；`region_candidates` 区域名**页内唯一**，同名后来者视为无名不归纳——防「政策文件 政策解读 规划信息 人事任免 更多>>×N」克隆名（实测站点五个模块共用一条导航头，筛选面板全是 xx2/xx3）
+- [x] **回归用例**：`test_source_onboarding.py` 新增 2 项（模块头「更多>>」剥离为正控、导航条头拒绝）；`uv run python scripts/test_source_onboarding.py` 145 通过 / 1 失败为改动前已存在的 `日期写法校验` / 5 跳过；`test_source_import.py` 65/65 仍全过
+- [ ] **存量配置不追溯**：已导入来源里的脏入口名不会自动变干净——需删掉该来源重新导入（或改库里的配置）才生效
+
+### Phase 17 增量 c — 翻页的两条闭路：区域改接栏目页 + 单页声明必须由页面证据支撑（2026-10-16）
+
+**起因**：用户实测报「抓到一个 tab 门户站，抓到 9 篇就不动了，显示无新增」，并质疑「拆出来的结构规则为什么在筛选里基本都不可用」。**通用性要求（用户原话）**：「不应该修完这个站点，第二个站点又不适配吧」——两条闭路都只用**页面自己的证据**判定，零站点专属规则、零硬编码地址/参数名。
+
+- [x] **成因一（召回被封在页内预览块）**：命名区域候选的 `pagination` 在 `_build_candidates` 里被写死 `{"kind":"none"}`，而 tab 的 `<a href>` 指向的**独立栏目页**（`analyze.regions[].column_url`）才是完整列表——该字段全仓只有「写」、从无「读」，页内预览块列几条就是几条
+- [x] **成因二（单页是默认值而非结论）**：反推不出翻页规律就静默写 `none`，而 `_simplify_pagination` 把 `page_links`/`next_href` 证据一并丢弃；验收只对**声明了**翻页的入口发问（没声明的记「未测试」放行）→「站点还有几十页、我们永远只取第 1 页」全程无人报警
+- [x] **新增 `server/app/sources/pagination_probe.py`**：「只有一页」必须由站点页面自己证明。`has_pagination_evidence` / `rule_from_evidence`（纯函数，离线可测，只认 `query_param`/`path_index`，**绝不臆造** param 与模板）+ `probe_single_page_entry`（真取页面 → 反推规则 → **真取第 2 页、真解析出第 1 页没有的新条目**才采纳；推不出/验不过一律保持单页并给出人话理由）
+- [x] **`source_import._prefer_column_pages`**（紧跟 `_build_candidates`、选候选之前）：区域有独立栏目页时**就地**改接（`url`→栏目页、`scope_*` 清空、`column_page=True`、翻页用栏目页自己的规则、`region_page_url` 记原门户页供兄弟归组）；取不回/解析不出则保留页内区域并把原因写进日志（「试了不行」与「没试」分得清）。**就地替换而非新增候选**——候选清单是给人切换重跑的短清单（`_MAX_CANDIDATES = 5`），多插一条会挤掉真正可用的
+- [x] **`_resolve_single_page_entries`**（收尾阶段逐入口）：把探针接到配置组装上，推不出规律的写进入口 `notes`；`_simplify_pagination` 改为委托 `rule_from_evidence`，消除「分析报告说能翻、组装配置说不能翻」的两处口径分歧
+- [x] **验收侧（`onboarding.py`）**：覆盖范围逐个点名单页入口并把 `notes` 搬进 `coverage_limits`；`_probe_page2` 从「只验第一个声明翻页的入口」改成**逐入口验**（多入口配置里后几个入口翻页坏了不再漏检）
+- [x] **自写缺陷修正**：改接过的区域 `scope_selector` 已清空，会被 `_expand_named_regions` 静默丢掉 → 展开条件放宽为「有 scope **或** `column_page`」；探针 `max_pages` 原由内部默认值兜底，会与组装阶段各带一个上限 → 改为显式传入 `_PAGINATION_MAX_PAGES` 并由用例断言两处同口径
+- [x] **回归用例**：`test_source_onboarding.py` 新增第 2b 节（探针四条路：能翻 / 只有「下一页」→ 截断 / 页面无翻页入口 / 页面取不回）+ 9 项离线断言（`has_pagination_evidence` 5 例、`rule_from_evidence` 4 例）；`test_source_import.py` 新增第 10 节（`build_column_portal_site()`：404 tab 保留页内区域、真栏目页 tab 改接 + 翻页规则 + 判据 5 通过）与第 11 节（`build_next_only_site()`：推不出规律 → 单页 + `notes` + `coverage_limits` 双处点名、判据 5 不再出现在 `criteria` 里）
+- [x] **镜像同步**：`docs/architecture/source-onboarding.md`（新增该机制条目 + Tests 段）、`.claude/skills/website-source-onboarding/references/config-schema.md`（`pagination` 段的「只有一页必须由页面证明」、`url`/`notes` 两行）
+- [ ] **验证证据（离线）**：本会话只做了 5 个改动/新增文件的 `ast.parse` 语法检查（**未构建、未运行**，按 [docs/guides/building.md](docs/guides/building.md) 约定）——请执行 `cd server && uv run python scripts/test_source_onboarding.py`（基线 145 通过 / 1 失败为**改动前已存在**的 `日期写法校验：%Y-%m-%d %H:%M` / 5 DB 跳过）与 `uv run python scripts/test_source_import.py`（基线 65/65）确认全绿
+- [ ] **待实机验收**：导入那个只取到 9 条的 tab 门户页——日志应出现「改用其独立栏目页」与「补上了翻页规则（已真取第 2 页验证）」，草案里该入口 `url` 指向栏目页、`pagination` 非 `none`；确实翻不动的入口，报告覆盖范围里应看到「召回被截断在第 1 页」
+- [ ] **无新增持久字段**：`column_page` / `region_page_url` 只活在进程内的候选 dict，不进 DTO → `database/schema.sql`、`app/db/repositories.py`、`app/schemas/*.py`、`web/src/api/types.ts` 四处均无需改动（已核对）
+
+### Phase 17 增量 d — 「这几个栏目我都要」：重跑是替换，不是清除（2026-10-16）
+
+**起因**：用户拿一张真实门户页的候选截图问「这四个候选我都要使用怎么办」。截图里只有 1 个候选带「当前使用」、另外 3 个都是「命名区域」却既没「当前使用」也没「已试过 · 不行」——说明它们连展开都没被试过，被 `_expand_named_regions` 的**同页**归组过滤跳过了。进一步查证：**跨页的栏目在现有机制里没有任何共存的通路**——首次导入只展开与入选候选同页的区域；点另一页的区域候选重跑时，保留条件里的「同页」会把这一页的栏目丢掉；点普通列表候选则是整份重建。于是「都要」= 点一个丢一个。
+
+- [x] **重跑保留条件去掉「同页」**（`_rebuild_from_candidate`）：只替换「它自己那一个位置」，其它栏目（含**跨页**的命名区域、已改接栏目页的区域、普通列表入口）与站内检索入口原样保留——重跑是**替换**，不是清除
+- [x] **改接过的区域按「一个栏目」处理**：`column_page=True`、`scope_selector` 已被 `_prefer_column_pages` 清空的候选，此前会掉进「整份重建」分支把别处一起清掉；现在位置 = 地址 + `list_selector`
+- [x] **候选名额只管普通列表候选**（`_MAX_CANDIDATES = 5`）：命名区域是「同页全都要」，被名额挤掉的那一个**连候选都不出现、永远不会被展开**（静默少一个栏目）；区域自己的上限交给分析器（`region_candidates(limit=8)`）
+- [x] **回归用例**：`test_source_import.py` 第 12 段（直接调 `_rebuild_from_candidate`：跨页区域候选只换自己、别处栏目与检索入口都在；`column_page` 区域同样按「一个栏目」处理）+ 第 13 段（离线：7 个区域一个不少、普通列表候选仍截到 `_MAX_CANDIDATES`、`index` 与清单顺序一致）
+- [x] **镜像同步**：`docs/architecture/source-onboarding.md`（命名区域段新增「重跑是替换，不是清除」子条 + Tests 段）
+- [ ] **验证证据（离线）**：本会话只对 2 个改动文件跑 `ast.parse`（**未构建、未运行**）——请跑 `uv run python scripts/test_source_import.py` 确认既有 65 项仍全过并新增第 12/13 段
+- [ ] **待实机验收**：那张门户页上逐个点候选「替换为该候选并重跑」，每点一次**多一个**入口、已接入的栏目一次都不少；日志应出现「区域重跑：替换同位置的入口 N 个，保留其它命名区域/栏目 M 个（跨页的也在内）」
+
+---
+
+## Phase 18 — Agent 入口页（首页）静态还原
+
+**状态**：🟨 进行中（静态页代码完成，未接后端；前端待 `pnpm build`） ｜ **目标**：按 [design.pen](design.pen) 的 `Ry4ES` 帧「Agent 入口页（首页）」还原该页，**本阶段只做静态还原，不对接任何后端接口**（用户原话：「做该页的静态版本，先不用对接后端」）。页面内容（建议问题、快捷入口）写死在组件里。
+
+**范围变更（2026-10-16，用户第二轮确认）**：① **顶栏合并**——初版让本页自带一套 4 项导航，导致切到其它页时「政策助手」消失；改为把设计稿的 4 项导航（政策助手 / 采集任务 / 政策库 / 来源管理）做进共享 `TopBar.vue`，**全站五个路由共用一套**，「抓取任务 / 成果库」按设计稿改名为「采集任务 / 政策库」。② **去掉一切账号相关**（顶栏用户头像）。③ **去掉左栏历史会话**（会话列表 + 用户信息块）。②③ 用户明确「目前不打算做」，故 `AgentPage.vue` 现在只剩对话入口区。
+
+**范围变更（2026-10-16，用户第三轮确认）**：① **本页不再收窄**——原按设计稿把内容限到 720px，用户反馈「太拥挤」，改为沿用 `.content` 的公共容器宽度（`max-width: 1440px` + `24px 80px 48px` 内边距），左右边界与其它页对齐；**输入卡片从内容流中间移到页底常驻**（`.agent` 的 flex 列里排在滚动区之后，滚动只发生在对话区）；并简化显示内容，页面只剩「欢迎语 + 4 张建议问题卡 + 输入卡片」——去掉设计稿的能力徽标（与副标题重复）与 3 张快捷入口卡（指向的三个页面顶栏本来就有）。② **顶栏右侧清空**——右侧动作区各页长度不一，切换路由时把居中的导航推来推去；现改为「品牌 + 导航 + 等宽占位」三段（品牌与占位同为 `flex: 1 1 0`），四个 tab 恒定居中，**顶栏不再承载任何页面级动作**。③ **动作下放到各页页头**：抓取页新增 `.page-head`（标题 + 关键词提示 / 定时任务 / 终止 / 开始抓取），成果库把「清空」挪进 `.lib-head`（「已入库 N 篇」计数与页内 `总篇数` 重复，直接删除）；抓取页的**任务状态胶囊不再重复**——`ProgressPanel` 卡片头已有同一枚。
+
+- [x] **页面**：新增 `web/src/views/AgentPage.vue`——对话入口区（欢迎区 + 输入卡片「工具行 + 发送按钮」 + 4 张建议问题卡 + 3 张快捷入口卡）
+- [x] **顶栏（全站共用）**：`TopBar.vue` 导航改为设计稿的 4 项（`/agent` `/crawl` `/library` `/sources`，图标 `sparkles`/`radar`/`database`/`server`），去掉旧版的灰底胶囊容器与 `margin-right: auto`，改用设计稿的独立胶囊选中态（`--accent-soft` 底 + 品牌色图标/文字）；`/library/:id` 仍归「政策库」高亮；顶栏高度与内边距改为设计稿的 `60px` / `0 20px`；~~`/agent` 的动作区只挂「工具链已连接」状态，其余页动作按钮原样保留~~（第三轮已改为顶栏不带任何动作区，见下）
+- [x] **路由**：`web/src/router.ts` 新增 `/agent`（name `agent`）；`/` 与兜底重定向从 `/crawl` 改为 `/agent`（设计里它是「首页」）
+- [x] **外壳**：`web/src/App.vue` 对 `/agent` 走 `.page--full` / `.content--flush`（锁一屏高；~~取消 `.content` 的内边距与最大宽度~~——第三轮已改为**只改纵向**，横向沿用公共容器宽度，见下），顶栏与其它页共用不再隐藏
+- [x] **图标**：`web/src/components/AppIcon.vue` 补 9 个 lucide 图标（`server` / `user` / `message-square` / `settings` / `chart-column` / `zap` / `arrow-up` / `newspaper` / `scale`）；其中 `user` / `message-square` / `settings` 随②③移除后**当前无引用**，保留待历史会话 / 账号回来时复用（该图标表本就允许未引用项，如既有 `heart-pulse` / `rotate-ccw`）
+- [x] **镜像同步**：`CLAUDE.md`（路由数 四 → 五）、`docs/architecture/overview.md` → *Frontend shape*（五条路由 + 全站共用 4 项导航 + `/agent` 满屏外壳 + 标注静态与②③的范围决定）
+- [x] **本页放宽 + 简化（第三轮）**：`AgentPage.vue` 去掉 `.welcome` / `.composer` / `.suggestions` / `.quick` 各自的 `max-width: 720px`（改由 `.content` 定宽），删掉能力徽标与 3 张快捷入口卡（连带 `shortcuts` 常量、`RouteName` 类型、`useRouter` 导入一起移除）；建议问题由「2 行 × 2 张」改为一列 `grid`（`repeat(2, minmax(0,1fr))`，≤900px 降为 1 列）；输入卡片移出滚动区，成为 `.agent` 的 flex 列最后一个子元素（`margin-top: 20px` 与滚动区隔开），textarea 由 `rows="2"` 改 `rows="1"`
+- [x] **本页外壳（第三轮）**：`App.vue` 的 `.content--flush` 不再 `padding: 0` / `max-width: none`，改为保留 `.content` 的横向内边距与最大宽度、只改纵向（`flex: 1` / `min-height: 0` / `gap: 0`）+ `padding-bottom: 28px`；≤1280px 与 ≤640px 两处断点各补一条 `padding-bottom`（简写 `padding` 会盖掉它）
+- [x] **顶栏居中（第三轮）**：`TopBar.vue` 删除整个 `.actions` 块与随之无用的 store 导入（`canCancel` / `cancelTask` / `clearAll` / `clearing` / `enabledScheduleCount` / `form` / `ingestMode` / `libraryMeta` / `openScheduleModal` / `startTask` / `starting` / `stopping` / `task`）及 `TaskStatus` 类型、`STATUS_LABEL` / `STATUS_TONE` / `label` / `tone` / `spinning` / `cancelLabel` / `cancelTitle` / `keywordHint` / `confirmingClear` / `onConfirmClear` / `onStart`；布局由 `justify-content: space-between` 改为「品牌 `flex: 1 1 0` + 导航 + 等宽占位 `.spacer`」，四个 tab 恒定居中不再随页面跳动；≤1100px 折行时导航整行居中
+- [x] **动作下放（第三轮）**：`CrawlPage.vue` 新增 `.page-head`（标题「采集任务」+ 副标题 + 右侧 关键词提示 / 定时任务 / 终止 / 开始抓取，含 `cancelLabel` / `cancelTitle` / `keywordHint` / `onStart` 与 `.ghost-btn` `.start-btn` `.schedule-badge` `.hint` 等本页样式）；**任务状态胶囊不重复**——`ProgressPanel` 卡片头已有同一枚；`LibraryPage.vue` 把「清空」（含确认态 `confirmingClear`）挪进 `.lib-head` 的 `.head-side`，并删掉与页内「总篇数」重复的「已入库 N 篇」计数
+- [ ] **验证证据**：本会话**未构建、未运行**（按 [docs/guides/building.md](docs/guides/building.md) 约定）——前端实现未跑 `vue-tsc`，靠逐字段核对 `design.pen` 的节点属性（颜色/字号/间距/圆角/文案）；请跑 `cd web && pnpm build` 确认类型与产物，再 `pnpm dev` 目视比对
+- [ ] **待实机验收**：① 打开 `/` 落在 Agent 入口页，刷新不 404（dev history / prod hash 两种模式都过）；② Agent 页与其它页**左右边界对齐**（同一 `max-width: 1440px` + 内边距），输入卡片常驻页底且对话区单独滚动，页面本身不出现滚动条；③ **顶栏在五个路由间切换时始终是同一套 4 项导航且四个 tab 不位移**，`/agent` 高亮「政策助手」、`/crawl` 高亮「采集任务」、`/library` 与 `/library/:id` 高亮「政策库」、`/sources` 高亮「来源管理」；④ **下放后的功能按钮可用**：抓取页页头 关键词提示 / 定时任务（含角标）/ 终止·放弃（仅在可取消时出现）/ 开始抓取与定时入库切换，成果库页头 三项统计 + 清空（两步确认、`清空中…`）；⑤ 抓取页**不再重复出现状态胶囊**（只有 `ProgressPanel` 卡片头那一枚）；⑥ 窄屏（≤1100px 顶栏折行、导航独占一行且居中；≤900px 建议问题竖排；≤640px 抓取页隐藏关键词提示、成果库页头左对齐堆叠）不塌陷、不裁切
+- [ ] **本阶段不做（有意）**：~~对话接口 / SSE / 记忆~~（**已由 [Phase 19](#phase-19--对话-agent-接入langgraph-sse-流式--前端接线--提示词集中) 接手**）；~~输入框与「发送」「建议问题」等按钮均无事件~~（同上）；**账号相关的东西全部不做**（顶栏头像等）；**左栏历史会话不做**（会话列表、用户信息块）；~~3 张快捷入口卡只做 `router.push` 到既有页面~~（第三轮已整块移除）
+
+---
+
+## Phase 19 — 对话 Agent 接入（LangGraph SSE 流式 + 前端接线 + 提示词集中）
+
+**状态**：🟨 进行中（代码完成，**未构建、未运行**，待实机验收） ｜ **目标**：让 `/agent` 真能对话。后端入口早就存在（`POST /api/chat/stream`），缺的是**前端消费者**——`client.ts` 里唯一的 SSE 订阅建在 `EventSource` 上（只能 GET），而对话是带 JSON body 的 POST。顺带修掉两处不匹配：系统提示词还是一行占位「你是一个乐于助人的 AI 助手。」（与页面宣称的「政策研究助手 + 政策检索工具链」完全对不上），以及回复是 markdown 却没有任何渲染手段。
+
+**范围决定（用户，2026-10-16 确认）**：① **工具调用事件暂不接入**（原话「先不接入，后续我可能会有新的工作流」）——只推 token，工具执行期那 10–20 秒静默由前端「正在检索政策…」等待态兜住；② **会话**＝每次开页新 `thread_id` + 一个「新对话」按钮轮换，不入库、不落 localStorage（后端记忆本就是 `InMemorySaver`，重启即失忆）；③ **提示词集中**到新建的仓库根 `prompts/`（把散在 4 处的提示词一并搬进去），身份改为政策研究助手；④ **引入 markdown 渲染**（`marked` + `dompurify`）。
+
+- [x] **提示词目录**：新增仓库根 `prompts/`——`chat.md`（新写：身份/工具族/硬要求——简体中文、给文号与日期、附原文链接、只依据工具返回作答、查不到就直说）、`extract.md`（从 `extract.py` 的长常量原样搬出）、`extract_json_fallback.md`（从内联指令搬出）、`judge.md`（从 `config.py` 的字段默认值搬出）、`README.md`（文件表 + 何时需要重启）
+- [x] **提示词加载器**：新增 `server/app/prompts.py`——`REPO_ROOT` / `PROMPTS_DIR` / `load_prompt(name)`；**故意不缓存**（每次调用读一次小文件，换来改完即生效），**缺文件或空文件直接 `RuntimeError`**（带绝对路径），不静默回退空提示词
+- [x] **消费点改造**：`config.py` 的私有 `_REPO_ROOT` 改为 `from app.prompts import REPO_ROOT`（`pathlib` 导入随之删除）；`agent/nodes.py` 删 `SYSTEM_PROMPT` 常量，改在 `call_model` 里 `load_prompt("chat")`（→ 改 `chat.md` **不用重启**）；`pipeline/extract.py` 的 `SYSTEM_PROMPT` 与新的 `JSON_FALLBACK_INSTRUCTION` 都改 `load_prompt(...)`（模块常量 → **改完要重启**）；`pipeline/judge.py` 的判别指令优先级改为「调用方覆盖 > `.env` 的 `JUDGE_INSTRUCTIONS` > `prompts/judge.md`」，`config.py` 里 `judge_instructions` 默认值清空（保留原有矩阵实测注释）
+- [x] **SSE 端点加固**（`api/routes/agent.py`）：补上另外两个 SSE 端点同款的三个反缓冲 header（`Cache-Control` / `Connection` / `X-Accel-Buffering: no`）与 15s `: ping` 心跳；心跳用「后台 task 把 `astream` 推进 `asyncio.Queue`、超时只作用于 `queue.get()`」实现（**不能** `wait_for(agen.__anext__(), 15)`——超时会把 `CancelledError` 抛进正在跑的图）；`done` **从 `finally` 挪到循环之后**（客户端断开时在取消路径上 yield 会撞 `RuntimeError: async generator ignored GeneratorExit`，这是存量缺陷），并补 `except asyncio.CancelledError: raise` + `finally: task.cancel()`
+- [x] **API 层**：`web/src/api/client.ts` 新增 `streamChat()`（全仓第一处 `fetch` + `response.body.getReader()`：跨 read 的帧缓冲、`decode(..., {stream: true})` 防中文跨界、非 2xx 复用 `{"detail"}` → `ApiError`、`AbortSignal` 贯穿、提前 return 时 `reader.cancel()`）+ `parseChatFrame()` 小工具；类型镜像 `web/src/api/types.ts` 末尾加 `ChatStreamEvent`（三态：token / done / error）与 `ChatRequest`
+- [x] **对话 store**：新增 `web/src/store/chat.ts`——`messages` / `sending` / `isEmpty` 与 `sendMessage` / `stopGeneration` / `retryLast` / `resetChat`；**流归 store 持有**（模块级 `AbortController`），切走页面不断流，页面因此**不需要** `onBeforeUnmount`；token 逐字**原地追加**（不整表复制）；重试时从那条提问**整段替换**再重发（否则界面出现两条一样的提问）
+- [x] **页面接线**：`AgentPage.vue` 空态（欢迎语 + 建议卡「点击即发送」，居中）/ 对话态（贴顶消息流）双状态共用底部输入卡片；助手气泡走 `MarkdownText.vue`、用户气泡 `pre-wrap` 纯文本；无 token 时显示「正在检索政策…」（`loader-circle` 旋转）；`stopped` 标注「已停止」、`error` 气泡内红字 + 「重试」；`Enter` 发送 / `Shift+Enter` 换行（`isComposing` 让开中文输入法）、输入框自动增高（封顶 160px）、生成中发送按钮变「停止」；`.composer-tools` 左槽空态放能力标签、对话态换成「新对话」（不新增一行 chrome）；自动滚底只在用户本来就在底部时跟随（120px 阈值，直接写 `scrollTop`）；**自绘滚动条（2026-10-16 增量）**：本页两个滚动容器（`.chat` 对话区、`.composer-input` 增高后）不再用系统默认滚动条，改 `::-webkit-scrollbar` 自绘（10px 轨道 / 6px 滑块，`border: 2px solid transparent` + `background-clip: content-box` 内缩）——**轨道透明**所以露出的就是容器自身底色（对话区 `--bg`、输入框 `--card`），空闲态滑块 `#d7dade`、hover 转 `--text-tertiary`；Firefox 侧用等值的 `scrollbar-width: thin` + `scrollbar-color` 两个属性兜住。**只作用于本页**（其它页保持系统默认），要全站统一就把这段搬进 `style.css`
+- [x] **Markdown 渲染**：新增 `web/src/markdown.ts`（`marked` + `DOMPurify`，**模块级注册一次**——写进 `<script setup>` 会每个组件实例挂一遍 hook；外链经 `afterSanitizeAttributes` 钩子补 `target="_blank" rel="noopener noreferrer"`；奇数代码围栏自动配平）+ `components/MarkdownText.vue`（样式全走 `:deep()`，`v-html` 不在 scoped 作用域内）
+- [x] **依赖**：`web/package.json` 加 `marked ^18.1.1` / `dompurify ^3.4.17`（均自带类型）
+- [x] **镜像同步**：`docs/architecture/chat-agent.md`（SSE 段重写：header / 心跳实现 / `done` 时机 / 只推 token 的范围决定；新增 Prompt 与前端消费者两条）、`docs/architecture/overview.md`（*Frontend shape* 去掉「currently static」并写清对话态行为；仓库布局加 `prompts/`；store 列表加 `store/chat.ts`）、`docs/guides/commands.md` → Configuration 加 `prompts/` 一条、`CLAUDE.md`（仓库地图加 `prompts/`、`web/` 那条不再写「static」）、`.env.example` 的 `JUDGE_INSTRUCTIONS` 注释改为「默认取自 `prompts/judge.md`」
+- [x] **对话模型随配置变更切换（2026-10-16）**：`MODEL_NAME` 从 `kimi-for-coding` 改为 `deepseek-flash`、认证从 Bearer 改为 x-api-key（见 [Phase 12](#phase-12--提取模型可选高级设置下拉--deepseek-接入) 的同日变更块）。本阶段代码未随之改动，这条只是说明**实测时对话走的是哪个模型**；因为走 `Settings`，**必须重启 server 才生效**
+- [ ] **验证证据**：Python 侧静态检查——`ast.parse` 6 个改动文件**全通过**（`config.py` / `prompts.py` / `agent/nodes.py` / `pipeline/extract.py` / `pipeline/judge.py` / `api/routes/agent.py`）；3 处搬出的提示词与 `git show HEAD:` 原文**逐字节全等**（`extract.md` / `extract_json_fallback.md` / `judge.md`，搬移无损耗），4 个提示词文件都能读出非空内容。前端——用户已跑 `pnpm install` + `pnpm build`（2026-10-16 16:35），`vue-tsc` 报 **3 个类型错误**，**已全部修掉**：① `store/chat.ts` 的 `retryLast()` 用了 `Array.prototype.findLastIndex`（ES2023，本工程 lib 未到）→ 改手写倒序查找；②③ `components/sources/SourceListSection.vue` 的 `isConfirming()` 在 `confirming.value?.id === id` 上收窄失败（`ref.value` 是属性访问，TS 不据此收窄）→ 改为先落局部变量再判空。**修完尚未复跑 `pnpm build`**，请再跑一次确认干净
+- [ ] **待实机验收**：① `cd web && pnpm install`（新增两个依赖）→ `pnpm build` 类型检查应干净；② `cd server && python main.py` 能起（`prompts/` 缺失会抛清楚的中文报错，这本身也是一条可验证行为）；③ `curl -N -X POST localhost:8000/api/chat/stream -H 'Content-Type: application/json' -d '{"message":"最近有哪些国务院政策？","thread_id":"t1"}'` 应逐条吐 `data: {"type":"token",...}`、工具执行期出现 `: ping`、最后一条 `data: {"type":"done"}`；④ 页面上发一句 → 气泡立即出现并显示「正在检索政策…」，随后逐字流式追加，列表/表格/链接按 markdown 渲染；⑤ 生成中点「停止」→ 流立即断、气泡标「已停止」，**后端日志无 `RuntimeError: async generator ignored GeneratorExit`**；⑥ 生成中切到「政策库」再切回 `/agent`，回答照常继续；⑦ 「新对话」清空消息并换 `thread_id`（再问一句不记得上一轮）；⑧ 后端没起时发送 → 气泡内红字 + 「重试」
+- [ ] **本阶段不做（有意）**：工具调用事件（见范围决定①，后续要接只需给 `ChatStreamEvent` 加一个变体 + store 里记一条状态）；会话持久化 / 会话列表（`InMemorySaver` 进程内、刷新即新会话）；自动化测试（仓库本就没有覆盖 `/api/chat*` 的脚本，本轮不补）；`thread_id` 的服务端校验（客户端生成 UUID，不构成风险）
+
+---
+
+## Phase 20 — 对话里直接入库（`ingest_policies` 工具 + 服务层抽取）
+
+**状态**：🟨 进行中（代码完成，**未构建、未运行**，待实机验收） ｜ **目标**：让对话 Agent 能真的把文件抓进成果库。原先「跟模型聊」与「页面入库」是两条断开的链路——Agent 手上只有 9 个来源接入工具与 3 个**只读** MCP 检索工具：`dry_run_ingestion` 只是试运行（它自己也这么说：不留任务、不留结果行），`manage_ingestion_job(action="run_trial")` 只能对**已注册的配置化来源**发起（走 `content_source` 表，内置的 gov.cn 根本够不着）且照样停在确认闸门；没有任何工具能建 `crawl_task`，也没有任何工具能让结果进 `policy_document`。本次把「发起 / 查看 / 确认」三个动作抽成服务层，**路由与工具共用一份实现**。
+
+**范围决定（用户，2026-10-16：按方案 A 落地）**：确认闸门**不删、只搬家**——从「只有页面能确认」变成「对话里也能确认，但必须先拿到用户明确同意」，工具侧 `confirm` 未带 `user_approved=true` 一律拒绝（与 `register_source(approved=...)` 同一个口径）。
+
+- [x] **服务层抽取**：新增 `server/app/services/ingestion.py`——`start_ingestion` / `inspect_ingestion` / `wait_for_settled` / `confirm_ingestion` + `available_sources` / `resolve_source_label`，以及三个异常（`IngestionNotFound`→404、`IngestionConflict`→409（带结构化 `status` 字段，调用方不去解析异常消息里的字符串）、`IngestionRejected`→400）。确认那几步的顺序（丢弃未选中 → `refresh_task_counts()` → 落日志 → `set_task_running` → `start_extraction`）因此**只有一份实现**，页面与对话不可能走样
+- [x] **路由改调服务**（`api/routes/tasks.py`）：`POST /api/tasks` 与 `POST /api/tasks/{id}/confirm` 只保留 HTTP 语义（状态码、响应模型、错误映射），业务动作全部转交服务；`_AWAITING_STATUS` 常量随之下沉；对外文案（409 那句「任务当前状态为 …，无需确认」、400 的「请至少勾选一篇要抓取的政策」）**逐字未变**；页面的六个「高级设置」覆盖经 `pipeline_overrides` **原样透传**（起初只留了 `max_policies`，那会静默丢掉另外五项，已改）
+- [x] **共享工具小件**：新增 `server/app/agent/tool_utils.py`（`dump` / `error` / `parse_iso_date`，`MAX_CHARS = 6000`）——两个工具模块原先各揣一份，抽成一份防漂移；`onboarding_tools.py` 改为导入（并删掉一个残留的重复 `_parse_date` 定义，它引用的 `date` 已随导入一起被删，属于潜伏的 `NameError`）
+- [x] **新工具 `ingest_policies`**：新增 `server/app/agent/ingestion_tools.py`，一个工具三个动作——`start`（来源 / 关键词 / 时间范围 / 机构 / 文种 / 篇数上限，内部 `wait_for_settled` 把「一次调用」变成「一次可读结论」，**超时如实回报「还在检索」而不是报错**）/ `inspect`（状态 + 阶段 + 计数 + 候选篇目，每条带 `suggested`（判别建议）与 `in_library`（已在成果库）标注，候选取前 25 条并标明被截断）/ `confirm`（必须 `user_approved=true`）。服务导入写在**函数体内**（`tools → ingestion_tools → services → pipeline` 会成环）；工具按仓库约定**永不抛错**，一律返回 `{"ok": false, "error": "中文原因"}`
+- [x] **注册**：`app/agent/tools.py` 的 `TOOLS` 改为 `[get_current_time, *ONBOARDING_TOOLS, *INGESTION_TOOLS]` → 本机工具 **11 个**（1 + 9 + 1），加 3 个 MCP 共 **14 个**
+- [x] **来源名严格化只对模型**：`resolve_source_label(..., strict=True)` 拒绝未知来源并列出可用清单，清单取自**注册表**（配置化来源是随接入工作流长出来的，写死在工具里第二天就过期）；**流水线与页面的口径不动**——`get_by_label` 对认不出的名字回退内置 gov.cn 是既有行为（`scripts/test_sources.py` 有断言、`routes/filters.py` 依赖它），只有「模型编错名字 → 静默抓错站点、任务行里还留着那个错名字」这个失败模式需要拦
+- [x] **提示词**：`prompts/chat.md` 补 `ingest_policies` 的说明（三个检索工具只读、不留痕；「帮我抓进来 / 入库」要用这个工具而不是拿检索工具搪塞）与新的「抓取入库的三条硬规矩」——① 先对齐条件再动手；② 确认这一步永远由用户拍板（没拿到明确同意不许传 `user_approved=true`，提取按篇计费、脏数据一旦入库就进成果库）；③ 不要替用户改条件（名字/id 报错就如实转述，别换个近似的重试；要看进展用 `inspect`，别重复发起）
+- [x] **镜像同步**：`docs/architecture/chat-agent.md` 新增 *Ingestion tools* 一条（只读 MCP 工具 / `dry_run_ingestion` / `run_trial` 三者的边界、一处实现两个出入口、闸门搬家不消失、严格来源名只对模型、对话发起的任务同样出现在抓取页）；`docs/architecture/data-pipeline.md` → *Business API* 补一段指向服务层；`docs/architecture/source-onboarding.md` 注明三个小件已抽到 `tool_utils.py`
+- [ ] **验证证据（静态——本会话未构建、未运行）**：6 个改动/新增 Python 文件 `ast.parse` 全通过；**工具包装层的端到端桩测**（修补上图那处缺 `await` 之后补做，正是它该早点做）：用一个假 service 替换 `app.services.ingestion` 的入口（工具内的 `from app.services import ingestion as svc` 是每次调用现读，因此替换模块属性即可注入），把 `ingest_policies` 三个动作全跑一遍——`start`：`ok=true` / `task_id` / `next` 齐全，且 `start_ingestion` 实收到 `source=国务院政策文件库（gov.cn）`（key 已解析成展示名）、`date_from/date_to` 已解析为 `date(2026,1,1)` / `date(2026,10,16)`、`origin=对话`、`pipeline_overrides={"pipeline_max_policies": 5}`，随后的 `inspect_ingestion` 带 `candidate_limit=25`；`inspect`：`ok=true` 且 `next` 引导去确认；`confirm` 未带 `user_approved` 时走**真实** `confirm_ingestion`（它在碰库之前就拒）→ `ok=false` + 「确认入库需要用户明确同意…」；带 `user_approved=true` 时 → `ok=true`、`kept=2`、`next` 正确；错误路径（`date_from=2026/01/01` / 未知来源 / 非法 `action`）均返回 `ok=false` + 中文原因。**未连库、未起服务、未发请求**。此前那条「只 `ast.parse` + 直接调服务层函数」的验证**漏掉了工具体内的 await 问题**——工具函数本身从没被调用过，因此这条桩测是补上的那一课。用 `server/.venv` 实测——本机工具 11 个且含 `ingest_policies`（12 个参数，只有 `action` 必填）；服务签名与异常类齐全；`resolve_source_label` 对 `""` / `gov_cn` / `政策文件库` 均解析为 `国务院政策文件库（gov.cn）`，`strict=True` 遇未知名字抛 `IngestionRejected` 并列出 `国务院政策文件库（gov.cn）（gov_cn）`，非 strict 则回退默认源；`_clamp_max_policies(0)=1`、`(999)=50`；`_sanitize_overrides({"pipeline_max_policies": 999, "pipeline_model": "x"})` 只夹前者、其余原样
+- [x] **实机缺陷修复（2026-10-16）**：用户实机三次复现 `'coroutine' object has no attribute 'update'`（换来源名一次、默认源一次、指定展示名一次）——根因是**本模块的 `_task_view()` 是同步函数却调用了协程** `svc.inspect_ingestion()`：拿回来的协程对象在下一行被 `.update(...)`，于是 `start` 与 `inspect` 两个动作全死在这一处，与参数无关。修法：`_task_view` 改 `async def` 并 `await`，两个调用点跟着 `await`（函数 docstring 里写明了这个坑，防止再犯）。⚠️ 三次失败**在崩之前都已经建了任务并跑过检索段**（`wait_for_settled` 已返回），它们会以「等确认」或「还在跑」的样子留在抓取页，按需删掉即可。
+- [ ] **待实机验收**：① **必须先重启 server**——工具是在 MCP 装载**之后**编进图表的，图表又是 `@lru_cache` 单例，不重启新工具根本不存在（改 `prompts/chat.md` 不用重启，它是每次调用读的）；② 原有页面路径回归：抓取页发起 + 确认照旧（路由现在转调服务层，文案与状态码应逐字一致）；③ 对话里说「帮我抓 2026 年人工智能相关的国务院政策，最多 5 篇」→ 模型调 `start` → 任务出现在**抓取页**并停在「等确认」；④ 让它念候选篇目 → 用户挑几篇 → 模型调 `confirm`（带 `user_approved=true`）→ 提取段跑起来、成果库出现这几篇；⑤ 没有用户同意时模型自行 `confirm` 应被拒（`{"ok": false}` + 中文说明）；⑥ 故意报一个不存在的来源名 → 工具回「未知来源…当前可用：…」，而**不是**静默去抓 gov.cn；⑦ `deepseek-flash` 在 **14 个**工具下的调用是否稳定（不稳就把 `MODEL_NAME` 换成 `deepseek-v4-pro`，注册表里已有，无需改代码）
+- [ ] **本阶段不做（有意）**：`docs/Agent-Plan.md` 提的「发现模式」（通用网页搜索——会把检索词发往第三方，数据出网需另行决策）、浏览器自动化兜底（若做，必须复用 `net.py` 的 robots / SSRF / 限速约束，且登录墙、验证码、付费墙一律不绕）、PDF 正文提取与 OCR；对话侧不暴露「取消任务 / 删除任务」（那套 UI 留在抓取页）
+
+---
+
+## Phase 21 — 可观测性：对话与流水线接入 Langfuse / Litefuse（自托管）
+
+**状态**：🟨 进行中（`langfuse` 5.0.2 已装、Litefuse 26.3.0 已运行、上报已实测；根 span 泄漏已修复，待重启后实机验收） ｜ **目标**：把对话图（含工具调用）与每篇政策的结构化提取变成可视化的 trace，让「模型为什么这么答 / 这一步为什么慢 / 这次提取花了多少 token、有没有走 JSON 回退」这类问题可查。用户已自行搭好**本地** Litefuse（`http://localhost:3000`，与 Langfuse SDK 兼容）并在 `.env` 填好密钥。
+
+**范围决定（用户，2026-10-16 确认）**：① 接入范围 = **对话 + 流水线**（judge 判别服务不接——它走 httpx 直连外部 RL 模型，不在这条链路上）；② 用 **`LANGFUSE_ENABLED` 显式开关**，且必须同时配齐两个密钥才真正启用。
+
+- [x] **新增 `server/app/tracing.py`**：`trace_config(name, session_id, user_id, tags, metadata)` 返回一段可直接 `config.update(...)` 的 LangChain/LangGraph config；**未启用时返回 `{}`**，因此调用点可以无条件 update，不必写 `if`。`_get_handler()` 单例缓存 `CallbackHandler`；`flush_tracing()` 供关停时冲刷后台批量上报的队列
+- [x] **降级口径与 MCP / judge 一致——观测层坏了绝不拖垮业务**：`LANGFUSE_ENABLED=false` / PUBLIC_KEY 或 SECRET_KEY 为空 / 没装 `langfuse` 包（ImportError）/ 客户端初始化抛异常，四种情况一律返回 `None` → 全部 `trace_config()` 返回 `{}`，**只在启动日志里说一句**，对话与抓取照常跑。因此新依赖装不上也不会让服务起不来
+- [x] **配置项**（`app/config.py`）：`langfuse_enabled`（默认 true）/ `langfuse_public_key` / `langfuse_secret_key` / `langfuse_host`。地址字段用 `AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL")`——两个变量名各版本文档说法不一（官方 LangChain 集成文档写 `LANGFUSE_HOST`，「数据区域」文档写 `LANGFUSE_BASE_URL`，本仓 `.env` 用的也是后者），归一成一个字段；再由 `_export_endpoint()` 在初始化前把解析出的地址**同时**写到两个名字下，于是「显式传参」与「SDK 自己读环境」两条路都拿得到
+- [x] **初始化不假设 SDK 的构造参数名**：`_init_client()` 用 `inspect.signature` 在 `host` / `base_url` 里挑一个真实存在的传（都挑不到就只靠环境变量），避免某个版本改名后**静默**断掉上报
+- [x] **对话链路**（`api/routes/agent.py`）：新增 `_chat_config(thread_id)`，`/api/chat` 与 `/api/chat/stream` 共用——一轮对话一条 trace，`session_id = thread_id`，因此同一会话的多轮在 Langfuse 里归到一个 session
+- [x] **流水线**（`pipeline/crawl_graph.py`）：① `run_pipeline()` 给图 A（检索段）挂 trace——这步把 MCP 检索 / 判别的工具调用变成子 span，补上「检索为什么慢 / 打了几次 MCP」的视野；② `_extract_one()` **一篇一条 trace**（tag `pipeline`/`extract`、`session_id = task-<id>`、metadata 带 `task_id`/`policy_id` 便于回库对号）。**刻意不做「整个任务一条大 trace」**：检索段与提取段之间隔着人工确认、是两个独立进程片段，硬套一条反而丢上下文；一篇一条也贴合并发提取的实际排查问题
+- [x] **`extract_policy()` 显式下发 config**（`pipeline/extract.py`）：新增可选参数 `config: RunnableConfig | None`，一路递给 `_extract_via_tool` / `_extract_via_json` 里的 `llm.ainvoke`。**不用 callback 继承**而是显式串下去——工具路径失败落到 JSON 回退时，两次尝试才会落在**同一条** trace 里（这正是要看的东西）
+- [x] **关停冲刷**（`app/main.py`）：`lifespan` 收尾加 `flush_tracing()`（SDK 是后台批量上报，不 flush 会丢最后几条；未启用时是空操作）
+- [x] **根 span 泄漏修复（2026-10-19，`tracing.isolated_context()`）**：症状 = 服务启动后**只有第一条对话能记录**，后续 trace 在列表里看不到、详情报 `Trace not found`（`traces.byIdWithObservationsAndScores`），工具调用数据「也没有」。根因 = Langfuse v5 `CallbackHandler` 在 run 开始时把根 span attach 进当前 OTel 上下文，结束时在 LangGraph 复制出的 contextvars 里 detach 失败（SDK 自己视作可忽略）；残留的活动 span 留在长驻 FastAPI 进程的执行上下文，下一条请求的新根挂到它名下，而父 span 从未导出 → trace 没有真根、`traces_scalar` 不收、详情 404。工具 span 本身一直在库里。修法 = `contextvars.copy_context()` 后**只**把 OTel contextvar 换成空上下文（业务 contextvar 保留），三个发起处改成 `asyncio.create_task(..., context=isolated_context())`：`api/routes/agent.py` 的 `/api/chat` 与 `/chat/stream` 的 `pump()`、`pipeline/crawl_graph.py::_track()`
+- [ ] **本次修复的验证证据**：**隔离实验**——刻意泄漏一个活动 span 后，直接 `await chain.ainvoke` 的 chat span `parent=166b56a5cd5144e6`；同样条件下改走 `create_task(..., context=isolated_context())` 则 `parent=None`。**数据侧**——修复前 10 条 `chat` span 只有 2 条 `parent_span_id` 为空（其余挂着从未导出的父 span），`traces_scalar` 只有 2 行；有根 trace 详情 200 且含 4 个 observation（`chat`/`agent`/`ChatAnthropic`/`tools_condition`），孤儿 trace 详情 404 `not found within authorized project`。`ast.parse` 与导入均通过。**未启动服务**（硬规则 1）。**⛔ 待实机验收**：重启 server 后连续发两轮对话，两条 trace 都出现在列表、详情都能展开出完整工具树
+- [x] **依赖（2026-10-19 补记）**：`server/pyproject.toml` 已声明 `langfuse>=5.0.2`，`uv.lock` 锁定 **5.0.2**，且 **`langchain-core` 仍为 1.6.9，未被降级**。此前「没装、一个 trace 都没上报过」的判断已被实机推翻：Litefuse 26.3.0 里已能查到对话与工具 span
+- [x] **镜像同步**：`docs/architecture/chat-agent.md`（新增 *Observability* 一条：调用点写法 + 四种降级条件 + **自托管前提** + 变量名归一 + flush）、`docs/architecture/data-pipeline.md`（*Extraction* 段补每篇一条 trace 的理由与显式下发 config 的用意）、`docs/guides/commands.md` → *Configuration* 加一条、`server/README.md` → *如何扩展* 加一条、`.env.example` 加整段 `LANGFUSE_*` 注释（含「别换成云端地址」的警告）
+- [ ] **验证证据（静态——本会话未构建、未运行）**：6 个改动/新增 Python 文件 `ast.parse` 全通过；**未跑 `uv sync`、未起服务、未发请求**（硬规则 1）。待用户执行
+- [ ] **待实机验收**：① `cd server && uv add langfuse` 能装上（**不是** `uv sync`——pyproject 里没声明它，sync 不会装），**且 `langchain-core` / `langgraph` / `langchain-anthropic` 版本不被改动**；② 重启 server，日志出现「可观测性：trace 上报到 http://localhost:3000（自托管）」；③ `/agent` 问一句 → Litefuse 出现一条 trace，展开能看到 agent 节点、工具 span、模型输入输出；④ 同一会话再问一句 → 两条 trace 归在**同一个 session** 下；⑤ 抓一次任务 → 出现「任务 N·检索段」trace + 每篇一条「提取：<标题>」trace，都在 `task-N` session 下，metadata 里能看到 `task_id`/`policy_id`；⑥ 把 `LANGFUSE_ENABLED=false` 写进 `.env` 重启 → 日志说不上报、Litefuse 不再新增、**对话与抓取一切照常**；⑦ 把密钥清空或临时把 langfuse 卸掉 → 服务仍能起、对话仍能用（这条是「装不上也不拖垮业务」的验证）
+- [ ] **本阶段不做（有意）**：judge 判别服务的手动 span（走 httpx，不在 LangChain 链路上）；给 **MCP 工具**的入参出参做脱敏（trace 里会出现检索关键词与政策正文——**自托管所以不出本机**，接云端前必须先做这一步）；采样率 / 成本告警 / 看板等运维面；前端展示 trace
+
+---
+
+## Phase 22 — 字段提取通用化（FieldRule DSL + 结构分析自动生成 + metadata 落库）
+
+**状态**：🟨 进行中（代码与离线用例完成，**未构建、未运行**，待实机验收） ｜ **目标**：解决「换个政务站日期/机构/文号就取不到」的适配问题——把「标签 → 值」从写死的 `*_selectors` 升级为**数据化的规则语言**，由结构分析器产出、模型可补、流水线确定性执行；站点自定义字段统一落 `policy_document.metadata`（JSONB），不再每加一个字段就改表。
+
+**设计决定**：不生成代码、不放宽到执行模型产出的任意逻辑——规则仍是**有限 JSON DSL**，由 `app/sources/field_rules.py` 解释执行。这样保持可校验、可复现、可跨样本核对；模型的自由度体现在**选哪条规则**，而不是写执行逻辑。
+
+- [x] **规则模型**（`app/sources/config.py`）：新增 `FieldRule`（`scope` / `selector` / `label_equals` / `label_matches` / `value_from` / `attr` / `drop_label` / `pattern` / `group` / `reject` / `normalize` / `match_index`）与 `FieldValueFrom`；`EntrypointConfig.item_fields`、`DetailConfig.fields` 为 `dict[str, list[FieldRule]]`（规则链：第一条取到非空值者胜）；`validate_source_config` 校验选择器/正则可用性
+- [x] **解释器**（新增 `app/sources/field_rules.py`）：标签归一（去空白/末尾冒号，兼容 `文　　号：`）、三种取值位置（`self_text` / `own_text` / `parent_text` / `parent_own_text` / `next_sibling_text` / `attr`）、`drop_label` 按归一标签逐字剥离、`pattern` 截取、`reject`、`normalize=date`；保留名 `date/publish_date/agency/doc_no/title` 之外进 metadata
+- [x] **解析链路接入**（`app/sources/html_source.py`）：列表条目先跑 `item_fields`（覆盖标题/机构/文号/日期，其余进 metadata）；详情页在整页跑 `detail.fields`，保留字段优先、旧 `*_selectors` 兜底；`DetailResult.extra` → `FulltextResult.metadata`
+- [x] **任意字段落库**：`schema.sql` 加 `policy_document.metadata JSONB NOT NULL DEFAULT '{}'`（幂等 `ALTER TABLE`）；`repositories.insert_policies` / `update_policy_from_fulltext` 合并写入；`schemas/policy.py::PolicyMeta.metadata` + `web/src/api/types.ts` 镜像 + `DetailDrawer.vue` 展示（`META_LABELS` 中文名）
+- [x] **分析器产出候选**（`app/sources/analyze.py::field_candidates`）：实测三种形状——`label_child`（span 标签 + 父节点直接文本）、`label_sibling`（`dt`/`dd`、`th`/`td`、或标签是标准字段名）、`inline`（同节点）；每条带 `selector/label/relation/value_from/sample_value`。补上无冒号标签的兄弟判定（此前 `dt`/`dd` 实际进不来），并对未知标签加「短标签 + 短值」门槛防止正文句子被当成字段
+- [x] **DOM 提纲**：`dom_outline()` 输出「缩进 + tag#id.class + 直接文本」，让模型能看出标签与值分居哪一层；`analyze_content_structure` 默认附带
+- [x] **确定性接入自动生成**（`app/services/source_import.py`）：`_field_rules_from_analysis` → `rules_from_field_candidates`；`_verify_field_rules` 跨 3 篇核对日期类规则，恒为同一天的规则按模板元素丢弃并写日志
+- [x] **手动接入/Agent 通路**（`app/services/onboarding.py`、`app/agent/onboarding_tools.py`）：抽样结果带 `fields`；`inspect_source` / `analyze_content_structure` 返回 `field_candidates`（+ `dom_outline`）；`generate_source_config` 文档补 `item_fields` / `detail.fields` 示例
+- [x] **日期归一**（`app/sources/util.py`）：支持 `2025-06-05` / `2025/6/5` / `2025.6.5` / `2025年6月5日` / `二〇二五年六月五日` / `2026年九月八日`（混合阿拉伯年 + 中文月日）
+- [x] **离线用例**（`server/scripts/test_source_import.py` §14–15）：三种形状 + 规则链 fallback + `drop_label` + 中文日期 + `parse_detail_page` 保留/元数据分流 + 分析器自动生成 + 恒定日期跨页核对
+- [x] **镜像同步**：`.claude/skills/website-source-onboarding/references/config-schema.md`（§3.1 字段规则 DSL + `item_fields`/`fields`）、`SKILL.md`（日期机构全 0 的处置改为先看候选写 `fields`）、`docs/architecture/source-onboarding.md`、`docs/guides/extending.md`（metadata 是 per-site 字段的出口，不是新列）
+- [x] **静态检查**：13 个改动/新增 Python 文件 `ast.parse` 全通过（**未导入、未起服务、未跑用例**——硬规则 1）
+- [x] **首轮实跑缺陷修复（2026-10-19）**：用户实跑 `test_source_import.py` → 110 通过 / 4 失败（日期链落到成文日期、详情页日期错、自动规则取到页脚日期、核对后取空）。根因：`parse_date` 不收 `2026年九月八日` 这类阿拉伯年份 + 中文月日；分析器给 `dt` 生成 `:nth-of-type(n)`（引擎不支持）→ 自动规则静默取空。已修：日期数字表收齐 ASCII 0–9；`field_candidates` / `rule_from_candidate` 统一 `strip_nth_of_type` + `selector_supported` 校验，日期类字段（含 `signed_date` / `effective_date`）统一 `normalize=date`。**待用户复跑确认**
+- [x] **第二轮实机缺陷修复（2026-10-19）**：用户报「新来源走 `html_list:sh_yshj_zcwj`，抓取结果的发布日期不显示（配置里日期明明已匹配、试运行能显示）」。根因**不在前端**：`run_extraction_phase()` 把任务行的覆盖参数传给 `extract_node` 时**漏了 `source`**，`_extract_one` 于是 `get_by_label(None)` 回退到 gov.cn 适配器——配置化来源的 `detail.fields` / `date_selectors` 根本没执行，而 gov.cn 的 `fulltext_date_is_publish=False` 又让 `update_policy_from_fulltext` 不写 `publish_date`。列表轮本就不给日期（`entrypoints[].date_selector` 为空），两处叠加 = 发布日期永远为空。已修：① `run_extraction_phase` 的覆盖参数列表补 `source`（含注释说明为什么不能丢）；② `_preflight_bodies` 把已取回的详情页日期顺手写回条目（仅当 `fulltext_date_is_publish=True` 且列表轮没有日期时），让发布日期在**提取之前**就能显示在确认面板/结果表——预检本来就要取详情页，不增加请求。**待用户重启 server 后重抓一个任务验收**（旧任务的 `publish_date` 不会自动订正：`COALESCE` 不覆盖、`insert_policies` 是 `DO NOTHING`）
+- [x] **发布日期模型兜底（2026-10-19）**：结构解析拿不到发布日期时，由模型从页面内容补提一个；补不到就留空、前端统一显示「无日期」，补到时明确标注「模型提取」。**补提放在正文预检阶段（确认之前）**，确认面板即可看到日期；预检关闭/模型不可用时提取阶段再兜底一次。实现：`prompts/extract_date.md`（只认页面明确写出的发布日期，禁止拿成文/施行日期顶替或推测）+ `pipeline/extract.py::extract_publish_date`（独立小调用、只认 `YYYY-MM-DD`、未来/过早日期丢弃、失败 fail-open）+ `crawl_graph._preflight_bodies`（详情页结构没解析到日期时用整页文本 `FulltextResult.page_text` 补提，写回 `it["date"]` + `it["date_source"]="model"`）+ `crawl_graph._backfill_model_publish_date`（提取阶段兜底，仅在 `publish_date` 仍为空时触发）+ `policy_document.publish_date_source`（NULL=页面解析，`model`=模型补提；预检结果经 `insert_policies` 落库）+ 四处镜像（`repositories` / `schemas` / `types.ts` / `v_policy_results`）+ 前端确认面板、结果表、详情抽屉、成果库卡片/详情标注。**待用户 `database/init.sh` 补列 + 重启 server 后重抓验收**；历史行不会自动补提，需要重新提取
+- [ ] **待实机验收**：① `cd server && uv run python scripts/test_source_import.py`（§14–15 应全过；其余离线用例不受影响）；② `database/init.sh` 补 `metadata` 列后重跑一次「导入网址」——详情页抽屉应出现索引号/成文日期等自定义字段；③ 找一个 `dt/dd` 或 `span 标签 + 父节点值` 的真实站，确认日期/机构/文号不再为空；④ 老来源（仅有 `*_selectors`）行为不变；⑤ 构造一篇页面无日期/日期在正文容器外的政策，确认结果表出现「模型提取」标注、原文确实写了该日期
+- [ ] **本阶段不做（有意）**：让模型生成/执行任意代码（规则仍是数据）；伪类 / `+` / `~` 选择器（引擎能力边界）；对非日期字段做跨样本恒定值核对（同栏目同机构恒定是合理的）
 

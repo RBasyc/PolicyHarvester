@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
  * 导入接入（Phase 16 自 SourceModal 平移 + 批量新增）：
- *   单条导入 —— 输入 → 进行中（SSE）→ 验收报告 → 候选切换重跑 / 启用该来源；
+ *   单条导入 —— 输入 → 进行中（SSE）→ 验收报告 → （补救）候选替换重跑 / 启用该来源；
  *   批量导入 —— 粘贴 N 个地址排队逐个跑，聚合 SSE 推队列进度，行展开看报告。
  *
  * 状态全部在 `store/sourceImports.ts`（模块级）：切 tab / 组件重挂载都不丢；
  * 路由离开再回来由 `syncImportsOnMount` 重订阅对表。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import AppIcon from '../AppIcon.vue'
 import SourceReport from '../SourceReport.vue'
 import type { ImportJobStatus, SourceBatchChild } from '../../api/types'
@@ -39,6 +39,21 @@ const emit = defineEmits<{ switchTab: [tab: 'list'] }>()
 
 type Mode = 'single' | 'batch'
 const mode = ref<Mode>('single')
+
+// ---------- 候选区收起 ----------
+// 命名区域已全部自动接入时，候选区只是纠错入口——验收通过且接入了多个栏目就默认收起，
+// 不杵在日常流程里（用户会把「选中一个重跑」误读成「接一个栏目就要重抓一遍」）。
+const usedRegionCount = computed(
+  () => (wizard.job?.candidates ?? []).filter((c) => c.selected && c.kind === 'region').length,
+)
+const showCandidates = ref(true)
+watch(
+  () => [wizard.job?.job_id, wizard.job?.report?.status, (wizard.job?.candidates ?? []).length] as const,
+  () => {
+    if (reportPassed.value && usedRegionCount.value >= 2) showCandidates.value = false
+  },
+  { immediate: true },
+)
 
 // ---------- 批量队列展示 ----------
 
@@ -240,43 +255,62 @@ async function enableExpanded() {
             :error="wizard.job?.error ?? null"
           />
 
-          <!-- 候选切换：自动用的是 selected 那条；选中另一个，再用底部「用选中候选重跑」 -->
+          <!-- 候选清单：命名区域已全部自动接入（「当前使用」可以有多条），不需要再选；
+               点其它候选 + 底部「重跑」只是「某个栏目选错了，用它替换」的补救动作。
+               验收通过且已接入多个命名区域时默认收起——纠错能力留着，但不杵在日常流程里 -->
           <section v-if="wizard.job?.candidates.length" class="block">
-            <p class="block-title">列表栏目候选（选中一个，再用底部按钮重跑试运行）</p>
-            <ul class="candidates">
-              <li v-for="candidate in wizard.job.candidates" :key="candidate.index">
-                <button
-                  class="candidate"
-                  :class="{
-                    selected: wizard.selectedCandidateIndex === candidate.index,
-                    rejected: !!candidate.rejected_reason,
-                  }"
-                  type="button"
-                  :title="`${candidate.page_url} · ${candidate.list_selector}`"
-                  @click="wizard.selectedCandidateIndex = candidate.index"
-                >
-                  <span class="candidate-name">
-                    {{ candidate.name }}
-                    <span v-if="candidate.selected" class="candidate-flag">当前使用</span>
-                    <span v-else-if="candidate.rejected_reason" class="candidate-flag bad">已试过 · 不行</span>
-                    <span v-else-if="wizard.selectedCandidateIndex === candidate.index" class="candidate-flag">
-                      已选中
+            <button class="block-toggle" type="button" @click="showCandidates = !showCandidates">
+              <AppIcon :name="showCandidates ? 'chevron-down' : 'chevron-right'" :size="13" />
+              <span class="block-title">列表栏目候选（命名区域已自动全部接入，无需再选）</span>
+              <span v-if="!showCandidates && usedRegionCount >= 2" class="candidate-flag">
+                已接入 {{ usedRegionCount }} 个栏目
+              </span>
+            </button>
+            <template v-if="showCandidates">
+              <p class="block-sub">
+                抓取时在抓取页按「发布机构」勾选要抓的栏目即可；点候选并「重跑」是纠错动作——
+                命名区域只替换同位置的那一个，不会动其它已接入的栏目。
+              </p>
+              <ul class="candidates">
+                <li v-for="candidate in wizard.job.candidates" :key="candidate.index">
+                  <button
+                    class="candidate"
+                    :class="{
+                      selected: wizard.selectedCandidateIndex === candidate.index,
+                      rejected: !!candidate.rejected_reason,
+                    }"
+                    type="button"
+                    :title="`${candidate.page_url} · ${candidate.list_selector}`"
+                    @click="wizard.selectedCandidateIndex = candidate.index"
+                  >
+                    <span class="candidate-name">
+                      {{ candidate.name }}
+                      <span v-if="candidate.kind === 'region'" class="candidate-flag">命名区域</span>
+                      <span v-if="candidate.selected" class="candidate-flag">当前使用</span>
+                      <span v-else-if="candidate.rejected_reason" class="candidate-flag bad">已试过 · 不行</span>
+                      <span v-else-if="wizard.selectedCandidateIndex === candidate.index" class="candidate-flag">
+                        已选中
+                      </span>
                     </span>
-                  </span>
-                  <span class="candidate-meta">
-                    {{ candidate.item_count ?? '?' }} 条 · <code>{{ candidate.list_selector }}</code>
-                  </span>
-                  <span v-if="candidate.sample_title" class="candidate-sample">
-                    样本：{{ candidate.sample_title }}
-                  </span>
-                  <!-- 「没试」和「试了不行」要分得清：逐个候选真抓过一篇样本详情页，
-                       失败的原因原样写在这里，而不是笼统说一句「导入失败」。 -->
-                  <span v-if="candidate.rejected_reason" class="candidate-reason">
-                    {{ candidate.rejected_reason }}
-                  </span>
-                </button>
-              </li>
-            </ul>
+                    <span class="candidate-meta">
+                      {{ candidate.item_count ?? '?' }} 条 · <code>{{ candidate.list_selector }}</code>
+                      <template v-if="candidate.scope_selector">
+                        · 区域 <code>{{ candidate.scope_selector }}</code>
+                        <template v-if="candidate.scope_index != null">#{{ candidate.scope_index + 1 }}</template>
+                      </template>
+                    </span>
+                    <span v-if="candidate.sample_title" class="candidate-sample">
+                      样本：{{ candidate.sample_title }}
+                    </span>
+                    <!-- 「没试」和「试了不行」要分得清：逐个候选真抓过一篇样本详情页，
+                         失败的原因原样写在这里，而不是笼统说一句「导入失败」。 -->
+                    <span v-if="candidate.rejected_reason" class="candidate-reason">
+                      {{ candidate.rejected_reason }}
+                    </span>
+                  </button>
+                </li>
+              </ul>
+            </template>
           </section>
 
           <p v-if="wizard.streamError" class="error-line">
@@ -300,10 +334,10 @@ async function enableExpanded() {
               class="ghost"
               type="button"
               :disabled="wizard.starting"
-              title="沿用当前配置骨架，只替换列表入口与正文规则，再跑一次真实联网试运行"
+              title="补救动作：用选中的候选替换当前入选的栏目，再跑一次真实联网试运行（命名区域已全部接入，通常不需要点）"
               @click="rerunSelectedCandidate"
             >
-              {{ wizard.starting ? '提交中…' : '用选中候选重跑' }}
+              {{ wizard.starting ? '提交中…' : '替换为该候选并重跑' }}
             </button>
             <button
               v-if="registeredId != null && registeredStatus !== 'active'"
@@ -798,6 +832,29 @@ async function enableExpanded() {
   font-weight: 600;
   color: var(--text-secondary);
   line-height: normal;
+}
+
+.block-sub {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0.85;
+  line-height: 1.5;
+}
+
+.block-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.block-toggle .block-title {
+  flex: 1;
 }
 
 .candidates {

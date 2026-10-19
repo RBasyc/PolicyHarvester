@@ -5,19 +5,19 @@
  */
 import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { notify } from '../store'
+import { notify, notifySuccess } from '../store'
 import type { ExtractionOut } from '../api/types'
 
 const props = defineProps<{ extraction: ExtractionOut }>()
 
 async function copy(text: string) {
   if (!navigator.clipboard) {
-    notify('当前环境不支持剪贴板，请手动选中复制')
+    notify('当前环境不支持剪贴板，请手动选中复制', undefined, undefined, 'info')
     return
   }
   try {
     await navigator.clipboard.writeText(text)
-    notify('已复制到剪贴板')
+    notifySuccess('已复制到剪贴板')
   } catch {
     notify('复制失败，请手动选中复制')
   }

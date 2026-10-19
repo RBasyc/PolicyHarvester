@@ -20,7 +20,7 @@ import type {
   SourceJob,
   SourceStatus,
 } from '../api/types'
-import { loadSources, notify } from '../store'
+import { loadSources, notify, notifySuccess } from '../store'
 
 function text(error: unknown): string {
   return error instanceof ApiError ? error.message : String(error)
@@ -55,7 +55,7 @@ export async function enableSourceById(sourceId: number, label: string, force = 
   busySourceId.value = sourceId
   try {
     await api.enableSource(sourceId, { force })
-    notify(
+    notifySuccess(
       force
         ? `已强制启用「${label}」——未经验收强制启用已写入变更说明`
         : `已启用「${label}」，可在抓取配置里选它作为来源`,
@@ -239,7 +239,7 @@ export async function cancelWizardImport() {
   if (!current || (current.status !== 'running' && current.status !== 'queued')) return
   try {
     await api.cancelSourceImport(current.job_id)
-    notify('已请求取消——等当前这一步收尾后作业结束，已抓证据仍保留')
+    notifySuccess('已请求取消——等当前这一步收尾后作业结束，已抓证据仍保留')
   } catch (error) {
     notify(`取消失败：${text(error)}`)
   }
@@ -340,7 +340,7 @@ export async function startBatchImport() {
     batch.lastLogs = {}
     subscribeBatch(created.batch_id)
     const rejected = created.rejected.length
-    notify(
+    notifySuccess(
       rejected
         ? `批量导入已排队：${created.accepted.length} 个入队，${rejected} 个被拒绝（见列表）`
         : `批量导入已排队：${created.accepted.length} 个地址`,
@@ -384,7 +384,7 @@ export function stopBatchStream() {
 export async function cancelBatchJob(jobId: string) {
   try {
     await api.cancelSourceImport(jobId)
-    notify('已请求取消该作业')
+    notifySuccess('已请求取消该作业')
   } catch (error) {
     notify(`取消失败：${text(error)}`)
   }

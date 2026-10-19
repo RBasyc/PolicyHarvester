@@ -11,7 +11,7 @@ import AppIcon from '../AppIcon.vue'
 import SourceReport from '../SourceReport.vue'
 import { api } from '../../api/client'
 import type { SourceDTO, SourceOnboardingRun } from '../../api/types'
-import { loadSources, notify, sources, sourcesLoading, syncTask } from '../../store'
+import { loadSources, notify, notifySuccess, sources, sourcesLoading, syncTask } from '../../store'
 import {
   busySourceId,
   enableSourceById,
@@ -35,7 +35,10 @@ type ConfirmAction = 'delete' | 'force'
 const confirming = ref<{ id: number; action: ConfirmAction } | null>(null)
 
 function isConfirming(id: number | null | undefined, action: ConfirmAction): boolean {
-  return confirming.value?.id === id && confirming.value.action === action
+  // 先落到局部变量再判空：`ref.value` 是属性访问，TS 不在 `a?.b === c` 里收窄它
+  const current = confirming.value
+  if (!current || id == null) return false
+  return current.id === id && current.action === action
 }
 
 // ---------- 历史接入记录（行内展开验收报告） ----------
@@ -96,7 +99,7 @@ async function disableSource(source: SourceDTO) {
   busySourceId.value = source.id
   try {
     await api.disableSource(source.id)
-    notify(`已停用「${source.label}」——已抓的任务与成果不受影响`)
+    notifySuccess(`已停用「${source.label}」——已抓的任务与成果不受影响`)
     if (archiveId.value === source.id) archiveId.value = null
     await loadSources()
   } catch (error) {
@@ -111,7 +114,7 @@ async function removeSource(source: SourceDTO) {
   busySourceId.value = source.id
   try {
     await api.deleteSource(source.id)
-    notify(`已删除来源「${source.label}」`)
+    notifySuccess(`已删除来源「${source.label}」`)
     if (archiveId.value === source.id) {
       archiveId.value = null
       archiveRuns.value = []
@@ -142,7 +145,7 @@ async function trialSource(source: SourceDTO) {
     } catch {
       /* 忽略：抓取页刷新一次即可对齐 */
     }
-    notify(result.status || '试运行任务已发起，进度见抓取页')
+    notifySuccess(result.status || '试运行任务已发起，进度见抓取页')
   } catch (error) {
     notify(`试运行失败：${text(error)}`)
   } finally {

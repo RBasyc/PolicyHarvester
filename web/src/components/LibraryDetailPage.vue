@@ -154,9 +154,14 @@ function backToLibrary() {
           <span v-if="headAgency" class="head-tag">{{ headAgency }}</span>
           <span v-if="docType" class="head-tag">{{ docType }}</span>
           <span class="tag-spacer"></span>
-          <span v-if="policy?.publish_date" class="head-date">
+          <span v-if="policy" class="head-date">
             <AppIcon name="calendar" :size="13" />
-            发布于 {{ policy.publish_date }}
+            发布于 {{ policy.publish_date ?? '无日期' }}
+            <span
+              v-if="policy.publish_date_source === 'model'"
+              class="model-date-tag"
+              title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
+            >模型提取</span>
           </span>
         </div>
 
@@ -323,6 +328,15 @@ function backToLibrary() {
   color: var(--text-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.model-date-tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 10px;
+  line-height: 1.7;
 }
 
 .head-title {

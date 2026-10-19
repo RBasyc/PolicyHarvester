@@ -7,6 +7,8 @@
 
 import type {
   BatchStreamEvent,
+  ChatRequest,
+  ChatStreamEvent,
   FacetList,
   ImportStreamEvent,
   LibraryListResponse,
@@ -380,4 +382,84 @@ export function subscribeBatchStream(
     },
     handlers.onError,
   )
+}
+
+/** 一帧里如果带 `data:` 行就解析成事件；注释行（`: ping`）与半截 JSON 都返回 null。 */
+function parseChatFrame(frame: string): ChatStreamEvent | null {
+  const line = frame.split('\n').find((l) => l.startsWith('data:'))
+  if (!line) return null
+  try {
+    return JSON.parse(line.slice(5).trim()) as ChatStreamEvent
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 对话流：`/chat/stream` 是**带 JSON body 的 POST**，而 EventSource 只能 GET，
+ * 所以这里不能用 `subscribeSse`——用 fetch + ReadableStream 手工切帧，
+ * 协议与上面完全一致（`data: {...}\n\n`，夹着 `: ping` 注释行）。
+ *
+ * 返回的 Promise 在「收到 done / error」「用户 abort」「服务端关流」时 resolve；
+ * 只有网络层失败与非 2xx 才抛 ApiError（调用方按气泡内错误展示）。
+ */
+export async function streamChat(
+  payload: ChatRequest,
+  handlers: { onEvent: (event: ChatStreamEvent) => void },
+  signal?: AbortSignal,
+): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${BASE}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError') return // 用户点了「停止」，不是错误
+    throw new ApiError('无法连接后端服务，请确认 server 已启动（默认 8000 端口）', 0)
+  }
+
+  if (!response.ok) {
+    let detail = `请求失败（HTTP ${response.status}）`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string' && body.detail) detail = body.detail
+    } catch {
+      /* 非 JSON 错误体，沿用默认文案 */
+    }
+    throw new ApiError(detail, response.status)
+  }
+  if (!response.body) throw new ApiError('当前浏览器不支持流式响应', 0)
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      // stream: true —— 一个中文字符的 UTF-8 字节可能被切成两半，残字节要留到下一次 decode
+      buffer += decoder.decode(value, { stream: true })
+
+      // 帧之间用空行分隔；最后一段可能是**半个帧**，留在 buffer 里等下一次 read
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) {
+        const event = parseChatFrame(frame)
+        if (!event) continue
+        handlers.onEvent(event)
+        if (event.type === 'done' || event.type === 'error') return
+      }
+    }
+    // 服务端没发 done 就断流（进程被杀 / 代理掐断）：也按收尾处理，
+    // 免得 UI 永远停在「生成中」——内容已经拿到的部分保留。
+    handlers.onEvent({ type: 'done' })
+  } catch (error) {
+    if ((error as Error)?.name !== 'AbortError') throw error
+  } finally {
+    void reader.cancel().catch(() => {}) // 提前 return 时释放连接（不 cancel 会一直读到服务端超时）
+  }
 }

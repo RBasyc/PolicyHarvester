@@ -60,6 +60,8 @@ export interface PolicyResultItem {
   id: number
   title: string
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提（前端标注「模型提取」） */
+  publish_date_source: string | null
   source_url: string | null
   /** 来源目录：gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读 */
   catalog: string | null
@@ -92,8 +94,12 @@ export interface PolicyMeta {
   agency: string | null
   doc_no: string | null
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  publish_date_source: string | null
   source_url: string | null
   fetched_by: string | null
+  /** 字段规则取到的站点自定义元信息（索引号 / 成文日期 / 主题分类…） */
+  metadata: Record<string, string>
 }
 
 export interface FactItem {
@@ -137,6 +143,8 @@ export interface LibraryPolicyItem {
    *  无括号时退回 gov.cn 名单，仍推不出为 null */
   doc_type: string | null
   publish_date: string | null
+  /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  publish_date_source: string | null
   summary: string | null
   fact_count: number
   point_count: number
@@ -453,7 +461,13 @@ export interface SourceImportCandidate {
   index: number
   page_url: string
   name: string
+  /** 候选种类：region = 命名内容区域（tab 标签页/标题模块），list = 普通列表候选 */
+  kind?: 'region' | 'list'
   list_selector: string
+  /** 同页多列表定位：先定位作用域容器，再在其中跑 list_selector（region 候选才有） */
+  scope_selector?: string | null
+  /** 作用域命中多个时取第几个（0 起）；缺省 = 全部合并 */
+  scope_index?: number | null
   item_count: number | null
   sample_title: string | null
   sample_url: string | null
@@ -656,4 +670,24 @@ export interface SourceRecentRunsResponse {
 export interface SourceTrialPayload {
   keywords?: string[]
   max_policies?: number
+}
+
+// ---------- 对话 Agent（Phase 19） ----------
+
+/**
+ * 对话流事件（对应 server/app/api/routes/agent.py::chat_stream）。
+ *
+ * 只有三种，**没有** task / import 流那种快照事件：对话流不发工具调用事件
+ * （用户决定，见 TODO Phase 19 的范围），服务端只推模型输出的文本片段，
+ * `done` 是正常收尾（客户端主动断开时服务端不发）。
+ */
+export type ChatStreamEvent =
+  | { type: 'token'; content: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
+/** 对话请求体（镜像 server/app/schemas/chat.py::ChatRequest）。 */
+export interface ChatRequest {
+  message: string
+  thread_id: string
 }
