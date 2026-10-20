@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool, tool
 
 from app.agent.ingestion_tools import INGESTION_TOOLS
 from app.agent.onboarding_tools import ONBOARDING_TOOLS
+from app.browser.tools import browser_tools
 
 
 @tool
@@ -23,8 +24,11 @@ def get_current_time() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-# 本地工具注册表
-TOOLS = [get_current_time, *ONBOARDING_TOOLS, *INGESTION_TOOLS]
+# 本地工具注册表。
+# 浏览器工具（browser_*）必须无条件进 `ToolNode`，否则开了「浏览网页」开关后模型发出的
+# 工具调用会「没有对应工具」；但**绑定给模型**时按当前请求过滤（见 agent/nodes.py），
+# 没开开关的对话看不到这些 schema，省 token。
+TOOLS = [get_current_time, *ONBOARDING_TOOLS, *INGESTION_TOOLS, *browser_tools()]
 
 # MCP 工具（China-Central-Policy-MCP 等），由应用启动时（lifespan）异步加载后填充
 MCP_TOOLS: list[BaseTool] = []

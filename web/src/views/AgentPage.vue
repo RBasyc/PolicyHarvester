@@ -1,17 +1,24 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '../components/AppIcon.vue'
 import MarkdownText from '../components/MarkdownText.vue'
 import {
+  browserAvailable,
+  browserEnabled,
   isEmpty,
+  loadFeatures,
   messages,
   resetChat,
   retryLast,
   sendMessage,
   sending,
   stopGeneration,
+  toggleBrowser,
 } from '../store/chat'
+
+// 功能开关（浏览器可用性）：后端不可用时静默隐藏，不影响对话
+onMounted(() => void loadFeatures())
 
 /**
  * Agent 入口页（首页）——design.pen 的 `Ry4ES` 帧，Phase 19 起接真实对话。
@@ -94,8 +101,11 @@ function onScroll() {
 }
 
 watch(
-  // 字符串当 watch 源：只有「条数」或「最后一条的长度」真变了才触发
-  () => `${messages.value.length}:${messages.value.at(-1)?.content.length ?? 0}`,
+  // 字符串当 watch 源：只有「条数」「最后一条的长度」或「浏览步骤数」真变了才触发
+  () =>
+    `${messages.value.length}:${messages.value.at(-1)?.content.length ?? 0}:${
+      messages.value.at(-1)?.steps?.length ?? 0
+    }`,
   async () => {
     // 条数变了 = 刚发送 / 刚重试，无条件贴底；只是内容变长则尊重用户翻历史的滚动位置
     if (messages.value.length !== lastCount) {
@@ -140,7 +150,7 @@ watch(
 
       <div v-else class="messages">
         <div v-for="msg in messages" :key="msg.id" class="msg" :class="`msg--${msg.role}`">
-          <span class="avatar">
+          <span class="avatar" :class="{ 'avatar--thinking': msg.role === 'assistant' && msg.status === 'streaming' }">
             <AppIcon :name="msg.role === 'user' ? 'user' : 'sparkles'" :size="15" />
           </span>
 
@@ -148,13 +158,62 @@ watch(
             <!-- 用户气泡是纯文本（保留换行）；助手气泡走 markdown 渲染 -->
             <p v-if="msg.role === 'user'" class="plain">{{ msg.content }}</p>
 
-            <!-- 已发出但一个 token 都还没来：工具调用期那 10–20 秒的静默就靠它兜 -->
-            <div v-else-if="msg.status === 'streaming' && !msg.content" class="thinking">
+            <!-- 调用过程：工具调用 + 被顶掉的中间文本；流式中展开，结束后收进可折叠列表 -->
+            <details
+              v-if="msg.role === 'assistant' && msg.steps && msg.steps.length"
+              class="steps"
+              :open="msg.status === 'streaming'"
+            >
+              <summary class="steps-title">
+                调用过程（{{ msg.steps.length }} 步）
+                <span v-if="msg.status === 'streaming'" class="steps-live">进行中</span>
+              </summary>
+              <ol class="steps-list">
+                <li
+                  v-for="(step, index) in msg.steps"
+                  :key="`${index}-${step.name}`"
+                  class="step"
+                  :class="{ failed: step.status === 'done' && !step.ok }"
+                >
+                  <AppIcon
+                    v-if="step.text"
+                    name="message-square"
+                    :size="12"
+                    class="step-icon step-text"
+                  />
+                  <AppIcon
+                    v-else-if="step.status === 'start'"
+                    name="loader-circle"
+                    :size="12"
+                    class="spin step-icon"
+                  />
+                  <AppIcon
+                    v-else-if="step.ok"
+                    name="check"
+                    :size="12"
+                    class="step-icon step-ok"
+                  />
+                  <AppIcon v-else name="circle-x" :size="12" class="step-icon step-fail" />
+                  <!-- 文本段只展示内容；工具步骤主显工具名，detail 为辅（浏览器步骤带 URL 等） -->
+                  <span v-if="step.text" class="step-detail">{{ step.detail }}</span>
+                  <template v-else>
+                    <span class="step-name">{{ step.name }}</span>
+                    <span v-if="step.detail" class="step-detail">{{ step.detail }}</span>
+                  </template>
+                </li>
+              </ol>
+            </details>
+
+            <!-- 已发出但一个 token 都还没来：首轮工具调用前那 10–20 秒的静默就靠它兜 -->
+            <div
+              v-if="msg.role === 'assistant' && msg.status === 'streaming' && !msg.content"
+              class="thinking"
+            >
               <AppIcon name="loader-circle" :size="14" class="spin" />
-              <span>正在检索政策…</span>
+              <span>正在思考…</span>
             </div>
 
-            <MarkdownText v-else :source="msg.content" />
+            <MarkdownText v-else-if="msg.role === 'assistant'" :source="msg.content" />
 
             <p v-if="msg.status === 'stopped'" class="note">已停止</p>
 
@@ -181,17 +240,33 @@ watch(
       ></textarea>
 
       <div class="composer-tools">
-        <!-- 左槽：空态放能力标签，对话态换成「新对话」（换 thread_id = 服务端那边开新会话） -->
-        <div v-if="isEmpty" class="tool-tags">
-          <div v-for="tool in tools" :key="tool.label" class="tool-tag">
-            <AppIcon :name="tool.icon" :size="12" />
-            <span>{{ tool.label }}</span>
+        <!-- 左槽：「浏览网页」开关 + 空态能力标签 / 对话态「新对话」 -->
+        <div class="tools-left">
+          <button
+            v-if="browserAvailable"
+            class="browse-toggle"
+            :class="{ active: browserEnabled }"
+            type="button"
+            :aria-pressed="browserEnabled"
+            :disabled="sending"
+            title="让 Agent 用无头浏览器打开任意公网站点（只读、遵守 robots.txt）"
+            @click="toggleBrowser"
+          >
+            <AppIcon name="globe" :size="12" />
+            <span>浏览网页</span>
+          </button>
+
+          <div v-if="isEmpty" class="tool-tags">
+            <div v-for="tool in tools" :key="tool.label" class="tool-tag">
+              <AppIcon :name="tool.icon" :size="12" />
+              <span>{{ tool.label }}</span>
+            </div>
           </div>
+          <button v-else class="new-chat" type="button" @click="resetChat">
+            <AppIcon name="plus" :size="13" />
+            <span>新对话</span>
+          </button>
         </div>
-        <button v-else class="new-chat" type="button" @click="resetChat">
-          <AppIcon name="plus" :size="13" />
-          <span>新对话</span>
-        </button>
 
         <button
           v-if="!sending"
@@ -423,6 +498,95 @@ watch(
   word-break: break-word;
 }
 
+/* ---------- 调用过程 ---------- */
+
+.steps {
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.steps-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  line-height: normal;
+  color: var(--text-tertiary);
+  list-style: none;
+}
+
+/* 收起时必须给一个可见的展开提示（原生 marker 被 list-style:none 去掉了） */
+.steps-title::after {
+  content: '展开';
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.steps[open] > .steps-title::after {
+  content: '收起';
+}
+
+.steps-live {
+  color: var(--accent);
+}
+
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding: 7px 0 0;
+  border-top: 1px solid var(--divider);
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  line-height: 1.5;
+}
+
+.step.failed .step-detail {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.step-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.step-ok {
+  color: var(--accent);
+}
+
+/* 中间文本段：对话图标 + 正文色，与工具步骤（次要色）区分开 */
+.step-text {
+  color: var(--text-secondary);
+}
+
+.step-fail {
+  color: var(--text-tertiary);
+}
+
+.step-name {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.step-detail {
+  min-width: 0;
+  word-break: break-word;
+}
+
 .thinking {
   display: flex;
   align-items: center;
@@ -433,6 +597,15 @@ watch(
 
 .spin {
   animation: spin 0.9s linear infinite;
+}
+
+/*
+ * 助手头像的「思考中」旋转：刻意用 ease-in-out 而不是线性——每转一圈有加速↔减速的
+ * 呼吸感（用户 2026-10-20 反馈线性旋转像加载图标在空转）。只挂 `.avatar`，步骤里的
+ * 小 loader 仍用线性 `.spin`（尺寸小，缓动看不出差别）。
+ */
+.avatar--thinking {
+  animation: spin 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
 @keyframes spin {
@@ -510,6 +683,47 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.tools-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 「浏览网页」开关：与 tool-tag 同一观感，激活时用 accent（scoped 样式，不复用
+   ConfigPanel 的 .chip——那两个类名只在本组件内有效） */
+.browse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 6px 11px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.browse-toggle:hover:not(:disabled) {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.browse-toggle.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.browse-toggle:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .tool-tags {
