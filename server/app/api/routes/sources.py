@@ -45,6 +45,11 @@ from app.services.onboarding import (
     manage_source,
     register_source,
 )
+from app.sources.browser_any import (
+    BROWSER_SOURCE_KEY,
+    BROWSER_SOURCE_LABEL,
+    browser_source_available,
+)
 from app.sources.config import capability_summary
 from app.sources.registry import get_default
 
@@ -86,6 +91,34 @@ async def _builtin_dto() -> SourceDTO:
         entrypoints=[],
         supports_doc_types=bool(source.doc_types),
         notes=f"内置来源（{source.fetched_by}），随服务一起发布，不能删除或停用",
+    )
+
+
+def _browser_dto() -> SourceDTO:
+    """内置的「任意网站（无头浏览器）」来源。
+
+    `supports_doc_types=False` 让前端自动隐藏文种筛选；`keyword/date_server_side=False`
+    告诉前端这些筛选不是站点检索参数（发现循环会按目标挑选，但不是在服务端过滤）。
+    """
+    return SourceDTO(
+        id=None,
+        key=BROWSER_SOURCE_KEY,
+        label=BROWSER_SOURCE_LABEL,
+        level="other",
+        organization=None,
+        status="active",
+        builtin=True,
+        version=1,
+        verified=True,  # 内置能力，不需要来源接入验收
+        entrypoints=[],
+        supports_doc_types=False,
+        keyword_server_side=False,
+        date_server_side=False,
+        search_entrypoints=[],
+        notes=(
+            "内置来源（无头浏览器）：需要填写入口网址与浏览目标；只读浏览、遵守 robots.txt，"
+            "不支持定时任务。"
+        ),
     )
 
 
@@ -379,6 +412,8 @@ async def list_sources() -> SourceListResponse:
     能不能选：只有 `active` 的来源才应该被正式抓取任务用上。
     """
     items: list[SourceDTO] = [await _builtin_dto()]
+    if browser_source_available():
+        items.append(_browser_dto())
     try:
         rows = await repo.list_content_sources()
     except Exception:  # noqa: BLE001 - 表还没建 / 库不可用时至少给内置来源，页面不白屏

@@ -24,6 +24,7 @@ from app.agent.mcp import find_tool, tool_json
 from app.config import get_settings
 from app.data.agencies import FALLBACK_AGENCIES, FALLBACK_DOC_TYPES
 from app.schemas.task import FacetList, FacetOption, FacetSupports
+from app.sources.browser_any import BROWSER_SOURCE_KEY
 from app.sources.registry import get_by_label, get_default
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,23 @@ async def get_facets(
 
     `source` 省略或指向内置 gov.cn = 原有实时 facet 路径，行为不变。
     """
+    if source and get_by_label(source).key == BROWSER_SOURCE_KEY:
+        # 任意站点没有站内 facet 契约：不能落到下面的 gov.cn 实时统计，
+        # 否则浏览器来源会显示一批与入口毫无关系的发布机构 / 文种。
+        return FacetList(
+            agencies=[],
+            doc_types=[],
+            source="fallback",
+            supports=FacetSupports(
+                agencies=False,
+                doc_types=False,
+                keyword_server_side=False,
+                date_server_side=False,
+                note="任意网站（无头浏览器）没有站内检索与筛选项：由浏览目标与时间范围在发现循环里筛选",
+            ),
+            source_label=source,
+        )
+
     configured = _configured_source(source)
     if configured is not None:
         return _configured_facets(configured)

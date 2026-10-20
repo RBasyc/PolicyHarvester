@@ -156,6 +156,8 @@ async def create_task(
     keywords: list[str],
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
+    browse_url: str | None = None,
+    browse_goal: str | None = None,
     pipeline_overrides: dict[str, int | str | None] | None = None,
     schedule_job_id: int | None = None,
 ) -> int:
@@ -167,6 +169,10 @@ async def create_task(
     NULL = 用服务端 .env 默认。
 
     `schedule_job_id` 由定时调度器传入：标记本任务由哪个定时任务触发（跨轮去重与溯源用）。
+
+    `browse_url` / `browse_goal` 只对「任意网站（无头浏览器）」来源有值：入口网址由
+    `fetch_node` 的发现循环打开，目标交给模型筛选候选。与 overrides 同理**必须落库**——
+    第二段提取是确认后重建的，那时请求早已结束。
     """
     overrides = pipeline_overrides or {}
     async with get_pool().connection() as conn:
@@ -174,16 +180,18 @@ async def create_task(
             await cur.execute(
                 """
                 INSERT INTO crawl_task
-                    (source, date_from, date_to, keywords, agencies, doc_types, status,
+                    (source, date_from, date_to, keywords, agencies, doc_types,
+                     browse_url, browse_goal, status,
                      pipeline_max_policies, pipeline_per_keyword_limit,
                      pipeline_extract_concurrency, pipeline_max_body_chars, pipeline_mcp_timeout,
                      pipeline_model,
                      schedule_job_id)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
                     source, date_from, date_to, keywords, agencies or [], doc_types or [],
+                    browse_url, browse_goal,
                     overrides.get("pipeline_max_policies"),
                     overrides.get("pipeline_per_keyword_limit"),
                     overrides.get("pipeline_extract_concurrency"),

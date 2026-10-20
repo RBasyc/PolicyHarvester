@@ -10,6 +10,7 @@ import {
   facetsLoading,
   form,
   ingestMode,
+  isBrowserSource,
   loadFacets,
   loadPipelineConfig,
   pipelineConfig,
@@ -258,6 +259,35 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         </div>
       </div>
 
+      <!-- 任意网站（无头浏览器）：用「入口网址 + 自然语言目标」取代站点检索；
+           机构 / 文种这类站点筛选对它没有意义，下面的整行筛选项会隐藏 -->
+      <div v-if="isBrowserSource" class="field browse-field">
+        <p class="label">入口网址（必填）</p>
+        <input
+          v-model.trim="form.browse_url"
+          type="url"
+          class="browse-input"
+          placeholder="https://example.com/policy/"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="label">浏览目标（可选）</p>
+        <textarea
+          v-model="form.browse_goal"
+          class="browse-textarea"
+          rows="2"
+          maxlength="500"
+          placeholder="例如：找最近三个月与新能源相关的政策原文，收集 10 条"
+        ></textarea>
+        <div class="hint-row">
+          <AppIcon name="info" :size="12" class="hint-icon" />
+          <p class="hint-text">
+            无头浏览器会打开入口页并按目标浏览；仅公网站点，遵守 robots.txt，只读（不登录、不提交表单、不下载）。
+            关键词与时间范围仍作为筛选条件。
+          </p>
+        </div>
+      </div>
+
       <div class="divider"></div>
 
     <div class="field">
@@ -324,7 +354,7 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         </div>
       </div>
 
-      <div class="filter-row">
+      <div v-if="!isBrowserSource" class="filter-row">
         <div class="form-row">
           <div class="field grow">
             <p class="label">发布机构</p>
@@ -450,8 +480,9 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
 
       <div class="divider"></div>
 
-      <!-- 入库方式：一次性 = 顶栏「开始抓取」立即跑；定时 = 打开弹窗配置调度参数，之后自动触发 -->
-      <div class="field">
+      <!-- 入库方式：一次性 = 顶栏「开始抓取」立即跑；定时 = 打开弹窗配置调度参数，之后自动触发。
+           浏览器来源需要每轮提供入口网址，定时任务暂不支持（后端也会拒绝）。 -->
+      <div v-if="!isBrowserSource" class="field">
         <p class="label">入库方式</p>
         <div class="chips-row">
           <button
@@ -764,6 +795,41 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/* 「任意网站（无头浏览器）」的入口 / 目标输入框：与来源下拉、日期框同一观感 */
+.browse-field {
+  gap: 8px;
+}
+
+.browse-input,
+.browse-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.browse-textarea {
+  min-height: 56px;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.browse-input:focus,
+.browse-textarea:focus {
+  border-color: var(--accent);
+}
+
+.browse-input::placeholder,
+.browse-textarea::placeholder {
+  color: var(--text-tertiary);
 }
 
 .select-wrap {

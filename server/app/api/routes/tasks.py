@@ -86,6 +86,9 @@ async def create_task(payload: TaskCreate) -> TaskCreated:
             date_to=payload.date_to,
             agencies=payload.agencies,
             doc_types=payload.doc_types,
+            # 「任意网站（无头浏览器）」来源的入口 / 目标；其它来源传了 URL 会被服务层拒绝
+            browse_url=payload.browse_url,
+            browse_goal=payload.browse_goal,
             # 高级设置的本任务覆盖（None 的键 = 用服务端 .env 默认）
             pipeline_overrides={
                 "pipeline_max_policies": payload.pipeline_max_policies,
