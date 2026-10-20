@@ -54,14 +54,30 @@ die() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------ 小工具 ---
-# 读取 .env 里某个键的值（取最后一个赋值；容忍引号、空白、CRLF）
+# 读取 .env 里某个键的值（取最后一个赋值；容忍引号、空白、CRLF、行内注释）
+# 行内注释口径与 python-dotenv 一致：**未加引号**的值里，空白之后的 `#` 起注释。
+# 这一点很要紧：`.env.example` 里大量写成 `KEY=false   # 说明`，若不剥离注释，
+# `BROWSER_ENABLED` 会被读成 `true   # 总开关`，匹配不上 true/1/yes——脚本于是一直
+# 走普通 `uv sync`（不装 playwright），而服务端（pydantic-settings）却认为开关是开的。
 env_value() {
   [ -f "$ROOT/.env" ] || return 0
-  grep -E "^[[:space:]]*$1[[:space:]]*=" "$ROOT/.env" 2>/dev/null \
-    | tail -n 1 | cut -d= -f2- \
-    | tr -d '\r' \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-          -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true
+  local raw
+  raw="$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$ROOT/.env" 2>/dev/null \
+    | tail -n 1 | cut -d= -f2- | tr -d '\r')"
+  case "$raw" in
+    \"*)
+      raw="${raw#\"}"
+      raw="${raw%%\"*}"
+      ;;
+    \'*)
+      raw="${raw#\'}"
+      raw="${raw%%\'*}"
+      ;;
+    *)
+      raw="${raw%%[[:space:]]#*}"
+      ;;
+  esac
+  printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 # 该键在 .env 或当前 shell 环境里是否有「像样的」值（非空、非占位符）
@@ -259,15 +275,57 @@ check_ingest_judge() {
   return 0
 }
 
+check_browser() {
+  # 无头浏览器是**可选**能力：任何一项缺失都只提示，绝不阻断启动。
+  local enabled
+  enabled="$(env_value BROWSER_ENABLED | tr '[:upper:]' '[:lower:]')"
+  case "$enabled" in
+    true|1|yes) ;;
+    *) return 0 ;;
+  esac
+
+  if ! ( cd "$SERVER_DIR" && uv run python -c "import playwright" >/dev/null 2>&1 ); then
+    warn "BROWSER_ENABLED=true 但后端没装 playwright："
+    warn "  运行 (cd server) && uv sync --extra browser 后重试"
+    return 0
+  fi
+  ok "无头浏览器依赖已安装（playwright）"
+
+  # 只查 Chromium 可执行文件在不在（不启动浏览器）；首次安装后约 150MB。
+  if ( cd "$SERVER_DIR" && uv run python -c '
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    raise SystemExit(0 if Path(p.chromium.executable_path).exists() else 1)
+' >/dev/null 2>&1 ); then
+    ok "Chromium 内核就绪"
+  else
+    warn "未找到 Chromium 内核：运行 (cd server) && uv run playwright install chromium"
+    warn "  （浏览器来源与对话「浏览网页」将不可用；其余功能不受影响）"
+  fi
+  return 0
+}
+
 install_deps() {
   if [ "${START_SKIP_INSTALL:-0}" = "1" ]; then
     warn "已跳过依赖安装（START_SKIP_INSTALL=1）"
     return 0
   fi
 
-  step "同步后端依赖（uv sync）..."
-  ( cd "$SERVER_DIR" && uv sync ) || die "uv sync 失败，请检查网络或 uv 环境。"
-  ok "后端依赖就绪"
+  local browser_enabled
+  browser_enabled="$(env_value BROWSER_ENABLED | tr '[:upper:]' '[:lower:]')"
+  case "$browser_enabled" in
+    true|1|yes)
+      step "同步后端依赖（uv sync --extra browser）..."
+      ( cd "$SERVER_DIR" && uv sync --extra browser ) || die "uv sync --extra browser 失败，请检查网络或 uv 环境。"
+      ok "后端依赖就绪（含无头浏览器）"
+      ;;
+    *)
+      step "同步后端依赖（uv sync）..."
+      ( cd "$SERVER_DIR" && uv sync ) || die "uv sync 失败，请检查网络或 uv 环境。"
+      ok "后端依赖就绪"
+      ;;
+  esac
 
   step "检查前端依赖 ..."
   if [ -d "$WEB_DIR/node_modules" ] && [ ! "$WEB_DIR/pnpm-lock.yaml" -nt "$WEB_DIR/node_modules" ]; then
@@ -310,6 +368,10 @@ run_checks() {
   check_ports
   check_database
   check_ingest_judge
+  # start 模式放到 install_deps 之后查（见 do_start），避免首次安装前误报
+  if [ "$mode" = "check" ]; then
+    check_browser
+  fi
 
   printf '\n'
   if [ "$failed" = "1" ]; then
@@ -344,6 +406,7 @@ do_start() {
 
   install_deps
   ensure_mcp_build
+  check_browser
 
   mkdir -p "$RUN_DIR"
   trap on_interrupt INT TERM

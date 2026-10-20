@@ -14,6 +14,7 @@
 | 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
 | 换模型 / 网关      | `.env` 的 `MODEL_NAME`、`ANTHROPIC_*`，或往 `PIPELINE_MODELS` 注册表加一项                            |
 | 接入一个新网站     | 写一份 `SourceConfig`，**不要**写爬虫（见下）                                                         |
+| 改无头浏览器       | `server/app/browser/` + 两个提示词；导航必须过 `guard`（见下）                                        |
 
 ## Agent
 
@@ -29,6 +30,7 @@
 - New `SourceConfig` field: add it to `SourceConfig.config_fingerprint()`'s dump **only if it affects what gets fetched** (prose fields stay out), and to `.claude/skills/website-source-onboarding/references/config-schema.md` — that doc is a hand-kept mirror too.
 - Any write that changes `policy_document`/`extraction` rows must be followed by `refresh_task_counts()` so the derived counters stay honest.
 - **New per-site metadata does not get a column.** Add a `FieldRule` under `detail.fields` / `entrypoints[].item_fields`; non-reserved field names land in `policy_document.metadata` (JSONB) and are displayed as-is by the detail drawer. Only a field that *all* sources share and the SQL layer must filter/sort on belongs in `policy_document` columns — that's the four-place change below.
+- **Headless browser**: optional Playwright extra (`uv sync --extra browser` + `uv run playwright install chromium`), plus a second persisted entry pair `browse_url` / `browse_goal` (schema → repository → DTO → `types.ts`). Any new navigation path **must** call `guard.assert_navigation()` before acting and `assert_final_url()` after; every context must keep `context.route("**/*", route_handler)`. Never add a `page.goto` shortcut and never reuse a context across runs. See [browser.md](../architecture/browser.md).
 
 ## Adding a persisted field — four places, no generator
 

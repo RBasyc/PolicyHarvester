@@ -6,6 +6,8 @@ LLM 提示词集中放这里，一个提示词一个 `.md`，**文件名即键**
 | 文件 | 用在哪 | 什么时候读 |
 | --- | --- | --- |
 | `chat.md` | 对话 Agent 的系统提示（`app/agent/nodes.py`） | 每次调用模型时 → **改完即刻生效** |
+| `chat_browser.md` | 开启「浏览网页」时追加到对话系统提示（`app/agent/nodes.py`） | 每次调用模型时 → **改完即刻生效** |
+| `browser_browse.md` | 流水线「任意网站（无头浏览器）」发现循环的系统提示（`app/pipeline/browser_discovery.py`） | 每次发现运行时 → **改完即刻生效** |
 | `judge.md` | 入库判别服务的判别指令（`app/pipeline/judge.py`） | 每次判别时 → **改完即刻生效**（但会被 `.env` 的 `JUDGE_INSTRUCTIONS` 覆盖） |
 | `extract.md` | 正文提取的系统提示（`app/pipeline/extract.py`） | 模块常量，import 时读一次 → **改完要重启服务** |
 | `extract_json_fallback.md` | 提取回退到纯文本 JSON 时追加的指令 | 同上 → **改完要重启服务** |

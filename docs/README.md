@@ -15,6 +15,7 @@
 | 了解项目全貌、仓库布局、双图结构、错误契约 | [architecture/overview.md](architecture/overview.md) |
 | 改对话 Agent、加工具、MCP 接入、SSE | [architecture/chat-agent.md](architecture/chat-agent.md) |
 | 改抓取流水线、检索/判别/预检、调度、配置 | [architecture/data-pipeline.md](architecture/data-pipeline.md) |
+| 改无头浏览器抓取（任意网站 / JS 渲染页，对话与流水线双入口） | [architecture/browser.md](architecture/browser.md) |
 | **改 gov.cn 检索逻辑前**（一手实测证据） | [architecture/gov-cn-search-quirks.md](architecture/gov-cn-search-quirks.md) |
 | 接入一个新的网站来源（Skill / 9 个工具 / 页面入口） | [architecture/source-onboarding.md](architecture/source-onboarding.md) |
 | 命令、环境变量、脚本 | [guides/commands.md](guides/commands.md) |
@@ -31,6 +32,7 @@ docs/
 │   ├── overview.md               #   仓库布局 · 双图结构 · 错误契约
 │   ├── chat-agent.md             #   A. ReAct 对话 Agent
 │   ├── data-pipeline.md          #   B. 数据层 + 抓取/提取流水线 + 调度 + 配置
+│   ├── browser.md                #   D. 无头浏览器抓取（任意网站，双入口）
 │   ├── gov-cn-search-quirks.md   #   中文：gov.cn 官方检索参数一手实测对照
 │   └── source-onboarding.md      #   C. 网站来源接入
 ├── guides/                       # 英文：怎么做

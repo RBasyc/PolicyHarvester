@@ -16,6 +16,12 @@ dependencies = [
     "langfuse>=5.0.2",
 ]
 
+[project.optional-dependencies]
+# 无头浏览器（Phase 24）：只有需要「任意网站（无头浏览器）」时才装。
+#   uv sync --extra browser && uv run playwright install chromium
+# 未安装时 app/browser 仍可导入，/api/config/features 报 browser_available=false。
+browser = ["playwright>=1.49"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
