@@ -62,6 +62,9 @@ class PipelineState(TypedDict, total=False):
     date_to: date | None
     agencies: list[str]  # 发布机构分类（bmfl）
     doc_types: list[str]  # 文种（pcodeJiguan）
+    # 「任意网站（无头浏览器）」来源：有 browse_url 就走进发现循环，而不是按关键词检索
+    browse_url: str | None
+    browse_goal: str | None
     # 本任务覆盖的流水线参数（页面「高级设置」；缺失/None = 用 .env 全局默认，见 _effective）
     pipeline_max_policies: int | None
     pipeline_per_keyword_limit: int | None
@@ -84,10 +87,13 @@ def _effective(source: dict[str, Any] | None, key: str) -> int:
 
 async def prepare_node(state: PipelineState) -> dict:
     task_id = state["task_id"]
-    stage = (
-        f"正在连接 {get_by_label(state.get('source')).fetched_by}"
-        f"（抓取源：{state.get('source', '')}）"
-    )
+    if state.get("browse_url"):
+        stage = f"正在启动无头浏览器（入口：{state['browse_url']}）"
+    else:
+        stage = (
+            f"正在连接 {get_by_label(state.get('source')).fetched_by}"
+            f"（抓取源：{state.get('source', '')}）"
+        )
     await repo.set_task_running(task_id, stage)
     await repo.add_task_log(task_id, stage, tone="info")
     return {}
@@ -105,17 +111,26 @@ async def fetch_node(state: PipelineState) -> dict:
     library_urls = await repo.fetch_library_urls()
     judge_stats: dict[str, int] = {}
     try:
-        items = await _search_policies(
-            state.get("keywords") or [],
-            state.get("date_from"),
-            state.get("date_to"),
-            state.get("agencies") or [],
-            state.get("doc_types") or [],
-            overrides=state,
-            library_urls=library_urls,
-            target_new=cap,
-            judge_stats=judge_stats,
-        )
+        if state.get("browse_url"):
+            # 「任意网站（无头浏览器）」：发现循环收集候选，判别 / 正文预检与普通检索同一条路
+            items = await _browse_policies(
+                state,
+                library_urls=library_urls,
+                max_candidates=cap,
+                judge_stats=judge_stats,
+            )
+        else:
+            items = await _search_policies(
+                state.get("keywords") or [],
+                state.get("date_from"),
+                state.get("date_to"),
+                state.get("agencies") or [],
+                state.get("doc_types") or [],
+                overrides=state,
+                library_urls=library_urls,
+                target_new=cap,
+                judge_stats=judge_stats,
+            )
     except PipelineError as exc:
         return {"error": str(exc)}
 
@@ -214,6 +229,12 @@ def _empty_result_message(state: dict[str, Any]) -> str:
     返回的是空结果页，见 `build_search_url`）——只说「调整关键词」会让人以为是自己筛得太严。
     """
     message = "未检索到匹配的政策原文，请调整关键词、时间范围或筛选条件后重试"
+    if state.get("browse_url"):
+        return (
+            message
+            + "（提示：无头浏览器没有收集到候选。请确认入口网址是列表页、浏览目标足够具体；"
+            "robots.txt 拒绝或页面需要登录时，任务日志里有具体原因）"
+        )
     try:
         source = get_by_label(state.get("source"))
         search_names = source.filter_capabilities().get("search_entrypoints") or []
@@ -351,36 +372,14 @@ async def _search_policies(
             # 名额，翻页会继续补齐「建议入库」的。未启用 / fail-open（判别失败按建议
             # 入库）照常计数，与 fail-open 语义一致。
             if page_fresh:
-                batch = await judge.judge_rows(
-                    [
-                        {
-                            "source_url": it.get("url"),
-                            "title": it.get("title"),
-                            "agency": it.get("issuing_agency"),
-                            "doc_no": it.get("document_number"),
-                        }
-                        for it in page_fresh
-                    ]
-                )
-                for it in page_fresh:
-                    verdict = batch.verdicts.get(it.get("url"))
-                    if verdict:
-                        it["judge_tagged"] = verdict.tagged
-                        it["judge_prob"] = verdict.prob
-                # laya 通过（含 fail-open）的再抓全文预检——图片版页面壳与薄壳转发通知
-                # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）
-                await _preflight_bodies(
-                    source,
-                    [it for it in page_fresh if not it.get("judge_tagged")],
-                    mcp_timeout,
-                    judge_stats,
-                    overrides=overrides,
+                # laya 标题判别 + 正文预检（第二道筛）：筛选结果写回 item；被标注
+                # 「不建议入库」的不占 target_new 名额，翻页会继续补齐「建议入库」的。
+                await _judge_and_preflight(
+                    page_fresh, source, mcp_timeout, judge_stats, overrides=overrides
                 )
                 for it in page_fresh:
                     if not it.get("judge_tagged"):
                         new_count += 1
-                if judge_stats is not None and batch.failures:
-                    judge_stats["failures"] = judge_stats.get("failures", 0) + batch.failures
             page_of[combo] += 1
 
         rounds_done += 1
@@ -392,6 +391,152 @@ async def _search_policies(
             break
 
     return merged
+
+
+async def _judge_and_preflight(
+    items: list[dict[str, Any]],
+    source: PolicySource,
+    mcp_timeout: int,
+    judge_stats: dict[str, int] | None,
+    overrides: dict[str, Any] | None = None,
+) -> None:
+    """批量「laya 标题判别 → 正文预检」，结果写回 item 的 `judge_tagged` / `judge_prob`。
+
+    普通检索（逐页调用）与无头浏览器发现（收集完统一调用）共用这一处：两级筛选的
+    顺序与口径必须一致，否则同一篇在不同入口会得到不同结论。
+
+    字段兼容两套条目形状：gov.cn 用 `issuing_agency` / `document_number`，
+    浏览器 / 配置化来源用 `agency` / `doc_no`；URL 统一取 `url`。
+    """
+    if not items:
+        return
+    batch = await judge.judge_rows(
+        [
+            {
+                "source_url": it.get("url"),
+                "title": it.get("title"),
+                "agency": it.get("issuing_agency") or it.get("agency"),
+                "doc_no": it.get("document_number") or it.get("doc_no"),
+            }
+            for it in items
+        ]
+    )
+    for it in items:
+        verdict = batch.verdicts.get(it.get("url"))
+        if verdict:
+            it["judge_tagged"] = verdict.tagged
+            it["judge_prob"] = verdict.prob
+    # laya 通过（含 fail-open）的再抓全文预检——图片版页面壳与薄壳转发通知
+    # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）
+    await _preflight_bodies(
+        source,
+        [it for it in items if not it.get("judge_tagged")],
+        mcp_timeout,
+        judge_stats,
+        overrides=overrides,
+    )
+    if judge_stats is not None and batch.failures:
+        judge_stats["failures"] = judge_stats.get("failures", 0) + batch.failures
+
+
+def _in_date_window(
+    item: dict[str, Any],
+    source: PolicySource,
+    date_from: date | None,
+    date_to: date | None,
+) -> bool:
+    """按来源的日期规则复核条目是否落在时间窗口内（无日期 = 放行，交给提取阶段）。"""
+    return source.validate_item(
+        item,
+        keyword=None,
+        date_from=date_from,
+        date_to=date_to,
+        facet_active=False,
+    )
+
+
+async def _browse_policies(
+    state: PipelineState,
+    *,
+    library_urls: set[str],
+    max_candidates: int,
+    judge_stats: dict[str, int] | None,
+) -> list[dict[str, Any]]:
+    """「任意网站（无头浏览器）」的检索段：发现循环收集候选 → 日期复核 → 判别 / 预检。
+
+    发现循环（`browser_discovery.discover`）只负责点开页面并从真实快照里收集链接；
+    这里把结果收敛成与 `_search_policies` 相同的条目形状（`url/title/date/...`），
+    后面的落库、三分区、确认面板与日志完全复用 `fetch_node`。
+    """
+    task_id = state["task_id"]
+    source = get_by_label(state.get("source"))
+    entry = str(state.get("browse_url") or "")
+    goal = str(state.get("browse_goal") or "").strip()
+    date_from = state.get("date_from")
+    date_to = state.get("date_to")
+
+    # 多收集一些：预检可能剔除图片版/薄壳，判别也会标掉一部分；最终仍由 fetch_node 按
+    # pipeline_max_policies 截断。上限与 TaskCreate 的 50 对齐，防模型无限收集。
+    limit = max(1, min(max_candidates * 2, 50))
+    await repo.add_task_log(
+        task_id,
+        f"正在用无头浏览器浏览 {entry}（目标：{goal or '按时间范围收集政策原文'}）",
+        tone="active",
+    )
+
+    from app.pipeline.browser_discovery import discover
+
+    result = await discover(
+        task_id=task_id,
+        entry_url=entry,
+        goal=goal,
+        keywords=list(state.get("keywords") or []),
+        date_from=date_from,
+        date_to=date_to,
+        max_candidates=limit,
+        overrides=state,
+    )
+    items = list(result.get("items") or [])
+    await repo.add_task_log(
+        task_id,
+        f"浏览器发现结束：打开 {int(result.get('pages') or 0)} 页 · "
+        f"执行 {int(result.get('actions') or 0)} 步 · 收集 {len(items)} 个候选"
+        f"（{result.get('stop_reason') or '收集完成'}）",
+        tone="info",
+    )
+
+    # 发现阶段能拿到的日期先粗筛（详情页日期要等预检才会写回）
+    items = [it for it in items if _in_date_window(it, source, date_from, date_to)]
+    fresh = [
+        it for it in items if str(it.get("url") or "").strip() not in library_urls
+    ]
+    if fresh:
+        await _judge_and_preflight(
+            fresh,
+            source,
+            _effective(state, "pipeline_mcp_timeout"),
+            judge_stats,
+            overrides=state,
+        )
+
+    # 预检把详情页发布日期写回了条目：再按窗口复核一次（列表页日期可能缺失或不准）。
+    # 已在成果库的条目保留用于置灰展示，不做日期判定。
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for it in items:
+        if str(it.get("url") or "").strip() in library_urls:
+            kept.append(it)
+        elif _in_date_window(it, source, date_from, date_to):
+            kept.append(it)
+        else:
+            dropped += 1
+    if dropped:
+        await repo.add_task_log(
+            task_id,
+            f"浏览器候选有 {dropped} 篇日期不在所选时间范围，已丢弃",
+            tone="info",
+        )
+    return kept
 
 
 async def _preflight_bodies(
@@ -968,6 +1113,9 @@ async def run_pipeline(task_id: int) -> None:
         # 用 .get 防御未迁移的老库（schema 迁移是先决条件）
         "agencies": list(task_row.get("agencies") or []),
         "doc_types": list(task_row.get("doc_types") or []),
+        # 无头浏览器来源的入口 / 目标（普通来源为 None；.get 防御未迁移的老库）
+        "browse_url": task_row.get("browse_url"),
+        "browse_goal": task_row.get("browse_goal"),
         # 高级设置的本任务覆盖（老库没有这些列时为 None = 用 .env 默认）
         "pipeline_max_policies": task_row.get("pipeline_max_policies"),
         "pipeline_per_keyword_limit": task_row.get("pipeline_per_keyword_limit"),

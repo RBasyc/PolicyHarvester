@@ -86,6 +86,20 @@ class ScheduleCreate(ScheduleParams):
     pipeline_mcp_timeout: int | None = Field(None, ge=1, le=600)
     pipeline_model: str | None = Field(None, max_length=100, description="提取模型（.env PIPELINE_MODELS 的 id）")
 
+    @field_validator("source")
+    @classmethod
+    def _reject_browser_source(cls, value: str) -> str:
+        """定时任务没有「入口网址」字段，浏览器来源每个周期都无法执行——在入口拒绝。
+
+        `schedule_job` 表只存关键词/筛选条件，重建任务时也带不上 `browse_url`；
+        放行只会得到一份每轮必然失败的定时任务。
+        """
+        from app.sources.browser_any import BROWSER_SOURCE_KEY, BROWSER_SOURCE_LABEL
+
+        if value.strip() in (BROWSER_SOURCE_KEY, BROWSER_SOURCE_LABEL):
+            raise ValueError("定时任务暂不支持无头浏览器来源（需要每次提供入口网址）")
+        return value
+
     @field_validator("name")
     @classmethod
     def _clean_name(cls, value: str | None) -> str | None:

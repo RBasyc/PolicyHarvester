@@ -78,6 +78,8 @@ async def ingest_policies(
     date_to: str | None = None,
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
+    browse_url: str | None = None,
+    browse_goal: str | None = None,
     max_policies: int | None = None,
     task_id: int | None = None,
     policy_ids: list[int] | None = None,
@@ -106,6 +108,8 @@ async def ingest_policies(
         keywords: 检索关键词（可多个）；留空 = 该来源的最新文件。
         date_from / date_to: 时间范围（YYYY-MM-DD），留空 = 不限。
         agencies / doc_types: gov.cn 的发布机构分类与文种筛选（有哪些值先用 `get_policy_facets` 看）。
+        browse_url / browse_goal: 只有来源选「任意网站（无头浏览器）」时用：入口网址（必填）与
+            自然语言浏览目标（如「找最近三个月的储能政策」）。其它来源传 browse_url 会被拒绝。
         max_policies: 本任务最多处理多少篇（1–50，留空 = 服务端默认）。**提取按篇计费**，别贪多。
         task_id: `inspect` / `confirm` 用（`start` 的返回里有）。
         policy_ids: `confirm` 用——要入库的篇目 id（来自候选列表）；留空 = 按判别结果全部建议入库的
@@ -130,7 +134,8 @@ async def ingest_policies(
     try:
         if action == "start":
             return await _start(
-                svc, source, keywords, date_from, date_to, agencies, doc_types, max_policies
+                svc, source, keywords, date_from, date_to, agencies, doc_types,
+                browse_url, browse_goal, max_policies,
             )
         if action == "inspect":
             return await _inspect(svc, task_id)
@@ -149,6 +154,8 @@ async def _start(
     date_to: str | None,
     agencies: list[str] | None,
     doc_types: list[str] | None,
+    browse_url: str | None,
+    browse_goal: str | None,
     max_policies: int | None,
 ) -> str:
     start, err = _parse_date(date_from, "date_from")
@@ -168,6 +175,8 @@ async def _start(
         date_to=end,
         agencies=agencies or [],
         doc_types=doc_types or [],
+        browse_url=browse_url,
+        browse_goal=browse_goal,
         # 对话侧只覆盖「本任务最多几篇」；其余流水线参数沿用 .env 默认
         pipeline_overrides={"pipeline_max_policies": max_policies},
         origin="对话",

@@ -26,6 +26,10 @@ export interface TaskDTO {
   agencies: string[]
   /** 文种（pcodeJiguan，可多选） */
   doc_types: string[]
+  /** 「任意网站（无头浏览器）」的入口网址；普通来源为 null */
+  browse_url: string | null
+  /** 「任意网站（无头浏览器）」的自然语言浏览目标；普通来源为 null */
+  browse_goal: string | null
   status: TaskStatus
   stage: string | null
   /** 本任务覆盖的流水线参数（高级设置）；null = 该项用服务端 .env 默认 */
@@ -205,6 +209,10 @@ export interface TaskCreatePayload {
   agencies: string[]
   /** 文种（pcodeJiguan，可多选） */
   doc_types: string[]
+  /** 「任意网站（无头浏览器）」的入口网址（该来源必填）；其它来源传 null */
+  browse_url: string | null
+  /** 「任意网站（无头浏览器）」的自然语言浏览目标；可为 null */
+  browse_goal: string | null
   /** 本任务覆盖的流水线参数（高级设置，预填 .env 默认值）；null = 用服务端默认 */
   pipeline_max_policies: number | null
   pipeline_per_keyword_limit: number | null

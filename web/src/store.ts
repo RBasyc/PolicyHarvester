@@ -84,6 +84,9 @@ export const form = reactive<TaskCreatePayload>({
   keywords: [],
   agencies: [],
   doc_types: [],
+  // 「任意网站（无头浏览器）」来源的入口 / 目标（其它来源提交时置 null，见 startTask）
+  browse_url: null,
+  browse_goal: null,
   // 高级设置（流水线参数）：先置 null，bootstrap 拉到 .env 默认值后回填，用户可改，随任务提交
   pipeline_max_policies: null,
   pipeline_per_keyword_limit: null,
@@ -132,9 +135,28 @@ export const currentSource = computed(() =>
   sources.value.find((item) => item.label === form.source),
 )
 
-/** 当前来源是否支持文种筛选（配置化来源没有文种，选中时前端要隐藏该筛选项）。 */
+/** 「任意网站（无头浏览器）」来源的 key / label（与 server/app/sources/browser_any.py 一致）。 */
+export const BROWSER_SOURCE_KEY = 'browser_any'
+export const BROWSER_SOURCE_LABEL = '任意网站（无头浏览器）'
+
+/**
+ * 当前是否选中了浏览器来源。
+ *
+ * 来源清单尚未拉到 / 后端未下发该项时，`currentSource` 是 undefined；此时用 label 兜底，
+ * 保证表单切到浏览器来源后立刻隐藏机构/文种、显示入口网址（不等 sources 请求回来）。
+ */
+export const isBrowserSource = computed(
+  () =>
+    currentSource.value?.key === BROWSER_SOURCE_KEY ||
+    form.source === BROWSER_SOURCE_LABEL,
+)
+
+/** 当前来源是否支持文种筛选（配置化来源 / 浏览器来源没有文种，选中时前端要隐藏该筛选项）。 */
 export const sourceSupportsDocTypes = computed(
-  () => facets.value.supports.doc_types && currentSource.value?.supports_doc_types !== false,
+  () =>
+    !isBrowserSource.value &&
+    facets.value.supports.doc_types &&
+    currentSource.value?.supports_doc_types !== false,
 )
 
 /**
@@ -409,6 +431,24 @@ export async function bootstrap(): Promise<void> {
 
 /** 拉筛选器可选值（发布机构 / 文种）；失败时后端已回退静态名单，这里不弹错。 */
 export async function loadFacets(): Promise<void> {
+  if (isBrowserSource.value) {
+    // 任意站点没有站内 facet 接口：不发请求，直接把筛选项清空（入口网址由表单接住）。
+    facets.value = {
+      agencies: [],
+      doc_types: [],
+      source: 'fallback',
+      supports: {
+        agencies: false,
+        doc_types: false,
+        keyword_server_side: false,
+        date_server_side: false,
+        note: '任意网站（无头浏览器）没有站内检索与筛选项：由浏览目标与时间范围在发现循环里筛选',
+      },
+      source_label: form.source,
+    }
+    facetsLoading.value = false
+    return
+  }
   facetsLoading.value = true
   try {
     facets.value = await api.loadFacets({
@@ -479,7 +519,15 @@ export function setSource(label: string): void {
   form.source = label
   form.agencies = []
   form.doc_types = []
+  // 浏览器来源不能定时：把入库方式掰回一次性，否则顶栏按钮会去开定时弹窗
+  if (label === BROWSER_SOURCE_LABEL) ingestMode.value = 'once'
   void loadFacets()
+}
+
+/** 清空浏览器来源的入口 / 目标（切回普通来源时由表单调用，避免误提交）。 */
+export function clearBrowseFields(): void {
+  form.browse_url = null
+  form.browse_goal = null
 }
 
 /** 「高级设置」里的恢复默认：把各项重置回 .env 当前值（模型回默认项）。 */
@@ -530,6 +578,11 @@ export function subscribe(taskId: number): void {
 /** 点「开始抓取」：提交表单 → 立刻返回 task_id → 订阅进度。 */
 export async function startTask(): Promise<void> {
   if (starting.value) return
+  if (isBrowserSource.value && !(form.browse_url || '').trim()) {
+    // 浏览器来源没有入口网址 = 后端必然 400；在提交前就说清楚，别让用户等一个错误 toast
+    showToast('请填写「任意网站（无头浏览器）」的入口网址（http/https）', 'error')
+    return
+  }
   starting.value = true
   dismissToast()
   try {
@@ -539,6 +592,9 @@ export async function startTask(): Promise<void> {
       date_from: form.date_from || null,
       date_to: form.date_to || null,
       keywords: [...form.keywords],
+      // 入口 / 目标只对浏览器来源有意义：其它来源传了 URL 后端会直接拒绝
+      browse_url: isBrowserSource.value ? (form.browse_url || null) : null,
+      browse_goal: isBrowserSource.value ? (form.browse_goal || null) : null,
       pipeline_max_policies: form.pipeline_max_policies || null,
       pipeline_per_keyword_limit: form.pipeline_per_keyword_limit || null,
       pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,

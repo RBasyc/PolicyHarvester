@@ -33,6 +33,10 @@ class TaskDTO(BaseModel):
     agencies: list[str] = Field(default_factory=list)
     doc_types: list[str] = Field(default_factory=list)
 
+    # 「任意网站（无头浏览器）」来源的入口与目标（其它来源为 None）
+    browse_url: str | None = Field(None, description="浏览器发现的入口网址")
+    browse_goal: str | None = Field(None, description="自然语言浏览目标")
+
     # 本任务覆盖的流水线参数（页面「高级设置」；None = 用服务端 .env 默认）
     pipeline_max_policies: int | None = Field(None, ge=1, le=50)
     pipeline_per_keyword_limit: int | None = Field(None, ge=1, le=50)
@@ -70,6 +74,8 @@ class TaskDTO(BaseModel):
             )},
             agencies=list(row.get("agencies") or []),
             doc_types=list(row.get("doc_types") or []),
+            browse_url=row.get("browse_url"),
+            browse_goal=row.get("browse_goal"),
             # 本任务的流水线参数覆盖（老库没有这些列时为 None = 用全局默认）
             pipeline_max_policies=row.get("pipeline_max_policies"),
             pipeline_per_keyword_limit=row.get("pipeline_per_keyword_limit"),
@@ -147,6 +153,10 @@ class TaskCreate(BaseModel):
     agencies: list[str] = Field(default_factory=list, description="发布机构分类（bmfl），可多选")
     doc_types: list[str] = Field(default_factory=list, description="文种（pcodeJiguan），可多选")
 
+    # 「任意网站（无头浏览器）」来源：入口网址必填、目标可选（由服务层按来源校验）
+    browse_url: str | None = Field(None, max_length=2000, description="入口网址（http/https）")
+    browse_goal: str | None = Field(None, max_length=500, description="自然语言浏览目标")
+
     # 本任务覆盖的流水线参数（页面「高级设置」；不传 / 传 null = 用服务端 .env 默认）
     pipeline_max_policies: int | None = Field(None, ge=1, le=50, description="单次任务最多处理多少篇")
     pipeline_per_keyword_limit: int | None = Field(None, ge=1, le=50, description="每个关键词向 MCP 请求多少条")
@@ -183,6 +193,20 @@ class TaskCreate(BaseModel):
         if invalid:
             raise ValueError(f"未知文种：{'、'.join(invalid)}（可选：{'、'.join(DOC_TYPES)}）")
         return cleaned
+
+    @field_validator("browse_url")
+    @classmethod
+    def _check_browse_url(cls, value: str | None) -> str | None:
+        """入口网址必须是 http(s)（内网/robots 判定在服务层做，见 `ingestion.start_ingestion`）。"""
+        text = (value or "").strip()
+        if not text:
+            return None
+        from urllib.parse import urlparse
+
+        parsed = urlparse(text)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("入口网址必须是完整的 http(s) 地址（如 https://example.com/news）")
+        return text
 
     @field_validator("pipeline_model")
     @classmethod

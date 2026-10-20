@@ -45,6 +45,28 @@ Fans out over the `keyword × agency × doc_type` cartesian product under a **to
 
 **`fetch_node` partitions results three ways**, each capped at cap (`repo.fetch_library_urls()`, global across tasks): 建议入库 new rows fill the quota; judge-tagged and in-library rows are **still inserted** so the confirm panel can gray them out — both groups sink to the bottom (rank order 建议入库 → 不建议入库 → 已在库, matching the stage text), unchecked by default but still manually checkable.
 
+### Browser discovery (`browse_url` / `browse_goal`, Phase 24)
+
+When the task row carries `browse_url` (source 「任意网站（无头浏览器）」), `fetch_node` takes a
+different retrieval path — the rest of the stage is unchanged:
+
+- `_browse_policies()` calls `pipeline/browser_discovery.discover()`: a compact ReAct loop
+  (the chat model + `pipeline_browser_tools()`) opens the entry, reads numbered snapshots, and
+  collects candidates **only** through `browser_collect_links` (refs are resolved against the
+  real snapshot, so the model cannot invent URLs). It stops on `browser_finish`, no tool call,
+  or the `BROWSER_MAX_*` budget. The target is `min(2 × pipeline_max_policies, 50)`.
+- The collected items then go through the **same** `_judge_and_preflight()` helper used by
+  `_search_policies` (laya title judge → body preflight), and the date window is re-checked
+  after preflight filled detail-page dates. In-library rows are kept for grayed display.
+- Stage 2 re-reads `source` from the task row; `BrowserAnySource.fetch_fulltext()` reopens the
+  detail page with `manager.fetch_html()` (fresh context, same request guard) and parses the
+  rendered HTML with `parse_detail_page(html, DetailConfig(), url)` — the structural fallback,
+  no per-site selectors. Browser fetches queue behind `BROWSER_MAX_SESSIONS`.
+- `browse_url` / `browse_goal` are persisted columns (the two-stage graph rebuilds state from
+  the row); `TaskCreate` requires a complete http(s) URL for this source. Scheduled jobs reject
+  this source — there is no per-run entry URL.
+- Full design, security invariants and the tool table: [browser.md](browser.md).
+
 ### gov.cn search quirks (hard-won)
 
 The condensed rules — full measured evidence, tables and channel matrix in [gov-cn-search-quirks.md](gov-cn-search-quirks.md):
@@ -105,13 +127,13 @@ Two mechanics keep repeat runs honest:
 - **Cross-run + global-library URL dedup** — `_search_policies(exclude_urls=…)` = this job's history ∪ `fetch_library_urls()` (all tasks' extracted URLs), so a doc ingested by another job/manual task is never re-extracted; empty-after-dedup records `last_status='noop'`, not a failure.
 - **Sliding cursor** — a full run (hit `pipeline_max_policies`) advances `cursor_before` to *oldest fetched publish_date − 1 day* so the next run backfills older docs; a non-full run means the window is exhausted, so the cursor resets to NULL and the next run chases new docs over `[date_from, today]`.
 
-Schedule kinds: `minutely`/`hourly` (`interval_minutes`) + `daily`/`weekly` (`run_time`, `run_weekday` 0=Mon per Python `weekday()`); daily/weekly times are server-local. APIs: `GET|POST /api/schedules`, `POST /api/schedules/{id}/toggle|run`, `DELETE /api/schedules/{id}`. Triggered tasks carry `crawl_task.schedule_job_id` (`ON DELETE SET NULL`).
+Schedule kinds: `minutely`/`hourly` (`interval_minutes`) + `daily`/`weekly` (`run_time`, `run_weekday` 0=Mon per Python `weekday()`); daily/weekly times are server-local. `ScheduleCreate` rejects the browser source (`POST /api/schedules` → 400): a schedule row has no entry URL, so every run would fail. APIs: `GET|POST /api/schedules`, `POST /api/schedules/{id}/toggle|run`, `DELETE /api/schedules/{id}`. Triggered tasks carry `crawl_task.schedule_job_id` (`ON DELETE SET NULL`).
 
 **Re-entrancy (Phase 13)**: the loop is claim-first + serially awaited, so scheduler-triggered rounds of the same job never overlap (a round slower than its interval just fires again immediately after finishing — catch-up without pile-up); the real gap was the manual 「立即运行」 spawning an independent task, now guarded by an in-process `_running_jobs` set (the route returns **409** while a round is in flight; the guard is the TOCTOU backstop inside `run_schedule_job`, which is split into `_run_schedule_job_locked` so early returns can't leak the guard entry).
 
 ## Config (`app/config.py`)
 
-`pydantic-settings` reads the **repo-root** `.env` (path resolved from `__file__`, so CWD doesn't matter), and `load_dotenv()` is also called explicitly because the `anthropic` SDK reads `ANTHROPIC_*` straight from the environment. Pipeline knobs: `DATABASE_URL`, `DB_POOL_*`, `PIPELINE_MAX_POLICIES`, `PIPELINE_PER_KEYWORD_LIMIT`, `PIPELINE_MAX_SEARCH_CALLS`, `PIPELINE_EXTRACT_CONCURRENCY`, `PIPELINE_MAX_BODY_CHARS`, `PIPELINE_MCP_TIMEOUT`. Five of these plus the **extraction model** can be **overridden per task** from the page's collapsed 高级设置 section (values persist on `crawl_task.pipeline_*` columns; NULL = use the global default) — the second extraction stage re-reads them from the task row, so they must be persisted, not just passed in the create request.
+`pydantic-settings` reads the **repo-root** `.env` (path resolved from `__file__`, so CWD doesn't matter), and `load_dotenv()` is also called explicitly because the `anthropic` SDK reads `ANTHROPIC_*` straight from the environment. The headless browser adds `BROWSER_ENABLED/HEADLESS/MAX_*/TIMEOUT_SECONDS/NAVIGATION_TIMEOUT_MS/MODEL/ALLOWED_DOMAINS` (restart to change; see [browser.md](browser.md)). Pipeline knobs: `DATABASE_URL`, `DB_POOL_*`, `PIPELINE_MAX_POLICIES`, `PIPELINE_PER_KEYWORD_LIMIT`, `PIPELINE_MAX_SEARCH_CALLS`, `PIPELINE_EXTRACT_CONCURRENCY`, `PIPELINE_MAX_BODY_CHARS`, `PIPELINE_MCP_TIMEOUT`. Five of these plus the **extraction model** can be **overridden per task** from the page's collapsed 高级设置 section (values persist on `crawl_task.pipeline_*` columns; NULL = use the global default) — the second extraction stage re-reads them from the task row, so they must be persisted, not just passed in the create request.
 
 The model list itself comes from `.env`'s `PIPELINE_MODELS` JSON registry (Phase 12), **hot-read on every access** — `get_model_registry()` → `_live_env()` resolves real-shell-env > current `.env` file > boot-loaded `os.environ` (a snapshot `_REAL_ENV` taken *before* `load_dotenv`, because `load_dotenv` pollutes `os.environ` with file values) — so editing `.env` takes effect on the next request/creation/extraction **without a restart** (keys via `resolve_model_api_key()` too); the frontend refetches `/api/config/pipeline` when the 高级设置 panel opens and snaps a selection that vanished from the registry back to `default_model`. All entries speak the **Anthropic-compatible protocol** (one `ChatAnthropic` path in `_build_llm`): an entry without `base_url`/`api_key_env` reuses the `ANTHROPIC_*` gateway (Kimi Bearer header); DeepSeek entries set `base_url=https://api.deepseek.com/anthropic` + `api_key_env=DEEPSEEK_API_KEY` (standard `x-api-key`; no `langchain-openai` needed). Entries default to `thinking: false` — extraction builds the LLM with `thinking={"type": "disabled"}`; the chat agent is unaffected (it calls `_build_llm()` with no overrides, thinking param omitted). If the kimi gateway returns 0 tool calls under thinking-disabled, the JSON-text fallback still covers it. `get_model_registry()` degrades to a single-model list on parse failure; `crawl_task.pipeline_model` stores the **id**, `extraction.model` records the **actual model name** used. A stale id at run time falls back to the first entry (default) with a warning instead of failing.
 

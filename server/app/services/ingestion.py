@@ -33,7 +33,8 @@ from datetime import date
 from typing import Any
 
 from app.db import repositories as repo
-from app.sources.registry import all_sources, get, get_default
+from app.sources.browser_any import BROWSER_SOURCE_KEY, browser_source_available
+from app.sources.registry import all_sources, get, get_by_label, get_default
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ def available_sources() -> list[dict[str, Any]]:
     常量：配置化来源是随接入工作流长出来的，清单写死在工具里第二天就过期。
     """
     default_key = get_default().key
+    browser_ok = browser_source_available()
     return [
         {
             "key": source.key,
@@ -92,6 +94,9 @@ def available_sources() -> list[dict[str, Any]]:
             "default": source.key == default_key,
         }
         for source in all_sources()
+        # 浏览器来源始终在注册表里（服务端解析任务需要），但没装/没开时不该出现在
+        # 给模型/页面看的「可用来源」清单里——否则模型会去选一个注定 400 的来源。
+        if source.key != BROWSER_SOURCE_KEY or browser_ok
     ]
 
 
@@ -185,6 +190,8 @@ async def start_ingestion(
     date_to: date | None = None,
     agencies: list[str] | None = None,
     doc_types: list[str] | None = None,
+    browse_url: str | None = None,
+    browse_goal: str | None = None,
     pipeline_overrides: dict[str, int | str | None] | None = None,
     origin: str | None = None,
 ) -> int:
@@ -194,10 +201,40 @@ async def start_ingestion(
     `awaiting_confirmation`，**不会自己入库**——入库要等 `confirm_ingestion`。
     本函数立即返回，不等检索；要等就用 `wait_for_settled`。
 
+    `browse_url` / `browse_goal` 只对「任意网站（无头浏览器）」来源有效：前者是必填
+    入口地址，后者是发现循环的自然语言目标。非浏览器来源传了入口地址会直接拒绝
+    （否则用户以为它生效了，实际流水线走的是站点检索）。
     `pipeline_overrides` 是页面「高级设置」的直通口（键为 `pipeline_*` 列名，见
     `TaskCreate`）；对话侧只填 `pipeline_max_policies`，其余沿用 `.env` 默认。
     """
     _validate_range(date_from, date_to)
+
+    is_browser = get_by_label(source).key == BROWSER_SOURCE_KEY
+    url_value = (browse_url or "").strip() or None
+    goal_value = (browse_goal or "").strip()[:500] or None
+    if is_browser:
+        if not browser_source_available():
+            from app.browser import runtime as browser_runtime
+
+            raise IngestionRejected(browser_runtime.unavailable_reason())
+        if not url_value:
+            raise IngestionRejected("「任意网站（无头浏览器）」来源必须提供入口网址（browse_url）")
+        # 入口地址在建任务前先过安全校验（协议 / 公网 / 白名单）；此时还不查 robots，
+        # robots 是真正打开页面时由浏览器的 guard 判定（并给出可读的原因）。
+        from app.browser.guard import BrowserBlocked, ensure_navigable_sync
+
+        try:
+            url_value = await asyncio.to_thread(ensure_navigable_sync, url_value)
+        except BrowserBlocked as exc:
+            raise IngestionRejected(f"入口网址不可用：{exc}") from exc
+    else:
+        if url_value:
+            raise IngestionRejected(
+                "只有「任意网站（无头浏览器）」来源可以填写入口网址；"
+                f"当前来源「{source}」请改用关键词检索"
+            )
+        goal_value = None
+
     task_id = await repo.create_task(
         source=source,
         date_from=date_from,
@@ -205,22 +242,23 @@ async def start_ingestion(
         keywords=list(keywords or []),
         agencies=list(agencies or []),
         doc_types=list(doc_types or []),
+        browse_url=url_value,
+        browse_goal=goal_value,
         pipeline_overrides=_sanitize_overrides(pipeline_overrides),
     )
 
-    keyword_hint = "、".join(keywords) if keywords else "未设置"
-    filter_bits = []
-    if agencies:
-        filter_bits.append(f"发布机构：{'、'.join(agencies)}")
-    if doc_types:
-        filter_bits.append(f"文种：{'、'.join(doc_types)}")
-    filter_hint = ("；" + "；".join(filter_bits)) if filter_bits else ""
-    await repo.add_task_log(
-        task_id,
-        f"已创建抓取任务（源：{source}；关键词：{keyword_hint}{filter_hint}）"
-        + _origin_suffix(origin),
-        tone="info",
-    )
+    if is_browser:
+        log_line = f"已创建浏览器抓取任务（入口：{url_value}；目标：{goal_value or '未填写'}）"
+    else:
+        keyword_hint = "、".join(keywords) if keywords else "未设置"
+        filter_bits = []
+        if agencies:
+            filter_bits.append(f"发布机构：{'、'.join(agencies)}")
+        if doc_types:
+            filter_bits.append(f"文种：{'、'.join(doc_types)}")
+        filter_hint = ("；" + "；".join(filter_bits)) if filter_bits else ""
+        log_line = f"已创建抓取任务（源：{source}；关键词：{keyword_hint}{filter_hint}）"
+    await repo.add_task_log(task_id, log_line + _origin_suffix(origin), tone="info")
 
     # 延迟导入：`crawl_graph` 会拖上 pipeline 与 sources，路由历来在顶层导入它，
     # 但服务层被 agent 工具引用时（tools → ingestion_tools → services）顶层导入会成环。

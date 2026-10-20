@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS crawl_task (
     -- gov.cn 检索筛选项（对齐官网「发布机构分类 / 文种」；API 重复参数被静默忽略，多选由服务端扇出）
     agencies        TEXT[] NOT NULL DEFAULT '{}',             -- 发布机构分类（bmfl 参数，facetMap.bmfl 的键）
     doc_types       TEXT[] NOT NULL DEFAULT '{}',             -- 文种（pcodeJiguan 参数：国令/国发/国函/国办发/国办函）
+    -- 「任意网站（无头浏览器）」来源的入口与目标（NULL = 普通站点检索任务）
+    browse_url      TEXT,                                     -- 浏览器发现的入口网址（http(s)）
+    browse_goal     TEXT,                                     -- 自然语言目标（如「找最近三个月新能源政策」）
     -- 本任务覆盖的流水线参数（页面「高级设置」；NULL = 用服务端 .env 的全局默认）
     pipeline_max_policies        INTEGER,
     pipeline_per_keyword_limit   INTEGER,
@@ -96,6 +99,9 @@ CREATE TABLE IF NOT EXISTS crawl_task (
 -- 这里幂等补上「gov.cn 检索筛选项」列。只加列、不动数据，可重复执行（重跑 init.sh 安全）。
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS agencies  TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS doc_types TEXT[] NOT NULL DEFAULT '{}';
+-- 幂等补上「任意网站（无头浏览器）」入口 / 目标列（老库可重复执行）
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS browse_url  TEXT;
+ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS browse_goal TEXT;
 -- 幂等补上「本任务覆盖的流水线参数」列（页面高级设置；可重复执行）
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_max_policies        INTEGER;
 ALTER TABLE crawl_task ADD COLUMN IF NOT EXISTS pipeline_per_keyword_limit   INTEGER;

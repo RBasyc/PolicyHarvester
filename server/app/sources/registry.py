@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 
 from app.sources.base import PolicySource
+from app.sources.browser_any import BrowserAnySource
 from app.sources.gov_cn import GovCnSource
 
 logger = logging.getLogger(__name__)
@@ -146,3 +147,6 @@ async def load_configured_from_db() -> tuple[list[str], list[str]]:
 
 
 register(GovCnSource())
+# 无头浏览器来源始终注册（服务端按 label 解析任务时需要它）；是否**展示**给用户由
+# `browser_any.browser_source_available()` 决定（BROWSER_ENABLED + 装了 playwright）。
+register(BrowserAnySource())
