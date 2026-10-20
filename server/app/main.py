@@ -53,11 +53,29 @@ async def lifespan(app: FastAPI):
     get_graph()
     # 定时入库调度器：任务定义落库，这里重新武装循环（补排缺失 next_run_at 的启用任务）
     await start_scheduler()
+    # 无头浏览器：只报告可用性，**不预热 Chromium**（`available()` 只查开关 + playwright 包，
+    # 首次真正浏览时由 worker 线程懒启动；未安装时服务照常启动）。
+    try:
+        from app.browser import runtime as browser_runtime
+
+        if browser_runtime.available():
+            logger.info("无头浏览器可用；首次浏览时启动 Chromium")
+        else:
+            logger.info("无头浏览器不可用：%s", browser_runtime.unavailable_reason())
+    except Exception:  # noqa: BLE001 - 可用性检查失败不应阻断启动
+        logger.warning("浏览器可用性检查失败", exc_info=True)
     yield
-    # 关停顺序：先停调度循环，再取消在跑的抓取流水线，最后关连接池
+    # 关停顺序：先停调度循环，再取消在跑的抓取流水线（它们可能正持有浏览器会话），
+    # 然后关浏览器 worker 线程与 Chromium，最后关连接池
     # （否则流水线 / 调度器会用到已关闭的池）
     await shutdown_scheduler()
     await shutdown_pipelines()
+    try:
+        from app.browser import manager as browser_manager
+
+        await browser_manager.shutdown()
+    except Exception:  # noqa: BLE001 - 关停失败只告警
+        logger.warning("关闭无头浏览器失败", exc_info=True)
     await close_pool()
     # 可观测性：trace 是后台批量上报的，不 flush 会丢掉最后几条（未启用时是空操作）
     flush_tracing()

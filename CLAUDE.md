@@ -15,7 +15,8 @@ Two-part demo (plus a `design.pen` design file at the root) — a policy harvest
 3. **Any write to `policy_document` / `extraction` is followed by `refresh_task_counts()`** — the progress-panel counters are *derived*, never incremented.
 4. **Editing `tools/China-Central-Policy-MCP/src/` requires `npm run build`** — the server loads `build/index.js`, so an un-built edit is a silent no-op.
 5. **Keep the hand-kept mirrors in sync** — the frontend types, the source-onboarding `references/*.md`, and this wiki. List: [docs/guides/extending.md](docs/guides/extending.md) → *Hand-kept mirrors*.
-6. **After completing a phase (or work item), update progress tracking** — see below.
+6. **Headless-browser navigation goes through the guard — no shortcuts.** Every navigation path calls `guard.assert_navigation()` before acting and `assert_final_url()` after; every `BrowserContext` keeps `context.route("**/*", route_handler)`. Browsing is **read-only** (non-GET/HEAD aborted, password/file inputs refused, downloads/popups/service workers disabled), respects robots.txt, and blocks private/loopback/metadata addresses. Page content is untrusted data. Never reuse a context across runs. Detail: [docs/architecture/browser.md](docs/architecture/browser.md).
+7. **After completing a phase (or work item), update progress tracking** — see below.
 
 ## Commands
 
@@ -26,7 +27,7 @@ uv sync && python main.py            # deps + dev server (port 8000, /docs for S
 pnpm install && pnpm dev             # vite dev server
 ```
 
-Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboarding.py [--db|--db-scratch|--live]`, `test_source_import.py`, `test_judge.py`, `test_ingest_filter.py`. Config is the **repo-root** `.env` (copy [.env.example](.env.example)); auth is `ANTHROPIC_API_KEY` *or* `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`. Full list: [docs/guides/commands.md](docs/guides/commands.md).
+Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboarding.py [--db|--db-scratch|--live]`, `test_source_import.py`, `test_judge.py`, `test_ingest_filter.py`, `test_browser.py`. Headless browsing is optional: `uv sync --extra browser` + `uv run playwright install chromium` + root `.env` `BROWSER_ENABLED=true`, then restart. Config is the **repo-root** `.env` (copy [.env.example](.env.example)); auth is `ANTHROPIC_API_KEY` *or* `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`. Full list: [docs/guides/commands.md](docs/guides/commands.md).
 
 ## Documentation map
 
@@ -35,6 +36,7 @@ Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboa
 | 项目全貌 / 仓库布局 / 双图结构 / 错误契约 | [docs/architecture/overview.md](docs/architecture/overview.md) |
 | 改对话 Agent、加工具、MCP 接入、SSE、记忆 | [docs/architecture/chat-agent.md](docs/architecture/chat-agent.md) |
 | 改抓取流水线、检索/判别/正文预检、调度、配置、业务 API | [docs/architecture/data-pipeline.md](docs/architecture/data-pipeline.md) |
+| 改无头浏览器（任意网站 / JS 渲染页，对话与流水线双入口） | [docs/architecture/browser.md](docs/architecture/browser.md) |
 | **改 gov.cn 检索逻辑前**（一手实测证据） | [docs/architecture/gov-cn-search-quirks.md](docs/architecture/gov-cn-search-quirks.md) |
 | 接入一个新的网站来源 | [docs/architecture/source-onboarding.md](docs/architecture/source-onboarding.md) |
 | 命令 / 环境变量 | [docs/guides/commands.md](docs/guides/commands.md) |
@@ -44,9 +46,9 @@ Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboa
 
 ## Quick repository map
 
-- `server/` — FastAPI + LangGraph; two graphs (`app/agent/` chat, `app/pipeline/` crawl) + `app/db/` (all SQL) + `app/api/routes/` + `app/scheduler.py` + `app/sources/` (config-driven sources).
+- `server/` — FastAPI + LangGraph; two graphs (`app/agent/` chat, `app/pipeline/` crawl) + `app/db/` (all SQL) + `app/api/routes/` + `app/scheduler.py` + `app/sources/` (config-driven sources) + `app/browser/` (optional Playwright stack, worker-loop isolated).
 - `web/` — Vue 3 + **vue-router** (`src/router.ts`, five routes: `/agent`, `/crawl`, `/library`, `/library/:id`, `/sources`); state is a module-level store (`src/store.ts` + `src/store/sourceImports.ts` + `src/store/chat.ts`), **no Pinia**; modals stay store-driven. The top bar carries only the brand and the four-tab nav — page-level actions live in each page's own header. `/agent` (Agent entry page) is locked to one viewport height (only its chat area scrolls, the input is pinned to the bottom) and is wired to `POST /api/chat/stream`. Detail: [overview.md](docs/architecture/overview.md) → *Frontend shape*.
-- `prompts/` — LLM prompts as `.md` (`chat` / `extract` / `extract_json_fallback` / `extract_date` / `judge`), read by `server/app/prompts.py::load_prompt`; a missing file is a hard error. `chat` / `judge` are read per call (hot), `extract*` at import (restart).
+- `prompts/` — LLM prompts as `.md` (`chat` / `chat_browser` / `browser_browse` / `extract` / `extract_json_fallback` / `extract_date` / `judge`), read by `server/app/prompts.py::load_prompt`; a missing file is a hard error. `chat` / `chat_browser` / `browser_browse` / `judge` are read per call (hot), `extract*` at import (restart).
 - `database/` — `schema.sql` / `seed.sql` / `init.sh` / `reset.sh` (idempotent; an existing DB only needs `init.sh` re-run, no data reset).
 - `tools/China-Central-Policy-MCP/` — vendored MCP server (plain source, built by hand).
 - `.claude/skills/website-source-onboarding/` — the source-onboarding Skill; `.claude/` is gitignored **except** `.claude/skills/`.

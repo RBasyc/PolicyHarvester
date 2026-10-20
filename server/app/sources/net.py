@@ -235,6 +235,15 @@ async def _throttle(host: str) -> None:
         _last_request_at[host] = time.monotonic()
 
 
+async def throttle(host: str) -> None:
+    """同主机请求节流（公开入口）。
+
+    浏览器（`app/browser/guard.py`）不是 httpx 通道，但礼貌抓取的窗口应与网站来源
+    抓取共用同一份「上次请求时间」，否则同一次任务里 HTTP 与浏览器各算各的。
+    """
+    await _throttle(host)
+
+
 # ---------- robots.txt ----------
 
 _robots_cache: dict[str, RobotFileParser | None] = {}

@@ -116,6 +116,24 @@ class Settings(BaseSettings):
     source_artifact_dir: str = "server/.artifacts"
     source_max_artifacts_per_run: int = 20  # 单次试运行最多归档多少个附件（控体积与时长）
 
+    # --- 无头浏览器抓取（Phase 24）：Playwright + Chromium，可选依赖 `browser` -----------
+    # 未安装 Playwright 时服务照常启动：`BROWSER_ENABLED=true` 但包缺失只会让浏览器来源
+    # 从下拉框消失（GET /api/config/features 报 browser_available=false）。
+    browser_enabled: bool = False  # 总开关；安装后还要显式置 true
+    browser_headless: bool = True  # 调试时可设 false 看到 Chromium 窗口（服务器上别关）
+    browser_max_sessions: int = 2  # 同时打开的 BrowserContext 上限（交互会话 + 取全文共用）
+    browser_max_actions: int = 20  # 单次运行的动作预算（点击/输入/滚动/抽取都算）
+    browser_max_pages: int = 10  # 单次运行最多打开多少个页面
+    browser_max_extracts: int = 10  # 单次运行最多抽取多少篇正文
+    browser_timeout_seconds: int = 300  # 单次运行的总时长上限（超时后工具拒绝继续操作）
+    browser_navigation_timeout_ms: int = 30_000  # 单次导航超时（毫秒）
+    # 发现循环用的模型名；留空 = 对话模型 MODEL_NAME。**必须支持工具调用**，
+    # 所以这里只换模型名、不接 PIPELINE_MODELS 的自定义端点（那个注册表是给提取用的）。
+    browser_model: str | None = None
+    # 可选域名白名单（空 = 任意公网站点）。环境变量写法为 JSON 数组：
+    # BROWSER_ALLOWED_DOMAINS=["www.news.cn","gov.cn"]；命中域及其子域才允许访问。
+    browser_allowed_domains: list[str] = []
+
     # --- 可观测性：Langfuse / Litefuse（Phase 21）---
     # **自托管实例**（本仓默认 http://localhost:3000），trace 只发往这里，不出本机；
     # Litefuse 与 Langfuse 的 SDK 兼容，所以沿用 LANGFUSE_* 这套变量名。
