@@ -41,6 +41,7 @@
 | 20 | 对话里直接入库（`ingest_policies` 工具 + 服务层抽取） | 🟨 进行中（代码完成，未构建未运行；见下） | — |
 | 21 | 可观测性：对话与流水线接入 Langfuse / Litefuse（自托管） | 🟨 进行中（根 span 泄漏修复完成，待重启验收） | — |
 | 22 | 字段提取通用化（FieldRule DSL + 结构分析自动生成 + metadata 落库） | 🟨 进行中（代码与离线用例完成，**未构建未运行**；待实机验收） | — |
+| 24 | 无头浏览器抓取（流水线「任意网站」+ 对话「浏览网页」双入口） | 🟨 进行中（代码完成，**未构建未运行**；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1005,4 +1006,71 @@ pnpm dev
 - [x] **发布日期模型兜底（2026-10-19）**：结构解析拿不到发布日期时，由模型从页面内容补提一个；补不到就留空、前端统一显示「无日期」，补到时明确标注「模型提取」。**补提放在正文预检阶段（确认之前）**，确认面板即可看到日期；预检关闭/模型不可用时提取阶段再兜底一次。实现：`prompts/extract_date.md`（只认页面明确写出的发布日期，禁止拿成文/施行日期顶替或推测）+ `pipeline/extract.py::extract_publish_date`（独立小调用、只认 `YYYY-MM-DD`、未来/过早日期丢弃、失败 fail-open）+ `crawl_graph._preflight_bodies`（详情页结构没解析到日期时用整页文本 `FulltextResult.page_text` 补提，写回 `it["date"]` + `it["date_source"]="model"`）+ `crawl_graph._backfill_model_publish_date`（提取阶段兜底，仅在 `publish_date` 仍为空时触发）+ `policy_document.publish_date_source`（NULL=页面解析，`model`=模型补提；预检结果经 `insert_policies` 落库）+ 四处镜像（`repositories` / `schemas` / `types.ts` / `v_policy_results`）+ 前端确认面板、结果表、详情抽屉、成果库卡片/详情标注。**待用户 `database/init.sh` 补列 + 重启 server 后重抓验收**；历史行不会自动补提，需要重新提取
 - [ ] **待实机验收**：① `cd server && uv run python scripts/test_source_import.py`（§14–15 应全过；其余离线用例不受影响）；② `database/init.sh` 补 `metadata` 列后重跑一次「导入网址」——详情页抽屉应出现索引号/成文日期等自定义字段；③ 找一个 `dt/dd` 或 `span 标签 + 父节点值` 的真实站，确认日期/机构/文号不再为空；④ 老来源（仅有 `*_selectors`）行为不变；⑤ 构造一篇页面无日期/日期在正文容器外的政策，确认结果表出现「模型提取」标注、原文确实写了该日期
 - [ ] **本阶段不做（有意）**：让模型生成/执行任意代码（规则仍是数据）；伪类 / `+` / `~` 选择器（引擎能力边界）；对非日期字段做跨样本恒定值核对（同栏目同机构恒定是合理的）
+
+---
+
+## Phase 24 — 无头浏览器抓取（流水线「任意网站」+ 对话「浏览网页」双入口）
+
+**状态**：🟨 进行中（代码完成，**未构建、未运行**，待实机验收） ｜ **目标**：解决「只能抓已接入来源」的边界——JS 渲染站点（列表由脚本生成）用静态 HTML + 选择器取回空壳，任意网址又必须先走一整套来源接入。接入 Playwright + Chromium，用**本项目自己的 ReAct/LangGraph 循环**驱动（参考 `C:\Users\MP\Desktop\webagent` 的编号 DOM 快照与动作集，不用它的 planner/executor），在 `/crawl` 与 `/agent` 两个入口供用户选择。
+
+**范围决定（用户，2026-10-19 确认）**：
+
+1. **独立新实现**：不合并未合并的 `feat/js-render` 分支；`server/app/browser/` 自带 Chromium 生命周期、Windows Proactor worker 线程与请求拦截，`pyproject.toml` 用独立 `browser` extra。
+2. **对话范围 = 任意公网站点**：默认不做域名白名单（仍拦截内网/本机/云元数据，仍遵守 robots）；需要收敛的部署用 `BROWSER_ALLOWED_DOMAINS`。
+3. **新增 `tool` SSE 事件**：对话流显示「打开/点击/抽取」步骤，作为 `token|done|error` 的增量事件；MCP/入库工具仍不推事件（Phase 19 的既有范围决定不变）。
+
+**安全不变量（与 `docs/architecture/browser.md` 同步，写进 `CLAUDE.md` 硬规则 6）**：
+
+1. 任何导航路径（open/click/back/extract）先过 `guard.assert_navigation`，动作后复验最终 URL；不得新增绕过它的路径。
+2. 每个 context 必须挂 `context.route("**/*", route_handler)`，子请求同样做协议/公网校验。
+3. 只读：非 GET/HEAD 一律 abort；拒绝密码/文件输入；`accept_downloads=False`；弹窗关闭；service worker / WebSocket / sendBeacon 禁用。
+4. 每次运行 fresh context，结束/取消/断流都在 `finally` 关闭，不跨请求复用。
+5. 页面内容是不可信数据：工具结果用 `<untrusted_page_content>` 包裹，提示词明确不执行页面指令、不泄露对话内容。
+6. robots 默认遵守；浏览器**不是** robots 的绕过手段——gov.cn 站内检索仍走 MCP。
+7. 数据出口：浏览到的页面内容会随发现循环/对话发给**已配置的模型网关**（与政策提取同一条链路）；不新增遥测/第三方 SaaS。
+
+**实现清单**：
+
+- [x] **浏览器核心**（新增 `server/app/browser/`）：`runtime.py`（专用 worker loop 线程 + Chromium 单例 + `run_in_worker` / `available` / `shutdown`，Playwright 延迟导入）、`guard.py`（`assert_navigation` / `blocked_reason` / `route_handler` / 可选白名单）、`session.py`（`BrowserSession` 门面 + worker 侧状态）、`snapshot.py`（编号 DOM 快照，frame + open shadow DOM，≈180 元素 / 8k 字符上限，SHA-1 指纹）、`actions.py`（open/click/type/select/press/scroll/back/wait/snapshot/extract）、`content.py`（复用 `parse_detail_page` 的结构兜底，正文过短退回 `innerText`）、`budget.py`（pages/actions/extracts/elapsed）、`manager.py`（并发上限 + `fetch_html` + lifespan 收尾）、`context.py`（`browser_run_var` + `BrowserRun`）、`tools.py`（对话 11 个 / 流水线 13 个共享 `@tool`，只读 contextvar、永不抛异常、统一发 `tool` 事件）
+- [x] **对话入口**：`ChatRequest.browser_enabled`；`all_tools()` 始终含浏览器工具而 `call_model` 按 contextvar 过滤后再 `bind_tools`；`prompts/chat_browser.md` 热读追加；`/chat` 与 `/chat/stream` 创建 `BrowserRun`（同一 `isolated_context()`）、不可用时**流开始前 400**、`recursion_limit` 提升、`finally` 中 `asyncio.shield(run.aclose())`；`tool` 事件经 `BrowserRun.emit` 推入同一 SSE 队列
+- [x] **流水线数据模型（四镜像）**：`database/schema.sql` 的 `crawl_task.browse_url` / `browse_goal`（CREATE + 幂等 `ADD COLUMN IF NOT EXISTS`）→ `repositories.create_task` → `schemas/task.py`（`TaskCreate` 校验 http(s) 与目标长度；浏览器源必须有入口，非浏览器源传了入口则拒绝）→ `web/src/api/types.ts`；`services/ingestion.py` / `routes/tasks.py` / `agent/ingestion_tools.py` 透传
+- [x] **`BrowserAnySource`**（`server/app/sources/browser_any.py`，注册表内置源）：`key=browser_any`、`label=任意网站（无头浏览器）`、`fulltext_date_is_publish=True`；`fetch_fulltext` 经 `manager.fetch_html` 重开详情页 → `parse_detail_page` → 映射 title/agency/doc_no/date/attachments/metadata/page_text；正文为空抛错走预检失败；`search` 明确不支持；能力声明覆盖为「取回后过滤」；浏览器不可用时从来源列表隐藏
+- [x] **发现循环**（`server/app/pipeline/browser_discovery.py`）：紧凑 async ReAct（`_build_llm()` + `bind_tools(pipeline_browser_tools())`，`BROWSER_MODEL` 可覆盖模型名）；system = `prompts/browser_browse.md` + 任务约束；候选**只能**来自 `browser_collect_links` 对当前真实快照链接的解析（模型不能编 URL），空则退回已批量抽取的详情页；每步写 `task_log` / stage
+- [x] **`fetch_node` 分支**：`browse_url` 存在时走 `_browse_policies`，与 `_search_policies` 共用新抽出的 `_judge_and_preflight`（批量判别 → 未标注项正文预检），之后按日期窗口**再过滤一次**（预检补出的日期可能越界）并记录丢弃数；落库 / 三分区 / `refresh_task_counts()` / 确认闸门完全复用；第二阶段 `run_extraction_phase` 的覆盖参数已含 `source`（Phase 22 的修复），`BrowserAnySource.fetch_fulltext` 重开详情页，其余路径不变
+- [x] **定时任务隔离**：`ScheduleCreate` 命中浏览器源时返回「定时任务暂不支持无头浏览器来源」，避免生成每轮必失败的任务
+- [x] **前端**：`types.ts`（`ChatRequest.browser_enabled`、`ChatStreamEvent` 加 `tool`、任务字段、`FeatureFlags`）、`client.ts::features()`、`store.ts`（`browseUrl`/`browseGoal`、`loadFeatures`、浏览器源跳过 facet）、`ConfigPanel.vue`（入口网址必填 + 浏览目标 textarea + URL 校验）、`store/chat.ts`（`browserEnabled` 切换；SSE 分支改为显式 `token`/`tool`/`error`/`done`，**未知类型忽略**；`steps` 记录）、`AgentPage.vue`（「浏览网页」开关 + 浏览过程渲染）
+- [x] **配置 / 安装 / 可用性**：`config.py` 的 `browser_*`（enabled/headless/max_sessions/max_actions/max_pages/max_extracts/timeout/navigation_timeout/model/allowed_domains）；`pyproject.toml` 独立 `browser` extra（`playwright>=1.49`）；`.env.example` 整段说明与安装三步；`start.sh` 在 `BROWSER_ENABLED=true` 时 `uv sync --extra browser` 并**非阻塞**提示 Playwright/Chromium 缺失；`GET /api/config/features` 返回 `browser_available`；lifespan 收尾 `browser.manager.shutdown()`
+- [x] **测试脚本**：新增 `server/scripts/test_browser.py`——离线覆盖 guard（注入 DNS：协议/私网/元数据/白名单/路由层 GET-HEAD 规则）、预算、快照格式化、正文解析、`BrowserAnySource` 归一/日期窗口/能力声明；本地假站点（JS 生成列表 + 详情页）跑 open/snapshot/collect/extract/`fetch_fulltext`，Chromium 缺失则 skip 并打印安装提示
+- [x] **文档与镜像**：新增 `docs/architecture/browser.md`（架构、双入口、工具表、7 条安全不变量、预算、限制与数据出口）；更新 `docs/README.md`、`docs/architecture/overview.md` / `chat-agent.md` / `data-pipeline.md`、`docs/guides/commands.md` / `extending.md`、`prompts/README.md`（`chat_browser.md` / `browser_browse.md`，均热读）、根 `CLAUDE.md`（硬规则 6 + 文档地图 + 仓库地图 + prompts 列表）
+- [ ] **验证证据（静态——本会话未构建、未运行）**：Python 侧仅做语法/import 与工具注册面核对，`test_browser.py` **未执行**；前端未跑 `pnpm build`（硬规则 1）。运行时结论以用户实机执行为准
+- [x] **静态复核与修复（2026-10-19）**：独立只读复核全部改动文件，发现 `AgentPage.vue` 一处 `v-if` 链缺陷——新插入的「浏览过程」`<details v-if>` 把后面的「等待态 / MarkdownText」`v-else-if` / `v-else` 从用户气泡的 `v-if` 上截走：有浏览步骤的助手消息会**不渲染正文**，用户消息则会**重复渲染**。已改为两条独立链：`details` 自带 `v-if="assistant && steps.length"`；等待态 `v-if="assistant && streaming && !content"`、`MarkdownText v-else-if="assistant"`。其余核对项（工具注册/contextvar 生命周期/SSE `tool` 事件形状/流水线分支/四镜像字段/`BrowserAnySource` 接口/前端 `features()` 与状态命名）未发现缺陷
+- [x] **首次实跑缺陷修复（2026-10-19，用户执行 `test_browser.py` 报错）**：`ImportError: cannot import name 'BrowserBlocked' from partially initialized module 'app.browser.guard'`。根因是**新增的模块级导入把既有导入顺序搅成了环**：`guard.py` 顶层 `from app.sources import net` 会执行 `app/sources/__init__.py` → `registry` → `gov_cn` → `agent.mcp` → `agent.tools` → `browser.tools` → `guard`（此时 `BrowserBlocked` 尚未定义）；同理 `browser/content.py` 顶层导入 `app.sources.{config,html_source,util}`，会在「先 import `app.agent.tools`」的启动顺序下形成 `tools → browser.tools → actions → content → sources → … → mcp → tools`。修法：两处都改为**函数内延迟导入**（`guard._net()`；`content.extract()` 内导入解析三件套），`BrowserAnySource` 早已按同一原则做局部导入。导入图层面的根因写在两处注释里，防止以后又改回顶层导入。**只读导入验证**（现有 `.venv`，未起服务/未起 Chromium/未跑用例）：`import app.agent.tools, app.agent.mcp, app.main, app.browser.guard, app.sources` → `IMPORT OK`（覆盖 `main.py` 的「tools 先于 mcp」顺序）；`import app.browser.guard; import app.sources.net; import app.sources.browser_any; import app.pipeline.browser_discovery; import app.pipeline.crawl_graph; import app.services.ingestion` → `IMPORT OK`（覆盖 `test_browser.py` 的「guard 先导入」顺序）
+- [x] **第二轮实跑缺陷修复（2026-10-19，`test_browser.py` 53 通过 / 4 失败）**：失败集中在「结构解析取到正文 / 正文来源为 html / 解析出标题 / `fetch_fulltext` 解析出标题」。根因**不是产品代码**：`html_source._fallback_container` 有意要求候选容器文本 ≥ 200 字（宁可失败也不把导航/页脚当正文），而两处测试夹具的 `.article` 只有约 140 字，兜底正确地拒绝了它，`parse_detail_page` 随即早退（标题赋值的代码在容器判定之后）。修法：给 `scripts/test_browser.py` 的两份假详情页各补两段正文（容器约 260 字，更接近真实政策页），**产品阈值不动**。只读验证：`test_content()` 4/4 通过；`content.extract(_DETAIL_PAGE)` → `body_source=html` 且标题非空
+- [x] **依赖安装（2026-10-19，用户明确要求「你帮我装好」后由助手执行）**：`cd server && uv sync --extra browser`（+3 包：`playwright==1.64.0` / `greenlet==3.5.6` / `pyee==14.0.0`）→ `uv run --extra browser playwright install chromium`。只读验证：`find_spec("playwright")` 为真；`chromium.executable_path = C:\Users\MP\AppData\Local\ms-playwright\chromium-1248\chrome-win64\chrome.exe` 且存在。**注意**：此前 `uv run playwright ...` 报 `program not found` 是因为当时 venv 里确实没有 Playwright（不是命令写错）；`uv run` 默认非 exact（`uv sync` 默认 exact），所以之后用 `uv run python main.py` 不会移除该 extra，但**普通 `uv sync` 会**——请用 `./start.sh` 或 `uv sync --extra browser`
+- [x] **脚本启动缺陷修复（2026-10-19，「用脚本启动后看不到浏览器入口」）**：`.env` 写成 `BROWSER_ENABLED=true                 # 总开关`，而 `start.sh::env_value` 直接取 `=` 之后的整段、**不剥离行内注释**，于是读到 `true                 # 总开关`，匹配不上 `true|1|yes` → `install_deps` 走**普通 `uv sync`**（默认 exact，会把之前 `--extra browser` 装上的 Playwright 移除），`check_browser()` 也因此静默返回；服务端用 pydantic-settings 解析同一个 `.env` 却正确得到 `true` → `runtime.available()` 因 `find_spec("playwright")` 为 False 而返回假 → `/api/sources` 不下发 `browser_any`、`/api/config/features` 的 `browser_available=false`，前端两个入口一起消失。修法：重写 `start.sh::env_value`，按 python-dotenv 的口径剥离行内注释——**未加引号**的值从「空白 + `#`」处截断，带引号的值取到闭合引号为止；同时容忍 CRLF 与首尾空白。只读验证（对真实 `.env` 跑函数）：`BROWSER_ENABLED=[true]`、`ANTHROPIC_BASE_URL=[https://api.deepseek.com/anthropic]`。**未执行 `./start.sh`、未重装依赖**（硬规则 1）。用户恢复步骤：`./start.sh`（现在会跑 `uv sync --extra browser`）→ `cd server && uv run playwright install chromium` → 重启 server → `GET /api/config/features` 应为 `browser_available: true`、`GET /api/sources` 应含 `browser_any`
+
+**已知限制 / 残余风险**：不做登录、cookie 持久化、上传/下载、截图/视觉、反爬绕过；POST 搜索表单会被只读策略拒绝；Chromium 自行 DNS 有 TOCTOU；任意公网浏览存在提示词注入面（只读 + 预算 + 不可信内容提示缓解）；风控站点可能返回空壳；`SOURCE_ALLOW_PRIVATE_HOSTS=true` 会同样放宽浏览器（默认 false）；浏览器工具结果会进入 `InMemorySaver` 会话历史，靠快照上限与动作预算控制膨胀。与未合并的 `feat/js-render` 保持隔离（不 import `sources/render.py`），将来合并需把两套 worker loop / 浏览器生命周期收敛为一套。
+
+**待实机验收**（用户执行，指标与判定标准见根目录 [验收-无头浏览器.md](验收-无头浏览器.md)）：
+
+```bash
+# 1) 依赖（注意是 --extra browser，默认 sync 不会装 Playwright）
+cd server && uv sync --extra browser && uv run playwright install chromium
+# 2) 根目录 .env: BROWSER_ENABLED=true，然后重启 server
+# 3) 离线 + 本地假站点用例（无需外网；Chromium 缺失会 skip 并提示）
+uv run python scripts/test_browser.py
+# 4) 启动
+uv run python main.py
+# 5) 前端
+cd web && pnpm dev
+```
+
+1. `/crawl` 来源选「任意网站（无头浏览器）」→ 入口 `https://www.news.cn/politics/` + 目标 → 进度面板出现「浏览器：…」阶段 → 候选停在确认闸门 → 勾选确认 → 提取完成、成果库可见。
+2. `/agent` 打开「浏览网页」→「打开 `https://www.news.cn/politics/`，找 3 条时政新闻，给标题和链接」→ 看到 step 列表（打开/快照/抽取）→ 回答中的链接可打开。
+3. 负例：入口 `http://127.0.0.1:8000` 被拒并给出明确原因；robots 拒绝的入口给出 robots 文案而不是静默失败；`POST` 表单站点返回「只读模式不支持提交」。
+4. 预算：连续动作超过 `BROWSER_MAX_ACTIONS` 后工具返回预算耗尽，模型应总结已有结果。
+5. 不可用降级：`BROWSER_ENABLED=false`（或未装 extra）→ 来源下拉无浏览器项、对话无「浏览网页」开关，其余功能照常；`BROWSER_ENABLED=true` 但 Chromium 缺失 → `start.sh check` 给出非阻塞提示，请求返回 400 安装说明。
+6. 老库需先 `cd database && bash init.sh`（幂等，补 `browse_url` / `browse_goal` 两列，不重置数据）。
+
+**本阶段不做（有意）**：登录/验证码/付费墙、文件上传下载、截图与视觉理解、浏览器 trace 落盘、定时任务的浏览器模式、把 webagent 的 planner/executor 搬进来。
 

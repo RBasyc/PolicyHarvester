@@ -192,6 +192,25 @@ POST /api/policies/{id}/reextract  → { "status": "extracting" } # 重新提取
 
 ---
 
+> **Phase 8 之后的实施明细以 [TODO.md](TODO.md) 为准**（本文档只保留最初 1–7 的总体计划）。以下 Phase 24 为 2026-10-19 追加的提纲，验收与清单见 TODO.md。
+
+### Phase 24 — 无头浏览器抓取（流水线「任意网站」+ 对话「浏览网页」双入口）
+
+**背景**：现有链路只能抓已接来来源（gov.cn 走 MCP、配置化来源走静态 HTML + 选择器）。JS 渲染站点的列表由脚本生成，静态取回是空壳；临时给一个网址又必须先走整套来源接入。参考 `C:\Users\MP\Desktop\webagent` 的浏览器层（编号 DOM 快照 + 点击/输入/批量抽取），但 **planner/executor 不用**——两个入口都复用本项目自己的 ReAct 循环。
+
+**架构**：Playwright 对象全部留在专用 worker loop（Windows 用 Proactor，与 psycopg 需要的 Selector 隔离），主事件循环经 `run_in_worker()` 派发；每次运行一个全新 `BrowserContext`，所有导航与子请求过 `guard`。新增包 `server/app/browser/`（runtime / guard / session / snapshot / actions / content / budget / manager / context / tools）。
+
+**两个入口**：
+
+- `/crawl`：内置来源「任意网站（无头浏览器）」，`crawl_task` 持久化 `browse_url` / `browse_goal`；`fetch_node` 分支到发现循环，候选只取真实快照里的链接，判别/预检/落库/确认闸门/第二阶段全部复用。
+- `/agent`：`browser_enabled` 开关，开启时按 contextvar 给模型挂 `browser_*` 工具并追加 `chat_browser.md`；新增 `tool` SSE 事件展示浏览步骤。
+
+**安全口径**：只读（非 GET/HEAD 拦截）、拦截内网/本机/云元数据、默认遵守 robots、每次运行 fresh context、页面内容视为不可信数据。**数据出口**：浏览到的页面内容会发给已配置的模型网关（与政策提取同一条链路），不新增任何遥测。详见 [docs/architecture/browser.md](docs/architecture/browser.md)。
+
+**验证**：`server/scripts/test_browser.py`（离线门禁 + 本地假站点集成，Chromium 缺失则 skip）；实机按 [TODO.md](TODO.md) → Phase 24 的验收清单执行。安装三步：`uv sync --extra browser` → `uv run playwright install chromium` → 根 `.env` 设 `BROWSER_ENABLED=true`。
+
+---
+
 ## 五、关键决策（请确认）
 
 | # | 决策点 | 我的建议 |
