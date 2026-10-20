@@ -14,18 +14,18 @@ from functools import lru_cache
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import tools_condition
 
-from app.agent.nodes import call_model
+from app.agent.nodes import call_model, call_tools
 from app.agent.state import AgentState
-from app.agent.tools import all_tools
 
 
 def build_graph() -> StateGraph:
     builder = StateGraph(AgentState)
 
     builder.add_node("agent", call_model)
-    builder.add_node("tools", ToolNode(all_tools()))
+    # call_tools = 预置 ToolNode + 普通工具的 SSE start/done 事件（见 nodes.py）
+    builder.add_node("tools", call_tools)
 
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", tools_condition)

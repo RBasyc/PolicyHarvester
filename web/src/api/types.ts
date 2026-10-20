@@ -685,12 +685,22 @@ export interface SourceTrialPayload {
 /**
  * 对话流事件（对应 server/app/api/routes/agent.py::chat_stream）。
  *
- * 只有三种，**没有** task / import 流那种快照事件：对话流不发工具调用事件
- * （用户决定，见 TODO Phase 19 的范围），服务端只推模型输出的文本片段，
- * `done` 是正常收尾（客户端主动断开时服务端不发）。
+ * - `token`：模型输出的文本片段；
+ * - `tool` ：浏览器动作步骤（start = 开始，done = 结束并带回 ok）；只有开启「浏览网页」时才有；
+ * - `done` ：正常收尾（客户端主动断开时服务端不发）；
+ * - `error`：服务端错误。
  */
+export interface ChatToolEvent {
+  type: 'tool'
+  name: string
+  detail: string
+  status: 'start' | 'done'
+  ok: boolean
+}
+
 export type ChatStreamEvent =
   | { type: 'token'; content: string }
+  | ChatToolEvent
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -698,4 +708,13 @@ export type ChatStreamEvent =
 export interface ChatRequest {
   message: string
   thread_id: string
+  /** 本请求是否挂载无头浏览器（模型可见 browser_* 工具） */
+  browser_enabled?: boolean
+}
+
+/** 功能开关（GET /api/config/features）：可用 ≠ 已启用，前端据此决定是否显示开关。 */
+export interface FeatureFlags {
+  /** BROWSER_ENABLED=true 且装了 playwright（不启动 Chromium） */
+  browser_available: boolean
+  browser_enabled: boolean
 }

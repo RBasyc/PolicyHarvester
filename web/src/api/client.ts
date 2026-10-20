@@ -10,6 +10,7 @@ import type {
   ChatRequest,
   ChatStreamEvent,
   FacetList,
+  FeatureFlags,
   ImportStreamEvent,
   LibraryListResponse,
   LibraryMeta,
@@ -165,6 +166,9 @@ export const api = {
 
   /** 生效的流水线参数（只读）；改配置走根目录 .env + 重启服务。 */
   pipelineConfig: () => request<PipelineConfig>('/config/pipeline'),
+
+  /** 功能开关（目前是无头浏览器可用性；不启动 Chromium）。 */
+  features: () => request<FeatureFlags>('/config/features'),
 
   // ---- 定时入库（Phase 11） ----
   listSchedules: () => request<ScheduleJobDTO[]>('/schedules'),

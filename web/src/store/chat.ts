@@ -12,11 +12,21 @@
 
 import { computed, ref } from 'vue'
 
-import { ApiError, streamChat } from '../api/client'
+import { ApiError, api, streamChat } from '../api/client'
 
 export type ChatRole = 'user' | 'assistant'
 /** streaming=在飞 / done=正常收尾 / stopped=用户点了停止（半截内容保留） / error=流内或网络错误 */
 export type ChatMessageStatus = 'streaming' | 'done' | 'stopped' | 'error'
+
+/** 工具/中间文本步骤（`tool` SSE 事件）：start 时追加，done 时回填 ok；text=true 是被
+ * 新一轮顶掉的中间文本段（无工具往返，直接记为 done，见 sendMessage 的 segReset 逻辑）。 */
+export interface ChatStep {
+  name: string
+  detail: string
+  status: 'start' | 'done'
+  ok: boolean
+  text?: boolean
+}
 
 export interface ChatMessage {
   id: string
@@ -24,6 +34,14 @@ export interface ChatMessage {
   content: string
   status: ChatMessageStatus
   error?: string
+  /** 本轮工具调用与被顶掉的中间文本（`tool` 事件驱动；没有工具调用时为空） */
+  steps?: ChatStep[]
+  /**
+   * 段标记：出现过 `tool` 事件后置 true，下一个 token 到来时**清空重计**而不是追加。
+   * ReAct 每轮工具调用之间会各输出一段中间文本，全部追加会把「第 1 段 + 第 2 段」
+   * 连成一片；逐段替换则始终只展示最新一段，直到进入最终回答。
+   */
+  segReset?: boolean
 }
 
 function randomId(prefix: string): string {
@@ -34,6 +52,28 @@ function randomId(prefix: string): string {
 export const messages = ref<ChatMessage[]>([])
 /** 有在飞的流：驱动「发送 ↔ 停止」按钮态，同时充当防重入闸 */
 export const sending = ref(false)
+
+/** 无头浏览器：可用（后端装了 playwright 且 BROWSER_ENABLED=true）≠ 本次已开启。 */
+export const browserAvailable = ref(false)
+/** 「浏览网页」开关：只对**下一次发送**生效；发送中不可切换（同一请求的 run 已建好）。 */
+export const browserEnabled = ref(false)
+
+/** 拉功能开关；后端不可用时保持隐藏，不弹错（对话页照常可用）。 */
+export async function loadFeatures(): Promise<void> {
+  try {
+    const flags = await api.features()
+    browserAvailable.value = flags.browser_available
+    if (!browserAvailable.value) browserEnabled.value = false
+  } catch {
+    /* 静默：开关默认隐藏 */
+  }
+}
+
+/** 切换「浏览网页」；生成中不允许改（界面也会 disable）。 */
+export function toggleBrowser(): void {
+  if (sending.value || !browserAvailable.value) return
+  browserEnabled.value = !browserEnabled.value
+}
 
 export const isEmpty = computed(() => messages.value.length === 0)
 
@@ -67,16 +107,52 @@ export function sendMessage(raw: string): void {
   void (async () => {
     try {
       await streamChat(
-        { message: text, thread_id: threadId },
+        {
+          message: text,
+          thread_id: threadId,
+          browser_enabled: browserEnabled.value,
+        },
         {
           onEvent: (event) => {
-            if (event.type === 'token') {
-              const last = messages.value.at(-1)
-              if (last?.role === 'assistant') last.content += event.content
-            } else if (event.type === 'error') {
-              settleLast('error', event.message)
-            } else {
-              settleLast('done') // 正常收尾
+            switch (event.type) {
+              case 'token': {
+                const last = messages.value.at(-1)
+                if (last?.role === 'assistant') {
+                  if (last.segReset) {
+                    // 新一轮（工具调用之后）的第一段：气泡里清掉上一段中间文本，只展示
+                    // 最新一段；被顶掉的那段收进「调用过程」列表，不丢信息
+                    if (last.content.trim()) {
+                      const steps = (last.steps ??= [])
+                      steps.push({
+                        name: 'say',
+                        detail: last.content,
+                        status: 'done',
+                        ok: true,
+                        text: true,
+                      })
+                    }
+                    last.content = event.content
+                    last.segReset = false
+                  } else {
+                    last.content += event.content
+                  }
+                }
+                break
+              }
+              case 'tool': {
+                const last = messages.value.at(-1)
+                // 标记下一段 token 要重开：模型这一轮说了什么会在工具结果回来后作废
+                if (last?.role === 'assistant') last.segReset = true
+                recordToolStep(event)
+                break
+              }
+              case 'error':
+                settleLast('error', event.message)
+                break
+              case 'done':
+                settleLast('done')
+                break
+              // 未知事件类型忽略：以后新增的增量事件不应把消息误判成「已完成」
             }
           },
         },
@@ -94,6 +170,49 @@ export function sendMessage(raw: string): void {
       }
     }
   })()
+}
+
+/**
+ * `tool` 事件 → 最后一条助手消息的调用步骤。
+ *
+ * `start` 追加一条；`done` 回填**最近一条同名且仍在 start 的**步骤（并发的同名动作也
+ * 能依次配对），配不上就补一条 done（服务端在客户端连上之前的极短窗口内发完时）。
+ */
+function recordToolStep(event: {
+  name: string
+  detail: string
+  status: 'start' | 'done'
+  ok: boolean
+}): void {
+  const last = messages.value.at(-1)
+  if (!last || last.role !== 'assistant') return
+  const steps = (last.steps ??= [])
+  if (event.status === 'start') {
+    steps.push({
+      name: event.name,
+      detail: event.detail,
+      status: 'start',
+      ok: false,
+    })
+    return
+  }
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const step = steps[i]
+    if (step.name === event.name && step.status === 'start') {
+      Object.assign(step, {
+        status: 'done',
+        ok: event.ok,
+        detail: event.detail || step.detail,
+      })
+      return
+    }
+  }
+  steps.push({
+    name: event.name,
+    detail: event.detail,
+    status: 'done',
+    ok: event.ok,
+  })
 }
 
 /** 停止当前生成：断开连接，半截内容保留并标注「已停止」。 */

@@ -10,6 +10,13 @@ class ModelOption(BaseModel):
     label: str
 
 
+class FeatureFlags(BaseModel):
+    """功能可用性（前端据此显示/隐藏入口；只读，不触发任何浏览器启动）。"""
+
+    browser_available: bool
+    browser_enabled: bool
+
+
 class PipelineConfig(BaseModel):
     """抓取 / 提取流水线的生效参数（来自 .env 的 `PIPELINE_*`，只读）。"""
 
