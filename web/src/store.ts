@@ -231,7 +231,8 @@ function showToast(
 ): void {
   toast.value = { message, kind, retry, actionLabel }
   if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => (toast.value = null), 8000)
+  // 5s 自动收起（原 8s，右下角提示不需要停留太久；带「重试」的提示同样可手动点关闭）
+  toastTimer = setTimeout(() => (toast.value = null), 5000)
 }
 
 /**
