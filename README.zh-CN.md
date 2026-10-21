@@ -6,7 +6,7 @@
   <a href="README.md">English</a> | <b>简体中文</b>
 </p>
 
-# PolicyHarvester
+# 
 
 **一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
 
