@@ -6,8 +6,6 @@ const props = withDefaults(defineProps<{ name: string; size?: number }>(), {
 })
 
 const icons: Record<string, string> = {
-  wheat:
-    '<path d="M2 22 16 8"/><path d="M3.47 12.53 5 11l1.53 1.53a3.5 3.5 0 0 1 0 4.94L5 19l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M7.47 8.53 9 7l1.53 1.53a3.5 3.5 0 0 1 0 4.94L9 15l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M11.47 4.53 13 3l1.53 1.53a3.5 3.5 0 0 1 0 4.94L13 11l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M20 2h2v2a4 4 0 0 1-4 4h-2V6a4 4 0 0 1 4-4Z"/><path d="M11.47 17.47 13 19l-1.53 1.53a3.5 3.5 0 0 1-4.94 0L5 19l1.53-1.53a3.5 3.5 0 0 1 4.94 0Z"/><path d="M20 13.7V11a4 4 0 0 0-4-4h-2"/><path d="M20 9.7V7a4 4 0 0 0-4-4h-2"/>',
   'loader-circle': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
