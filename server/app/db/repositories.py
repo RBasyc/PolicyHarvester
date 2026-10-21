@@ -22,11 +22,13 @@ class PolicyRow(TypedDict, total=False):
     title: str
     source_url: str
     publish_date: date | None
-    # 日期来源：None=页面解析；"model"=预检/提取阶段模型补提（见 crawl_graph）
+    # 字段来源：None=页面解析；"model"=预检/提取阶段模型补提（见 crawl_graph）
     publish_date_source: str | None
     source_name: str | None
     agency: str | None
+    agency_source: str | None
     doc_no: str | None
+    doc_no_source: str | None
     catalog: str | None
     fetched_by: str | None
     judge_tagged: bool | None  # 入库判别标注（Phase 13）：True=不建议入库；None=未判别
@@ -292,9 +294,9 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                     """
                     INSERT INTO policy_document
                         (task_id, title, publish_date, publish_date_source,
-                         source_name, source_url, agency, doc_no, catalog,
-                         fetched_by, fetched_at, judge_tagged, judge_prob, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s, %s::jsonb)
+                         source_name, source_url, agency, agency_source, doc_no, doc_no_source,
+                         catalog, fetched_by, fetched_at, judge_tagged, judge_prob, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s, %s::jsonb)
                     ON CONFLICT (task_id, source_url) DO NOTHING
                     """,
                     (
@@ -305,7 +307,9 @@ async def insert_policies(task_id: int, policies: list[PolicyRow]) -> None:
                         policy.get("source_name"),
                         policy["source_url"],
                         policy.get("agency"),
+                        policy.get("agency_source"),
                         policy.get("doc_no"),
+                        policy.get("doc_no_source"),
                         policy.get("catalog"),
                         policy.get("fetched_by"),
                         policy.get("judge_tagged"),
@@ -332,8 +336,8 @@ async def update_policy_from_fulltext(
     `metadata` 用 JSONB 的 `||` **浅合并**：详情页字段规则取到的新键覆盖同名旧键，
     没取到的键保留（与 `COALESCE` 同口径，不拿空字典把列表轮结果抹掉）。
 
-    返回回填后的 `publish_date`（调用方据此判断要不要让模型补提日期）；本条解析到了
-    日期时顺带把 `publish_date_source` 清回 NULL——页面解析的日期永远优先于旧模型值。
+    返回回填后的生效行（日期/机构/文号及其来源）：调用方据此判断要不要让模型补提。
+    本条解析到了某个字段时顺带把对应 `*_source` 清回 NULL——页面解析永远优先于旧模型值。
     """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
@@ -341,7 +345,15 @@ async def update_policy_from_fulltext(
                 """
                 UPDATE policy_document
                 SET agency       = COALESCE(NULLIF(%s, ''), agency),
+                    agency_source = CASE
+                        WHEN NULLIF(%s, '') IS NOT NULL THEN NULL
+                        ELSE agency_source
+                    END,
                     doc_no       = COALESCE(NULLIF(%s, ''), doc_no),
+                    doc_no_source = CASE
+                        WHEN NULLIF(%s, '') IS NOT NULL THEN NULL
+                        ELSE doc_no_source
+                    END,
                     publish_date = COALESCE(%s, publish_date),
                     publish_date_source = CASE
                         WHEN %s::date IS NOT NULL THEN NULL
@@ -350,10 +362,13 @@ async def update_policy_from_fulltext(
                     fulltext     = COALESCE(NULLIF(%s, ''), fulltext),
                     metadata     = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
                 WHERE id = %s
-                RETURNING publish_date
+                RETURNING publish_date, agency, agency_source,
+                          doc_no, doc_no_source, publish_date_source
                 """,
                 (
                     agency,
+                    agency,
+                    doc_no,
                     doc_no,
                     publish_date,
                     publish_date,
@@ -365,24 +380,46 @@ async def update_policy_from_fulltext(
             return await cur.fetchone()
 
 
-async def fill_publish_date_from_model(policy_id: int, publish_date: date) -> bool:
-    """模型从页面内容补提的发布日期：**只填空值**，绝不覆盖结构解析的结果。
+async def fill_fields_from_model(
+    policy_id: int,
+    *,
+    publish_date: date | None = None,
+    agency: str | None = None,
+    doc_no: str | None = None,
+) -> Row | None:
+    """模型从页面内容补提的元信息：**只填空值**，绝不覆盖结构解析的结果。
 
-    返回是否真的写入；`publish_date_source='model'` 让前端能标注「模型提取」，
-    与页面解析的日期区分开（用户核对原文时知道该看哪一个）。
+    三个字段可一次写入（模型一次调用同时补提），各自只在原值为空时生效并标
+    `*_source='model'`——前端据此标注「模型提取」，与页面解析的值区分开。
+    返回更新后的生效行；调用方据 `*_source` 判断这次实际写了哪些字段。
     """
     async with get_pool().connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 UPDATE policy_document
-                SET publish_date = %s,
-                    publish_date_source = 'model'
-                WHERE id = %s AND publish_date IS NULL
+                SET publish_date = COALESCE(publish_date, %s),
+                    publish_date_source = CASE
+                        WHEN publish_date IS NULL AND %s::date IS NOT NULL THEN 'model'
+                        ELSE publish_date_source
+                    END,
+                    agency = COALESCE(NULLIF(agency, ''), %s),
+                    agency_source = CASE
+                        WHEN NULLIF(agency, '') IS NULL AND NULLIF(%s, '') IS NOT NULL THEN 'model'
+                        ELSE agency_source
+                    END,
+                    doc_no = COALESCE(NULLIF(doc_no, ''), %s),
+                    doc_no_source = CASE
+                        WHEN NULLIF(doc_no, '') IS NULL AND NULLIF(%s, '') IS NOT NULL THEN 'model'
+                        ELSE doc_no_source
+                    END
+                WHERE id = %s
+                RETURNING publish_date, publish_date_source,
+                          agency, agency_source, doc_no, doc_no_source
                 """,
-                (publish_date, policy_id),
+                (publish_date, publish_date, agency, agency, doc_no, doc_no, policy_id),
             )
-            return cur.rowcount > 0
+            return await cur.fetchone()
 
 
 async def set_task_running(task_id: int, stage: str) -> None:
@@ -640,7 +677,8 @@ async def mark_extraction_failed(policy_id: int, error: str) -> None:
 _LIBRARY_LATEST_CTE = r"""
 WITH latest AS (
     SELECT DISTINCT ON (p.source_url)
-        p.id, p.title, p.agency, p.doc_no, p.publish_date, p.publish_date_source,
+        p.id, p.title, p.agency, p.agency_source, p.doc_no, p.doc_no_source,
+        p.publish_date, p.publish_date_source,
         p.metadata->>'signed_date' AS signed_date,
         p.source_url, p.source_name, p.created_at,
         e.extracted_at, e.info_summary,

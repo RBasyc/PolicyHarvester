@@ -1,6 +1,6 @@
 """提示词集中管理：从仓库根 `prompts/*.md` 读取。
 
-提示词原来散在代码里（chat / extract / extract_json_fallback / extract_date / judge 五处），
+提示词原来散在代码里（chat / extract / extract_json_fallback / extract_fields / judge 五处），
 改一句要翻代码、还容易改漏；集中成 md 文件后，调提示词不用碰 Python。
 
 约定：一个提示词一个文件，**文件名即键**。缺文件直接抛错（RuntimeError 带绝对路径），

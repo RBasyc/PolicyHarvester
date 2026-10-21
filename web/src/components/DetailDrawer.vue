@@ -166,16 +166,30 @@ function formatDateTime(value: string | null): string {
           </div>
           <h2 class="drawer-title">{{ meta?.title ?? '加载中…' }}</h2>
           <div class="meta-row">
-            <span v-if="meta?.agency">发文机关：{{ meta.agency }}</span>
+            <span v-if="meta?.agency">
+              发文机关：{{ meta.agency }}
+              <span
+                v-if="meta.agency_source === 'model'"
+                class="model-tag"
+                title="页面结构未解析到发文机关，该机关由模型从页面内容提取，建议核对原文"
+              >模型提取</span>
+            </span>
             <span v-if="meta">
               发布日期：{{ meta.publish_date ?? '无日期' }}
               <span
                 v-if="meta.publish_date_source === 'model'"
-                class="model-date-tag"
+                class="model-tag"
                 title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
               >模型提取</span>
             </span>
-            <span v-if="meta?.doc_no">文号：{{ meta.doc_no }}</span>
+            <span v-if="meta?.doc_no">
+              文号：{{ meta.doc_no }}
+              <span
+                v-if="meta.doc_no_source === 'model'"
+                class="model-tag"
+                title="页面结构未解析到文号，该文号由模型从页面内容提取，建议核对原文"
+              >模型提取</span>
+            </span>
             <span v-for="entry in metaEntries" :key="entry.key">
               {{ entry.label }}：{{ entry.value }}
             </span>
@@ -454,7 +468,7 @@ function formatDateTime(value: string | null): string {
   color: var(--text-secondary);
 }
 
-.model-date-tag {
+.model-tag {
   display: inline-block;
   margin-left: 4px;
   padding: 0 6px;
