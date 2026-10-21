@@ -1146,3 +1146,10 @@ cd web && pnpm dev
 - [x] **导入向导主行动作置顶**：`ImportSection.vue` 把「启用该来源」动作条提到验收报告上方（原来在页尾，得一路翻到底），状态说明与按钮一眼可见
 - [x] **图标补齐**：`AppIcon.vue` 补 `chart-column`
 - [ ] **实机验收待用户执行**：`cd web && pnpm dev` → ① 提示从右下角滑入、5s 自动收起；② `/agent` 空态不再有能力标签、输入区居中收窄；③ 来源页导入向导顶部出现「启用该来源」条
+
+## Phase 30 — 仓库协作说明：AGENTS.md
+
+**状态**：🟩 已完成（2026-10-21） ｜ **目标**：把散在 `CLAUDE.md` / `docs/guides` 里的硬规则与「从文件名看不出来的架构事实」收敛成一份根级说明，coding agent 进场就能读到
+
+- [x] **AGENTS.md 落地**：七节——硬规则（不构建不运行只交付命令、新增持久化字段要落 4 处、`schema.sql` 幂等补丁、计数器是派生值、MCP 源码改动需 `npm run build`、浏览器导航前后各断言一次、收尾要勾 TODO + 追加日志行）、架构事实（两段式流水线、两个独立图、网站即数据、提示词冷热、`design.pen` 不能直接读、子 README 已漂移、`.claude/worktrees/` 会污染 grep）、命令（只交付不执行）、验证现实（无 CI/无 pytest，验收靠 `server/scripts/` 冒烟脚本）、配置怪癖（`.env` 在仓库根、OpenAI 兼容协议、`PIPELINE_MODELS` 热读、DB 端口、无头浏览器为可选附加项）、前端怪癖（无 Pinia 的模块级 store、EventSource vs POST 流、路由与 /agent 视口约束）
+- [ ] **实机验收**：纯文档，无运行时行为
