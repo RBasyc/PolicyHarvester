@@ -2,7 +2,7 @@
 
 <img src="static/logo/policyharvester-logo.png" alt="PolicyHarvester" width="420" />
 
-# PolicyHarvester
+# 
 
 **一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
 
