@@ -37,6 +37,7 @@ from app.db import repositories as repo
 from app.sources.base import PolicySource, SourceError
 from app.sources.browser_any import BROWSER_SOURCE_KEY
 from app.sources.registry import all_sources
+from app.sources.util import parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ _MAX_COMBOS = 6
 _MAX_ITEMS_PER_SOURCE = 20
 # 正文给模型看多少字（超了截断并说明；模型要的是结论，不是整篇法规）
 _FULLTEXT_CHARS = 4000
+# 附件清单最多回几条（name / ext / url）
+_MAX_ATTACHMENTS = 10
 
 
 class LibrarySearchError(RuntimeError):
@@ -291,11 +294,16 @@ async def list_sources(*, scope: str | None = None) -> dict[str, Any]:
 
 
 def _item_view(item: Any, info: SourceInfo, in_library: set[str]) -> dict[str, Any]:
-    """一条命中结果的精简视图。"""
+    """一条命中结果的精简视图。
+
+    日期字段叫 `publish_date`：这里的日期来自**列表/检索轮**，那就是发布日期
+    （gov.cn 的 `ptimeStr`/`pubtimeStr`，配置化来源的列表日期）。**全文轮**的日期
+    另说——那是成文日期还是发布日期由来源声明，见 `fetch_source_fulltext`。
+    """
     return {
         "title": item.title,
         "url": item.url,
-        "date": item.date.isoformat() if item.date else None,
+        "publish_date": item.date.isoformat() if item.date else None,
         "agency": item.agency,
         "doc_no": item.doc_no,
         "catalog": item.catalog,
@@ -524,7 +532,21 @@ async def fetch_source_fulltext(
     source: str | None = None,
     max_chars: int = _FULLTEXT_CHARS,
 ) -> dict[str, Any]:
-    """取一篇正文（gov.cn 走 MCP 全文工具，其余走来源适配器）；只读，不落库。"""
+    """取一篇正文（gov.cn 走 MCP 全文工具，其余走来源适配器）；只读，不落库。
+
+    **口径与流水线对齐**（权威版本是 `app/pipeline/crawl_graph.py::_preflight_bodies`，
+    本函数照抄它的判定，理由见 `docs/plans/2026-10-21-agent-alignment.md` A1–A4）：
+
+    - 正文先过 `split_fulltext`（提元信息表、去页头面包屑、剥零宽字符），
+      模型拿到的是**政策正文**，不是归档原文；
+    - `publish_date` **只在来源声明「全文日期 = 发布日期」时给**
+      （`PolicySource.fulltext_date_is_publish`）。gov.cn 的全文接口给的是
+      **成文日期**（`app/sources/gov_cn.py:30-34`）——把它当发布日期说出去是错的，
+      所以那一路 `publish_date` 为 null，成文日期单独走 `signed_date`；
+    - 机构 / 文号按「结构解析 → 归档元信息」的顺序兜底（与流水线一致）；
+    - 正文质量按 `body_metrics` + 流水线阈值给 `body_ok`：图片版页面壳与薄壳通知
+      在这里被标出来，而不是被模型当成政策正文念出去。
+    """
     infos = await _collect_sources()
     if source:
         info = _resolve(infos, source)
@@ -549,20 +571,72 @@ async def fetch_source_fulltext(
     except Exception as exc:  # noqa: BLE001
         raise LibrarySearchError(f"取正文失败：{exc}") from exc
 
-    body = result.body or ""
-    truncated = len(body) > max_chars
+    # 局部导入：`app.pipeline.fulltext_clean` 经 `app.schemas` 反向依赖 `app.sources`，
+    # 顶层导入会成环（与 `services/ingestion.py` 延迟导入 crawl_graph 同款理由）。
+    from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
+
+    meta, clean = split_fulltext(result.body or "")
+    cjk, enders = body_metrics(clean)
+    settings = get_settings()
+    min_cjk = settings.pipeline_min_body_chars
+    min_enders = settings.pipeline_min_sent_enders
+    body_ok = not (
+        (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders)
+    )
+    body_note = None
+    if not body_ok:
+        # 措辞与流水线一致（crawl_graph.py 的 judge_reason）
+        body_note = "图片版（正文为页面壳）" if result.image_count else "正文过短（薄壳/附件版）"
+
+    agency = (
+        strip_zero_width(result.issuer or "").strip()
+        or strip_zero_width(meta.agency or "").strip()
+        or None
+    )
+    doc_no = (
+        strip_zero_width(result.doc_no or "").strip()
+        or strip_zero_width(meta.doc_no or "").strip()
+        or None
+    )
+    # 发布日期：只认来源声明为「发布日期」的那一路；gov.cn 的全文日期是成文日期。
+    publish_date = result.date if info.source.fulltext_date_is_publish else None
+    # 成文日期：详情页字段规则 / 归档元信息 / 正文落款，任一命中即可（不顶替发布日期）。
+    signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
+    signed = parse_date(signed_text) if signed_text else None
+
+    attachments = [
+        {
+            "name": str(entry.get("name") or "") or None,
+            "ext": str(entry.get("ext") or "") or None,
+            "url": str(entry.get("url") or "") or None,
+        }
+        for entry in (result.attachments or [])[:_MAX_ATTACHMENTS]
+    ]
+    truncated = len(clean) > max_chars
     return {
         "ok": True,
         "source": info.label,
         "source_key": info.key,
         "url": url,
         "title": result.title,
-        "agency": result.issuer,
-        "doc_no": result.doc_no,
-        "date": result.date.isoformat() if result.date else None,
-        "body_chars": len(body),
-        "body": body[:max_chars],
+        "agency": agency,
+        "doc_no": doc_no,
+        "publish_date": publish_date.isoformat() if publish_date else None,
+        "signed_date": signed.isoformat() if signed else None,
+        "date_note": (
+            None
+            if info.source.fulltext_date_is_publish
+            else "该来源的全文接口给的是**成文日期**，不是发布日期（发布日期请以检索轮的 publish_date 为准）"
+        ),
+        "body": clean[:max_chars],
+        "body_chars": len(clean),
+        "raw_chars": len(result.body or ""),
+        "body_metrics": {"cjk": cjk, "sent_enders": enders},
+        "body_ok": body_ok,
+        "body_note": body_note,
+        "image_count": result.image_count,
+        "attachments": attachments,
+        "attachments_count": len(result.attachments or []),
         "truncated": truncated,
-        "attachments": len(result.attachments or []),
         "note": "正文过长已截断" if truncated else None,
     }

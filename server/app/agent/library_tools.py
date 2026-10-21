@@ -55,8 +55,11 @@ async def search_policy_library(
       用户问到某个地方而它的来源没装载，你要知道是「有但用不了」，不是「没有」）。
       **用户问到某个地方或部门时，先用这个动作看覆盖范围。**
     - `search`   在选中的来源里做只读关键词检索（**不落库、不入库、不花提取的模型费**）。
-      返回标题 / 日期 / 机构 / 文号 / 原文链接，并标注 `in_library`（是否已在成果库里）。
-    - `fulltext` 取某篇正文（给出 `url`）。用于精读条款、核对原文。
+      返回标题 / 发布日期（`publish_date`）/ 机构 / 文号 / 原文链接，并标注 `in_library`
+      （是否已在成果库里）。
+    - `fulltext` 取某篇正文（给出 `url`）。用于精读条款、核对原文。返回的正文已清洗
+      （去掉元信息表与页头噪声），并给出 `publish_date` / `signed_date`（**成文日期单列**，
+      别把它当发布日期）、`body_ok`（正文质量）与附件清单。
 
     **为什么先查来源**：`get_latest_policies` / `get_policy_facets` 这两个 MCP 工具
     **只覆盖国务院政策文件库（国家层面）**。用户问「浙江省的政策」时，直接拿它们去答，
@@ -76,7 +79,8 @@ async def search_policy_library(
 
     Returns:
         JSON 文本。`sources` 返回来源清单；`search` 返回按来源分组的命中结果；
-        `fulltext` 返回标题 / 机构 / 文号 / 日期 / 正文（过长会截断并说明）。
+        `fulltext` 返回标题 / 机构 / 文号 / **发布日期 `publish_date`** /
+        **成文日期 `signed_date`** / 正文（过长会截断并说明）/ `body_ok` / 附件清单。
         失败时 `ok=false` + 中文原因。
     """
     action = (action or "").strip().lower()

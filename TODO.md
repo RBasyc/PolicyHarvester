@@ -1187,4 +1187,5 @@ cd web && pnpm dev
 - [x] **P1 能力缺口（页面有、agent 没有）**：B1 **读不到成果库**（`/api/policies` 四件套 + 提取三栏，agent 一个工具都没有）；C1 停不了任务（`POST /api/tasks/{id}/cancel`）；C2 看不到任务日志；C3 找不回当前任务；D1 定时任务无入口；E1 各来源 facets 无 agent 入口；F1 接入侧缺「一键导入网址」编排与「保存为无头浏览器来源」入口
 - [x] **P2 口径漂移**：G1 只读检索自造预算/组合数/只取第一页，不读 `pipeline_*` settings；G2 只读不判别（取舍保留，但要写进提示词）；G3 机构/文号为空时表述要诚实
 - [x] **文档落档**：`docs/plans/2026-10-21-agent-alignment.md`（含 file:line 证据、影响、建议做法、涉及文件、验收方式、四个批次建议）；`docs/README.md` 补 `plans/` 目录树与索引行；`docs/architecture/chat-agent.md` 加 *Known gaps / backlog* 指针
-- [ ] **待用户排期**：按「批次 1（P0 口径）→ 批次 2（P1 读侧）→ 批次 3（P1 写侧）→ 批次 4（P2）」逐批实现；每批实现时同步本 Phase 的勾选与 `docs/progress/log.md`
+- [x] **批次 1（P0 口径 A1–A4）已落地**：`library_search.fetch_source_fulltext` 照抄流水线 `_preflight_bodies` 的口径——① 日期分流：`publish_date` 只在来源声明 `fulltext_date_is_publish` 时给（gov.cn 那一路为空 + `signed_date` 另给 + `date_note` 提醒）；② 正文过 `split_fulltext`（元信息表/页头/零宽字符不进正文，另给 `raw_chars` 对照）；③ 正文质量 `body_ok` + `body_metrics`（用流水线同一对阈值 `pipeline_min_body_chars` / `pipeline_min_sent_enders`，图片版/薄壳会被标出来）；④ 附件给清单（name/ext/url，前 10 条）。检索结果里的日期字段改名 `publish_date`（列表轮本就是发布日期）。`prompts/chat.md` 补「日期分两种别混」「body_ok=false 如实说」「机构文号为空要说明」。回归断言扩到 33 项（`scripts/test_library_search.py` 第 4/4b/4c 节），全通过
+- [ ] **待用户排期**：批次 2（P1 读侧：读成果库 / 取消任务 / 任务日志 / 找回当前任务）→ 批次 3（P1 写侧：定时任务 / facets / 一键导入编排）→ 批次 4（P2：预算与口径统一）
