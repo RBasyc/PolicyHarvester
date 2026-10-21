@@ -42,6 +42,8 @@
 | 21 | 可观测性：对话与流水线接入 Langfuse / Litefuse（自托管） | 🟨 进行中（根 span 泄漏修复完成，待重启验收） | — |
 | 22 | 字段提取通用化（FieldRule DSL + 结构分析自动生成 + metadata 落库） | 🟨 进行中（代码与离线用例完成，**未构建未运行**；待实机验收） | — |
 | 24 | 无头浏览器抓取（流水线「任意网站」+ 对话「浏览网页」双入口） | 🟨 进行中（代码完成，**未构建未运行**；待实机验收） | — |
+| 25 | 渲染取数引擎 + 验收失败归因（JS 渲染空壳） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 26 | 无头浏览器来源落库（保存为无头来源 + 取值方式开关） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1074,3 +1076,29 @@ cd web && pnpm dev
 
 **本阶段不做（有意）**：登录/验证码/付费墙、文件上传下载、截图与视觉理解、浏览器 trace 落盘、定时任务的浏览器模式、把 webagent 的 planner/executor 搬进来。
 
+
+
+## Phase 25 — 渲染取数引擎 + 验收失败归因（JS 渲染空壳）
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-20 起，待实机验收） ｜ **目标**：JS 渲染站被判 failed 时分清「配置错了」还是「静态根本抓不了」，并给出可执行的下一步
+
+- [x] `SourceEngine` 扩为 `html_list` / `html_list_rendered`（两引擎解析同构，只差取数：rendered 走 `app/browser/manager.fetch_html`）；`HtmlListSource._get_text` 按 engine 分支；`fulltext_available()` 跟随浏览器可用性；`validate_source_config` 落库前拦「rendered 但浏览器不可用」
+- [x] 失败归因：`analyze.looks_like_js_shell()`（可见文本 <300 字且页内有 `<script>`；`<noscript>` 声明 "without JavaScript" 为兜底信号——单 bundle 站 <3 个 script 也会命中）；勘察/样本/试运行逐层带 `js_render_suspected` / `js_shell` 标记；试运行判据 1 全军覆没且至少一入口空壳时给出换引擎建议
+- [x] 验收走真实链路：`_probe_entries` 改经 `HtmlListSource._get_text`（被验收配置自己的那条链路），rendered 配置的试运行就是真用浏览器取数
+- [x] 四镜像：`SourceDTO.engine`（默认 html_list）+ `web/src/api/types.ts` + 来源列表「取值方式」如实显示 + skill `references/config-schema.md` / `tool-map.md` + `docs/architecture/source-onboarding.md` + `generate_source_config` 工具 docstring
+- [ ] **实机验收待用户执行**：`uv run python scripts/test_source_onboarding.py`；对已知 JS 站跑勘察见 `js_render_suspected`；`engine=html_list_rendered` 重新生成配置试运行通过后注册
+
+## Phase 26 — 无头浏览器来源落库：从伪来源到一等来源
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-21，待实机验收） ｜ **目标**：JS 站导入失败时一键「保存为无头浏览器来源」成为持久化来源；抓取页不再每次输网址；「取值方式」即无头开关。计划全文：[docs/plans/2026-10-21-browser-driven-source.md](docs/plans/2026-10-21-browser-driven-source.md)
+
+- [x] **第三引擎** `engine="browser_driven"`（`content_source.engine` 是 TEXT 零迁移）：`SourceConfig` 加 `browse.url`、`entrypoints` 条件必填（browser_driven 必须为空，其余引擎 ≥1）；`validate_source_config` 走独立分支（跳过选择器/容器校验，保留浏览器可用性 + 域名白名单）；`capability_summary` 显式分支（agency/doc_type = none）
+- [x] **`BrowserDrivenSource`**（新文件，`browser_driven.py`）：继承 `BrowserAnySource` 全部行为，实例级 key/label/entry_url 来自落库配置；`browser_driven = True` 类标记是全链路判定口径；`register_configured` 按 engine 分支构造
+- [x] **「保存为无头浏览器来源」**（`POST /api/sources/browser`）：`net.check_url` + guard + 浏览器可用 → `manager.fetch_html` **轻量校验**（渲染后可见文本 ≥80 字且非空壳，否则 422）→ key/label 复用 `source_import._key_for/_label_for` → `save_content_source(status="active")` + `register_configured` + 写 `kind='dry_run', status='passed'` 凭据（`light_check=true` 标明是渲染轻量校验；沿用 dry_run kind 让现有 `_PASSING_DRY_RUN_SQL` 与部分索引零迁移命中）；同 key 已启用静态来源 → 409 防静默覆盖；失败路径 run 记录照常收尾
+- [x] **任务链路**：`start_ingestion` 改判 `browser_driven` 标记——browser_driven 来源的入口网址**以来源配置为准**（payload browse_url 忽略）、goal 取 payload；遗留伪来源 `browser_any` 路径保留一个版本（存量任务 stage 2 的 label 解析依赖注册表单例，不卸载、不出现在任何清单）
+- [x] **取值方式开关**（`POST /{id}/engine`）：html_list ↔ html_list_rendered；engine 在 fingerprint 里，切换即 version+1、「已验收」自动失效需重新试运行；browser_driven 行 422；active 行重新装载、非 active 行摘出注册表（对齐 `_sync_registry` 口径）
+- [x] **试运行/健康检查分支**：browser_driven 的 trial 建任务带 `browse.url` + `goal`（`SourceTrialRequest` 新增可选 `goal`）；health 如实返回「保存时已真浏览器校验」；`dry_run_ingestion` 入口守卫防误入静态试运行；`diagnose` 空 entrypoints 的 IndexError 修复
+- [x] **前端**：抓取页删「任意网站」伪来源与入口网址输入（选中无头来源只显示浏览目标 textarea，`store.ts` 清 `BROWSER_SOURCE_*`）；来源卡片「取值方式」中文标签（静态取数/渲染取数/无头浏览器 tag）+ 可切换按钮；导入失败行（单条报告页 + 批量展开区）「保存为无头浏览器来源」按钮（判定 `stage_reports.discover.summary.js_shell_pages > 0`）；无头来源隐藏健康检查按钮
+- [x] **调度/筛选收口**：`ScheduleCreate` 改解析后拒绝（browser_driven 标记）；`filters.py` 对 browser_driven 返回 supports 全 False + 浏览器口径说明；`ingest_policies` 工具说明改写；`_STATIC_ONLY_HINT` 与空壳归因文案统一指向「保存为无头浏览器来源」
+- [x] **文档镜像**：skill `references/config-schema.md`（engine 三值 + browse 字段）/ `tool-map.md`、`docs/architecture/source-onboarding.md`、计划落档 `docs/plans/`、`docs/progress/log.md`
+- [ ] **实机验收待用户执行**（详见计划文档验证节）：重跑 JS 站导入 → 一键保存 → 抓取页选中填目标跑通全流程；取值方式切换后重新试运行；旧任意网站任务详情兼容；定时任务选无头来源被拒；`flk.npc.gov.cn`（robots 封禁）保存被拒

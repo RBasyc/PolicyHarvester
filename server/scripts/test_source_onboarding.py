@@ -1268,6 +1268,135 @@ def test_config() -> None:
     )
 
 
+# ---------- 3b. 无头浏览器驱动来源（engine="browser_driven"，Phase 26） ----------
+
+
+async def test_browser_driven_config() -> None:
+    print("\n=== 3b. 无头浏览器驱动来源（browser_driven） ===")
+    from app.browser import runtime as browser_runtime
+    from app.services.onboarding import dry_run_ingestion
+    from app.sources.browser_driven import BrowserDrivenSource
+    from app.sources.config import capability_summary, validate_source_config
+    from app.sources.html_source import HtmlListSource
+    from app.sources.registry import register_configured, unregister
+
+    # 浏览器可用性打桩：离线用例不依赖 BROWSER_ENABLED / playwright 安装状态
+    real_available = browser_runtime.available
+    browser_runtime.available = lambda: True
+    try:
+        browser_cfg = SourceConfig.model_validate({
+            "key": "src_browser_demo",
+            "label": "浏览器驱动测试源（demo.example.gov.cn）",
+            "engine": "browser_driven",
+            "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+            "entrypoints": [],
+            "browse": {"url": "https://demo.example.gov.cn/#/list"},
+        })
+        check("browser_driven：空 entrypoints + browse.url 通过模型校验", True)
+
+        problems = validate_source_config(browser_cfg)
+        check("browser_driven：可执行性校验通过（空入口/无容器不拦）", not problems, str(problems))
+
+        bad_host = SourceConfig.model_validate({
+            "key": "src_browser_bad_host",
+            "label": "越界浏览器源",
+            "engine": "browser_driven",
+            "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+            "entrypoints": [],
+            "browse": {"url": "https://other.gov.cn/#/list"},
+        })
+        host_problems = validate_source_config(bad_host)
+        check(
+            "browser_driven：入口页主机不在白名单 → 被拦下",
+            any("allowed_domains" in p for p in host_problems),
+            str(host_problems),
+        )
+
+        caps = capability_summary(browser_cfg.model_dump())
+        check(
+            "browser_driven：能力声明全客户端口径（agency/doc_type = none）",
+            caps["keyword"] == "client"
+            and caps["date"] == "client"
+            and caps["agency"] == "none"
+            and caps["doc_type"] == "none"
+            and caps["search_entrypoints"] == [],
+            str(caps),
+        )
+
+        try:
+            SourceConfig.model_validate({
+                "key": "src_no_entry",
+                "label": "无入口静态源",
+                "engine": "html_list",
+                "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+                "entrypoints": [],
+            })
+            check("静态引擎空 entrypoints → 模型校验拦下", False, "居然通过了")
+        except Exception:
+            check("静态引擎空 entrypoints → 模型校验拦下", True)
+
+        try:
+            SourceConfig.model_validate({
+                "key": "src_browse_misuse",
+                "label": "误用 browse 的静态源",
+                "engine": "html_list",
+                "scope": {"allowed_domains": ["demo.example.gov.cn"]},
+                "entrypoints": [{
+                    "name": "栏目", "url": "https://demo.example.gov.cn/list.html",
+                    "list_selector": "li", "pagination": {"kind": "none"},
+                }],
+                "browse": {"url": "https://demo.example.gov.cn/"},
+            })
+            check("静态引擎带 browse 字段 → 模型校验拦下", False, "居然通过了")
+        except Exception:
+            check("静态引擎带 browse 字段 → 模型校验拦下", True)
+
+        # register_configured 按 engine 出对的类（注册表装载是「任务行 label 解析回本类」的根基）
+        browser_source = register_configured(browser_cfg, replace=True)
+        check("注册：browser_driven 产出 BrowserDrivenSource", isinstance(browser_source, BrowserDrivenSource))
+        check(
+            "注册：key/label/entry_url 来自配置",
+            browser_source.key == "src_browser_demo"
+            and browser_source.entry_url == "https://demo.example.gov.cn/#/list",
+        )
+        check("注册：browser_driven 标记在位（ingestion/调度/facets 的判定口径）",
+              bool(getattr(browser_source, "browser_driven", False)))
+        check("注册：fetched_by 记 engine", "browser_driven" in str(browser_source.fetched_by))
+
+        static_cfg = SourceConfig.model_validate(
+            demo_config_payload(key="src_static_demo", label="静态测试源（demo）")
+        )
+        static_source = register_configured(static_cfg, replace=True)
+        check("注册：静态引擎仍产出 HtmlListSource", isinstance(static_source, HtmlListSource))
+
+        # engine 进指纹：engine 不同的配置指纹必不同（version+1、「已验收」按指纹重算的根基）
+        check(
+            "指纹：engine 不同指纹必不同（browser_driven ≠ html_list）",
+            static_cfg.config_fingerprint() != browser_cfg.config_fingerprint(),
+        )
+
+        # dry_run_ingestion 对 browser_driven 直接拒绝（它不走静态试运行链路）
+        dry = await dry_run_ingestion(browser_cfg.model_dump())
+        check(
+            "dry_run：browser_driven 被守卫拦下（验收在保存端点完成）",
+            not dry["ok"] and "保存" in str(dry.get("error") or ""),
+            str(dry.get("error"))[:80],
+        )
+
+        # 浏览器不可用时 validate 拦 browser_driven（html_list_rendered 已整体删除）
+        browser_runtime.available = lambda: False
+        unavailable = validate_source_config(browser_cfg)
+        check(
+            "校验：浏览器不可用 → browser_driven 被拦下",
+            any("无头浏览器" in p for p in unavailable),
+            str(unavailable),
+        )
+    finally:
+        browser_runtime.available = real_available
+        unregister("src_browser_demo")
+        unregister("src_static_demo")
+
+
 # ---------- 4. 试运行与注册（假站点上跑真实链路） ----------
 
 
@@ -1707,6 +1836,7 @@ async def main() -> int:
         test_analysis()
         await test_pagination_probe()
         test_config()
+        await test_browser_driven_config()
         await test_dry_run()
         await test_search_entrypoint()
         await test_tools()

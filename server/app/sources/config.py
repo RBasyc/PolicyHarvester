@@ -5,9 +5,13 @@
 - **配置负责差异，代码负责通用能力**。列表页/详情页/分页/附件这些差异全部落在配置里；
   取数（SSRF、限频、重定向复验）与解析（DOM、选择器）由 `app/sources/net.py`、
   `app/sources/htmlparse.py` 提供，新增站点原则上不改代码。
-- **不预设获取途径**。`engine` 现有 `html_list`（列表页 + 详情页）；确定性更强的
-  （官方 API / RSS）走同一份配置的 `entrypoints`（同样是「取回文本 → 选择器解析」），
-  确实覆盖不了的才新增引擎。
+- **不预设获取途径**。`engine` 现有两个取值：`html_list`（httpx 静态取数）与
+  `browser_driven`（无头浏览器驱动来源：没有选择器/入口，只有 `browse.url` 入口页 +
+  抓取时的自然语言目标，适配纯 JS 渲染站；2026-10-21 起由导入失败条目的「启用无头
+  抓取模式」按钮创建，详见 `app/sources/browser_driven.py`）。原 `html_list_rendered`
+  （渲染取数）已按 2026-10-21 裁定删除——无头只有 browser_driven 一条路径，避免两套
+  并存。确定性更强的（官方 API / RSS）走同一份配置的 `entrypoints`（同样是「取回文本 →
+  选择器解析」），确实覆盖不了的才新增引擎。
 - **配置必须能被校验**。`validate_source_config()` 在注册与试运行前跑一遍，把
   「域名不在白名单」「选择器引擎不支持」「正文容器为空」这类问题在落库前拦下。
 - **版本可追溯**。配置落库时带 `version`，每次变更写一条 `content_source_revision`；
@@ -33,7 +37,7 @@ from app.sources.net import domain_allowed
 
 SourceLevel = Literal["national", "province", "city", "county", "other"]
 SourceType = Literal["government_portal", "open_api", "rss", "mixed"]
-SourceEngine = Literal["html_list"]
+SourceEngine = Literal["html_list", "browser_driven"]
 
 # 落库状态机：draft（草案，仅试运行）→ validated（试运行通过）→ active（已注册启用）
 #                                  ↘ disabled（人工停用，可再启用）
@@ -300,6 +304,17 @@ class ScopeConfig(BaseModel):
     max_items_per_entry: int = Field(50, ge=1, le=500)
 
 
+class BrowseConfig(BaseModel):
+    """无头浏览器驱动来源（`engine="browser_driven"`）的入口页。
+
+    只有这一个字段：发现循环从它出发，列表/详情都靠无头浏览器渲染 + 结构兜底解析，
+    没有选择器可配。自然语言浏览目标不落配置——抓取任务创建时由用户填写（进
+    `crawl_task.browse_goal`）。
+    """
+
+    url: str = Field(..., min_length=1, description="发现循环的入口页地址（http/https）")
+
+
 class GovernanceConfig(BaseModel):
     """治理口径：**来源可追溯 + 原文另存**是硬要求，其余按站点许可填。"""
 
@@ -320,8 +335,12 @@ class SourceConfig(BaseModel):
     source_type: SourceType = "government_portal"
     engine: SourceEngine = "html_list"
     scope: ScopeConfig
-    entrypoints: list[EntrypointConfig] = Field(..., min_length=1)
+    # engine=browser_driven 时为空列表（发现循环不需要入口配置）；其余引擎至少 1 个——
+    # 字段级 min_length 会在 model_validator 之前抛错，所以必填性改由 _check_unique_entrypoints 管。
+    entrypoints: list[EntrypointConfig] = Field(default_factory=list)
     detail: DetailConfig = Field(default_factory=DetailConfig)
+    # engine=browser_driven 时必填：发现循环的入口页（其余引擎为 None）
+    browse: BrowseConfig | None = None
     # 文号前缀 → 文种（如 {"浙政发": "浙政发"}）；空 = 不做文种归类
     doc_type_patterns: dict[str, str] = Field(default_factory=dict)
     # 列表页关键词复核口径：`substring` = 标题须含完整关键词；`any_char` = 至少共享一个字。
@@ -348,6 +367,15 @@ class SourceConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_unique_entrypoints(self) -> "SourceConfig":
+        if self.engine != "browser_driven" and not self.entrypoints:
+            raise ValueError(
+                f"engine={self.engine} 至少需要 1 个入口（entrypoints）"
+            )
+        if self.engine == "browser_driven":
+            if self.browse is None:
+                raise ValueError("engine=browser_driven 必须提供 browse.url（发现循环入口页）")
+        elif self.browse is not None:
+            raise ValueError("browse 字段只对 engine=browser_driven 有意义")
         names = [ep.name.strip() for ep in self.entrypoints]
         duplicates = {n for n in names if names.count(n) > 1}
         if duplicates:
@@ -386,6 +414,7 @@ class SourceConfig(BaseModel):
             # 检索型入口单列：它们不在「发布机构」筛选名单里（不是机构）
             "search_entrypoints": [ep.name for ep in self.entrypoints if ep.is_search],
             "pagination": sorted({ep.pagination.kind for ep in self.entrypoints}),
+            "browse_url": self.browse.url if self.browse else None,
             "filters": capability_summary(self.model_dump()),
             "attachments": bool(self.detail.attachment_selector) or "扩展名启发式",
             "fingerprint": self.config_fingerprint(),
@@ -400,6 +429,21 @@ def validate_source_config(config: SourceConfig) -> list[str]:
     """
     problems: list[str] = []
     domains = config.scope.allowed_domains
+
+    if config.engine == "browser_driven":
+        # 无头浏览器驱动来源：没有选择器/入口可校验，只有入口页与浏览器可用性。
+        assert config.browse is not None  # model_validator 已保证
+        url = config.browse.url.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            problems.append(f"browse.url 缺少 http(s) 协议：{url}")
+        else:
+            host = (urlsplit(url).hostname or "").lower()
+            if not domain_allowed(host, domains):
+                problems.append(
+                    f"入口页主机 {host} 不在 allowed_domains（{'、'.join(domains)}）内"
+                )
+        _require_browser(config.engine, problems)
+        return problems
 
     for ep in config.entrypoints:
         url = ep.url.strip()
@@ -453,6 +497,21 @@ def validate_source_config(config: SourceConfig) -> list[str]:
     return problems
 
 
+def _require_browser(engine: str, problems: list[str]) -> None:
+    """渲染/驱动引擎没有无头浏览器就跑不了，在落库前拦下。
+
+    函数内导入：browser 栈会连带 sources 注册表，顶层导入有半初始化循环风险
+    （同 app/browser/content.py 的口径）。
+    """
+    from app.browser import runtime as browser_runtime
+
+    if not browser_runtime.available():
+        problems.append(
+            f"engine={engine} 需要无头浏览器，但当前不可用："
+            + browser_runtime.unavailable_reason()
+        )
+
+
 def _validate_field_rules(
     where: str, fields: dict[str, list[FieldRule]], problems: list[str]
 ) -> None:
@@ -489,6 +548,16 @@ def capability_summary(config: dict[str, Any]) -> dict[str, Any]:
     按原始 dict（`content_source.config` 列）计算，不做 Pydantic 校验：来源列表接口
     会拿历史行直接调它，一个字段不合规不该让整张列表 500。
     """
+    if config.get("engine") == "browser_driven":
+        # 无头浏览器来源：没有入口/文号概念，全部客户端口径；agency/doc_type 用 "none"
+        # 而非 entry/patterns，避免「机构筛选 = 只取同名入口」这种对浏览器来源的误导文案。
+        return {
+            "keyword": "client",
+            "date": "client",
+            "agency": "none",
+            "doc_type": "none",
+            "search_entrypoints": [],
+        }
     entries = [e for e in (config.get("entrypoints") or []) if isinstance(e, dict)]
     search_entries = [e for e in entries if isinstance(e.get("search"), dict)]
     has_date_param = any(

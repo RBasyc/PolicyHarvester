@@ -89,15 +89,21 @@ class ScheduleCreate(ScheduleParams):
     @field_validator("source")
     @classmethod
     def _reject_browser_source(cls, value: str) -> str:
-        """定时任务没有「入口网址」字段，浏览器来源每个周期都无法执行——在入口拒绝。
+        """定时任务没有「浏览目标」字段，无头浏览器来源每个周期都无法执行——在入口拒绝。
 
-        `schedule_job` 表只存关键词/筛选条件，重建任务时也带不上 `browse_url`；
-        放行只会得到一份每轮必然失败的定时任务。
+        `schedule_job` 表只存关键词/筛选条件，重建任务时也带不上 `browse_goal`；
+        放行只会得到一份每轮必然失败的定时任务。判定看来源适配器的
+        `browser_driven` 标记（持久化的 browser_driven 来源 + 遗留伪来源都拦）。
         """
         from app.sources.browser_any import BROWSER_SOURCE_KEY, BROWSER_SOURCE_LABEL
+        from app.sources.registry import get_by_label
 
-        if value.strip() in (BROWSER_SOURCE_KEY, BROWSER_SOURCE_LABEL):
-            raise ValueError("定时任务暂不支持无头浏览器来源（需要每次提供入口网址）")
+        text = value.strip()
+        if text in (BROWSER_SOURCE_KEY, BROWSER_SOURCE_LABEL):
+            raise ValueError("定时任务暂不支持无头浏览器来源（需要在抓取时提供浏览目标）")
+        resolved = get_by_label(text)
+        if getattr(resolved, "browser_driven", False):
+            raise ValueError("定时任务暂不支持无头浏览器来源（需要在抓取时提供浏览目标）")
         return value
 
     @field_validator("name")

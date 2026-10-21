@@ -28,15 +28,16 @@ import type {
   SourceBatchImportCreated,
   SourceBatchImportPayload,
   SourceBatchSnapshot,
+  SourceBrowserCreated,
+  SourceBrowserCreatePayload,
+  SourceDetail,
   SourceEnableResult,
   SourceImportCreated,
   SourceImportJob,
   SourceImportLog,
   SourceImportPayload,
-  SourceJob,
   SourceListResponse,
   SourceRecentRunsResponse,
-  SourceRunsResponse,
   SourceTrialPayload,
   StreamEvent,
   TaskConfirmPayload,
@@ -186,8 +187,8 @@ export const api = {
   // ---- 来源接入（Phase 15）：导入网址 + 来源管理 ----
   /** 来源下拉的数据源：内置 gov.cn + content_source 的所有行（含草案/已停用）。 */
   listSources: () => request<SourceListResponse>('/sources'),
-  /** 某来源的接入记录（每次勘察/试运行的完整报告，供人工复核）。 */
-  sourceRuns: (sourceId: number) => request<SourceRunsResponse>(`/sources/${sourceId}/runs`),
+  /** 来源详情：配置本体 + 版本历史 + 最近接入记录（来源详情页 `/sources/:id`）。 */
+  getSource: (sourceId: number) => request<SourceDetail>(`/sources/${sourceId}`),
 
   /** 发起一次「导入网址」作业；地址不合法（内网/非 http(s)）后端直接 400。 */
   startSourceImport: (payload: SourceImportPayload) =>
@@ -206,8 +207,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  /** 进程内导入作业列表（倒序快照；进度详情走单作业接口）。 */
-  listImportJobs: (limit = 50) => request<SourceJob[]>(`/sources/import?limit=${limit}`),
   /** 跨来源最近接入记录（每来源取最新一条）；kind 可选过滤。 */
   sourceRunsRecent: (params: { limit?: number; kind?: string } = {}) => {
     const search = new URLSearchParams()
@@ -240,6 +239,12 @@ export const api = {
     request<{ ok: boolean }>(`/sources/${sourceId}/disable`, { method: 'POST' }),
   deleteSource: (sourceId: number) =>
     request<{ ok: boolean }>(`/sources/${sourceId}`, { method: 'DELETE' }),
+  /** 「启用无头抓取模式」：轻量校验（真浏览器打开入口页）通过即已验收+已启用。 */
+  saveBrowserSource: (payload: SourceBrowserCreatePayload) =>
+    request<SourceBrowserCreated>('/sources/browser', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }
 
 /**

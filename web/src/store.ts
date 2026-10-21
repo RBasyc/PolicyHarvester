@@ -84,7 +84,7 @@ export const form = reactive<TaskCreatePayload>({
   keywords: [],
   agencies: [],
   doc_types: [],
-  // 「任意网站（无头浏览器）」来源的入口 / 目标（其它来源提交时置 null，见 startTask）
+  // 无头浏览器来源的浏览目标（仅 engine=browser_driven 时提交；入口网址以来源配置为准）
   browse_url: null,
   browse_goal: null,
   // 高级设置（流水线参数）：先置 null，bootstrap 拉到 .env 默认值后回填，用户可改，随任务提交
@@ -135,21 +135,10 @@ export const currentSource = computed(() =>
   sources.value.find((item) => item.label === form.source),
 )
 
-/** 「任意网站（无头浏览器）」来源的 key / label（与 server/app/sources/browser_any.py 一致）。 */
-export const BROWSER_SOURCE_KEY = 'browser_any'
-export const BROWSER_SOURCE_LABEL = '任意网站（无头浏览器）'
+/** 当前是否选中了无头浏览器来源（engine=browser_driven，来源管理里「保存为无头浏览器来源」创建）。
 
-/**
- * 当前是否选中了浏览器来源。
- *
- * 来源清单尚未拉到 / 后端未下发该项时，`currentSource` 是 undefined；此时用 label 兜底，
- * 保证表单切到浏览器来源后立刻隐藏机构/文种、显示入口网址（不等 sources 请求回来）。
- */
-export const isBrowserSource = computed(
-  () =>
-    currentSource.value?.key === BROWSER_SOURCE_KEY ||
-    form.source === BROWSER_SOURCE_LABEL,
-)
+ * 入口网址存在来源配置里（服务端取用），表单只管浏览目标；机构/文种筛选隐藏。 */
+export const isBrowserSource = computed(() => currentSource.value?.engine === 'browser_driven')
 
 /** 当前来源是否支持文种筛选（配置化来源 / 浏览器来源没有文种，选中时前端要隐藏该筛选项）。 */
 export const sourceSupportsDocTypes = computed(
@@ -442,7 +431,7 @@ export async function loadFacets(): Promise<void> {
         doc_types: false,
         keyword_server_side: false,
         date_server_side: false,
-        note: '任意网站（无头浏览器）没有站内检索与筛选项：由浏览目标与时间范围在发现循环里筛选',
+        note: '无头浏览器来源没有站内检索与筛选项：由浏览目标与时间范围在发现循环里筛选',
       },
       source_label: form.source,
     }
@@ -519,12 +508,13 @@ export function setSource(label: string): void {
   form.source = label
   form.agencies = []
   form.doc_types = []
-  // 浏览器来源不能定时：把入库方式掰回一次性，否则顶栏按钮会去开定时弹窗
-  if (label === BROWSER_SOURCE_LABEL) ingestMode.value = 'once'
+  // 无头浏览器来源不能定时（浏览目标每期都要人填）：把入库方式掰回一次性
+  const picked = sources.value.find((item) => item.label === label)
+  if (picked?.engine === 'browser_driven') ingestMode.value = 'once'
   void loadFacets()
 }
 
-/** 清空浏览器来源的入口 / 目标（切回普通来源时由表单调用，避免误提交）。 */
+/** 清空无头浏览器来源的浏览目标（切回普通来源时由表单调用，避免误提交）。 */
 export function clearBrowseFields(): void {
   form.browse_url = null
   form.browse_goal = null
@@ -578,11 +568,6 @@ export function subscribe(taskId: number): void {
 /** 点「开始抓取」：提交表单 → 立刻返回 task_id → 订阅进度。 */
 export async function startTask(): Promise<void> {
   if (starting.value) return
-  if (isBrowserSource.value && !(form.browse_url || '').trim()) {
-    // 浏览器来源没有入口网址 = 后端必然 400；在提交前就说清楚，别让用户等一个错误 toast
-    showToast('请填写「任意网站（无头浏览器）」的入口网址（http/https）', 'error')
-    return
-  }
   starting.value = true
   dismissToast()
   try {
@@ -592,9 +577,9 @@ export async function startTask(): Promise<void> {
       date_from: form.date_from || null,
       date_to: form.date_to || null,
       keywords: [...form.keywords],
-      // 入口 / 目标只对浏览器来源有意义：其它来源传了 URL 后端会直接拒绝
-      browse_url: isBrowserSource.value ? (form.browse_url || null) : null,
-      browse_goal: isBrowserSource.value ? (form.browse_goal || null) : null,
+      // 入口网址以无头来源的服务端配置为准（传了也忽略）；浏览目标只对它有意义
+      browse_url: null,
+      browse_goal: isBrowserSource.value ? form.browse_goal || null : null,
       pipeline_max_policies: form.pipeline_max_policies || null,
       pipeline_per_keyword_limit: form.pipeline_per_keyword_limit || null,
       pipeline_extract_concurrency: form.pipeline_extract_concurrency || null,

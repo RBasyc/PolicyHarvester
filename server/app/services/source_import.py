@@ -96,13 +96,9 @@ _DISCOVER_FOLLOW = 1
 # 连展开的机会都没有（静默少一个栏目），而它有自己的上限（`analyze.region_candidates(limit=8)`）。
 _MAX_CANDIDATES = 5
 
-# 「内容发现到头了」时统一附在最常见死路上的解释：中文政府站大多已改成 JS 渲染列表，
-# 静态引擎在这些页面上只能看到站点的骨架（导航/页脚）——要说清楚这是能力边界，
-# 不是「我们没配好」，也不是「站点拒绝我们」（后者会走 blocked）。
-_STATIC_ONLY_HINT = (
-    "本引擎只解析服务端返回的静态 HTML：列表由 JS 动态加载的站点解析不到条目"
-    "（这是已知能力边界，需要无头浏览器渲染支持，当前未实现）"
-)
+# 「内容发现到头了」的失败不再附长提示（2026-10-21 用户裁定）：静态链路跑不通的地址
+# 由 run_import_job 兜底自动落成无头浏览器来源（已验收 · 已启用），错误文案保持简短，
+# 「为什么失败」写进作业日志与接入记录即可。
 _PAGINATION_MAX_PAGES = 10
 _DETAIL_CONTAINER_LIMIT = 3
 _DETAIL_META_LIMIT = 2
@@ -145,6 +141,12 @@ class ImportJob:
     registered: dict[str, Any] | None = None
     error: str | None = None
     error_kind: str | None = None
+    # 「启用无头抓取模式」人工确认的结果（失败条目上点了按钮、轻量校验通过后才填充）；
+    # None 表示未保存。是否给这个按钮由 headless_eligible 决定，见 _run 各失败分支。
+    browser_source: dict[str, Any] | None = None
+    # 失败是否属于「静态链路拿不到内容、无头浏览器可能救得回」——只在失败的静态管线
+    # 里置真：勘察过不去（404/5xx/robots/DNS，站点本身拒绝或不可达）与未知异常都不给。
+    headless_eligible: bool = False
     started_at: str = ""
     finished_at: str | None = None
     task: asyncio.Task | None = None
@@ -350,13 +352,6 @@ def start_batch(request: SourceBatchImportRequest) -> SourceBatchImportCreated:
     )
 
 
-def list_jobs(limit: int = 50) -> list[ImportJob]:
-    """进程内作业列表（倒序快照，新→旧）；顺带触发惰性清扫。"""
-    _evict_finished_jobs()
-    jobs = sorted(JOBS.values(), key=lambda j: j.started_at, reverse=True)
-    return jobs[:limit]
-
-
 def batch_snapshot(batch_id: str) -> dict[str, Any] | None:
     """一次批量导入的聚合快照（None = 批不存在或已被清扫）。
 
@@ -382,6 +377,8 @@ def batch_snapshot(batch_id: str) -> dict[str, Any] | None:
                     "phase_text": "进度快照已清理（持久记录见「接入记录」）",
                     "error": None,
                     "error_kind": None,
+                    "browser_source": None,
+                    "headless_eligible": False,
                     "position": None,
                     "gone": True,
                     "started_at": "",
@@ -407,6 +404,8 @@ def batch_snapshot(batch_id: str) -> dict[str, Any] | None:
                 "phase_text": job.phase_text,
                 "error": job.error,
                 "error_kind": job.error_kind,
+                "browser_source": job.browser_source,
+                "headless_eligible": job.headless_eligible,
                 "position": position,
                 "gone": False,
                 "started_at": job.started_at,
@@ -470,6 +469,18 @@ async def run_import_job(job: ImportJob, request: SourceImportRequest) -> None:
         job.finished_at = _now()
 
 
+def mark_browser_saved(job_id: str, ref: dict[str, Any]) -> None:
+    """「启用无头抓取模式」成功后回写作业：进程内快照带上结果，前端重拉作业能看到。
+
+    作业早已终态、SSE 已关闭，这里只写进程内快照（接入记录另有持久 run 行）。
+    """
+    job = JOBS.get(job_id)
+    if job is None:
+        return
+    job.browser_source = ref
+    _log(job, f"已启用无头抓取模式：来源「{ref.get('label') or ref.get('key')}」已验收 · 已启用", "info")
+
+
 # ---------- 编排 ----------
 
 
@@ -501,6 +512,8 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
             candidates = [{**request.candidate, "index": 0, "selected": True, "rejected_reason": error}]
         job.candidates = candidates
         if payload is None:
+            # 勘察已证明站点可达，是配置抓不到内容 → 无头可能救得回
+            job.headless_eligible = True
             return _fail(job, error or "候选重跑失败", "failed")
     else:
         _set_phase(job, "inspect", "勘察入口页（校验地址、取回页面、识别页面结构）")
@@ -526,6 +539,9 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         )
         job.stage_reports["discover"] = discovered
         if not discovered.get("ok"):
+            # 勘察已通过（站点可达），这里失败 = 静态引擎找不到列表/正文（JS 渲染空壳等）
+            # → 给「启用无头抓取模式」；访问控制类（blocked）不给。
+            job.headless_eligible = discovered.get("kind") != "blocked"
             return _fail_from_stage(job, discovered, "内容发现")
         summary = discovered.get("summary") or {}
         _log(
@@ -538,7 +554,8 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         # （逐个试抓的结果写在各自的 rejected_reason 里，页面逐条显示）。
         job.candidates = candidates
         if not candidates:
-            return _fail(job, f"内容发现没有给出可用的列表容器候选。{_STATIC_ONLY_HINT}", "failed")
+            job.headless_eligible = True  # 内容发现到头：静态配置抓不到列表
+            return _fail(job, "内容发现没有给出可用的列表容器候选", "failed")
 
         # 命名区域若自带独立栏目页，先改接栏目页（页内预览块列几条就是几条、且没有翻页）
         await _prefer_column_pages(job, candidates, domains)
@@ -546,7 +563,8 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         payload, error = await _pick_candidate(job, candidates, domains, request)
         if payload is None:
             _log(job, f"候选逐个试过都不行：{error}", "error")
-            return _fail(job, f"没有可用的列表容器候选（{error}）。{_STATIC_ONLY_HINT}", "failed")
+            job.headless_eligible = True  # 每个候选都试抓失败：配置取不到内容
+            return _fail(job, f"没有可用的列表容器候选（{error}）", "failed")
 
         # 顺手看一眼站点有没有**自己的检索页**：有就多配一个检索型入口，关键词从「只在本页
         # 已翻到的条目里比对标题」变成「送进站点检索」。这一步是**真取一页**验证的，
@@ -570,6 +588,7 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
         problems = built.get("problems") or []
         for problem in problems:
             _log(job, f"配置不可执行：{problem}", "error")
+        job.headless_eligible = True  # 站点可达但配置不可执行：换无头取数另起炉灶
         return _fail(job, "配置未通过可执行性校验：" + "；".join(problems), "failed")
     _log(
         job,
@@ -621,6 +640,9 @@ async def _run(job: ImportJob, request: SourceImportRequest) -> None:
     if not report.get("ok"):
         job.error = report.get("error") or "验收未通过"
         job.error_kind = "failed"
+        # 真实抓取后仍拿不到候选/正文（找不到正文、列表为空等）→ 无头可能救得回。
+        # blocked 分支在上面已 return，走不到这里。
+        job.headless_eligible = True
 
 
 async def _register_after_dry_run(

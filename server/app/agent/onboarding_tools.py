@@ -395,7 +395,10 @@ async def generate_source_config(config_json: str) -> str:
     Args:
         config_json: 配置 JSON 文本。字段：
             key（英文唯一标识）、label（展示名，全局唯一）、level（national/province/city）、
-            organization、source_type、engine（html_list）、
+            organization、source_type、
+            engine（`html_list` = httpx 静态取数，默认；`browser_driven` = 无头浏览器驱动：
+            没有 entrypoints/选择器，改配 browse.url 入口页——**勘察报告 js_render_suspected=true
+            或试运行提示 JS 渲染空壳时必须走这条无头路径**）、
             scope{allowed_domains, start_urls, max_items_per_entry}、
             entrypoints[{name, url, list_selector, link_selector, title_selector,
                          date_selector, item_fields{字段名: [FieldRule]},

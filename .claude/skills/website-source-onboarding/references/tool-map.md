@@ -31,7 +31,7 @@
 | `GET` | `/api/sources/import/{job_id}` | 作业快照：配置 + 候选 + **完整验收报告** + 登记结果 |
 | `POST` | `/api/sources/import/{job_id}/cancel` | 取消作业（证据保留） |
 | `GET` | `/api/sources` | 来源清单（内置 + 各状态行，含 `verified`） |
-| `GET` | `/api/sources/{id}` / `/{id}/runs` | 详情 / 接入记录（历次验收报告） |
+| `GET` | `/api/sources/{id}` | 详情（含版本历史与接入记录历次验收报告） |
 | `POST` | `/api/sources/{id}/enable` \| `disable` | 与 `manage_ingestion_job` / `register_source` **同一段代码、同一道闸** |
 | `DELETE` | `/api/sources/{id}` | 删除来源 |
 
@@ -109,11 +109,11 @@
 
 | 缺口 | 影响 | 现状 |
 | --- | --- | --- |
-| **JS 动态渲染** | SPA / 前端渲染列表的站点解析不到条目 | 只解析服务端返回的 HTML。需要 Playwright 之类的无头浏览器（未引入依赖） |
+| ~~**JS 动态渲染**~~ | SPA / 前端渲染列表的站点解析不到条目 | **已解决**（2026-10-21）：统一走 `engine=browser_driven` 无头浏览器驱动来源（页面导入的失败条目上点「启用无头抓取模式」一键创建：真浏览器打开入口页轻量校验通过即已验收+已启用，抓取页选中后填浏览目标；对话接入用 `generate_source_config` 写 `engine="browser_driven"`）。旧的「任意网站」伪来源与 `html_list_rendered` 渲染取数引擎均已下线（2026-10-21 裁定：无头只有一条路径）。交互式筛选（表单/会话态）仍接不了 |
 | **PDF / OFD 文字抽取** | 图片版红头文件、附件里的正文取不到 | 附件只做可达性 + 归档 + 哈希；正文抽取未实现 |
 | **OCR** | 扫描件内容无法进入链路 | 未实现 |
 | **登录 / 验证码 / 付费墙后的内容** | 这类站点接不进来 | **规范不允许绕过**，遇到即报「受阻」 |
-| **RSS / 官方 API 专用引擎** | 有 `feeds` 的识别，但没有对应的取数引擎 | `engine` 目前只有 `html_list`；RSS 源可先当普通列表页抓 |
+| **RSS / 官方 API 专用引擎** | 有 `feeds` 的识别，但没有对应的取数引擎 | `engine` 现有 `html_list` / `browser_driven`（无头驱动）；RSS 源可先当普通列表页抓 |
 | **站内检索的日期参数自动识别** | 检索页支持按日期收窄但配置没填 `date_from_param` / `date_to_param` 时，日期只能取回后复核 | `search_forms` 只报关键词框与隐藏参数，**不认**日期输入框；要接就得人工实测后填进 `entrypoints[].search` |
 | ~~**站内检索（search_forms）没有落点**~~ | 关键词/日期无处可推，只能客户端逐条比对（召回 = 翻页深度） | **已实现**：`entrypoints[].search`（`SearchConfig`）把入口声明成检索型；页面导入会自动探测并补一个「站内检索」入口，Agent 侧照 `search_forms` 报告自己填 |
 | ~~**前端来源管理界面**~~ | — | **已实现**：Phase 15 起在 `web/src/components/SourceReport.vue`（验收报告）+ 抓取页的来源下拉；Phase 16 起来源管理独立成页 `/sources`（`web/src/views/SourcesPage.vue` + `web/src/components/sources/{SourceListSection,ImportSection,RunsSection}.vue`），含单条/批量导入、启停/回滚、试运行/健康检查与接入记录——旧的 `SourceModal.vue` 已删除 |

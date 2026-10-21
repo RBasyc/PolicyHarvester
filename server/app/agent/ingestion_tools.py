@@ -108,8 +108,10 @@ async def ingest_policies(
         keywords: 检索关键词（可多个）；留空 = 该来源的最新文件。
         date_from / date_to: 时间范围（YYYY-MM-DD），留空 = 不限。
         agencies / doc_types: gov.cn 的发布机构分类与文种筛选（有哪些值先用 `get_policy_facets` 看）。
-        browse_url / browse_goal: 只有来源选「任意网站（无头浏览器）」时用：入口网址（必填）与
-            自然语言浏览目标（如「找最近三个月的储能政策」）。其它来源传 browse_url 会被拒绝。
+        browse_url / browse_goal: 只有无头浏览器来源时用。`browse_goal` 是发现循环的自然语言
+            目标（如「找最近三个月的储能政策」），对持久化的无头来源（来源管理里「保存为无头
+            浏览器来源」创建）必填可选、入口网址以**来源配置为准**（browse_url 传了也忽略）；
+            遗留的「任意网站」来源才用 browse_url 传入口。其它（静态/渲染）来源传 browse_url 会被拒绝。
         max_policies: 本任务最多处理多少篇（1–50，留空 = 服务端默认）。**提取按篇计费**，别贪多。
         task_id: `inspect` / `confirm` 用（`start` 的返回里有）。
         policy_ids: `confirm` 用——要入库的篇目 id（来自候选列表）；留空 = 按判别结果全部建议入库的

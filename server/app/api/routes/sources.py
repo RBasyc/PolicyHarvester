@@ -30,13 +30,13 @@ from app.schemas.source import (
     SourceBatchImportCreated,
     SourceBatchImportRequest,
     SourceBatchSnapshot,
+    SourceBrowserCreateRequest,
     SourceDTO,
     SourceDetailDTO,
     SourceEnableRequest,
     SourceImportCreated,
     SourceImportJobDTO,
     SourceImportRequest,
-    SourceJobDTO,
     SourceListResponse,
     SourceTrialRequest,
 )
@@ -44,13 +44,10 @@ from app.services import source_import
 from app.services.onboarding import (
     manage_source,
     register_source,
-)
-from app.sources.browser_any import (
-    BROWSER_SOURCE_KEY,
-    BROWSER_SOURCE_LABEL,
-    browser_source_available,
+    save_browser_source,
 )
 from app.sources.config import capability_summary
+from app.sources.net import UnsafeURLError
 from app.sources.registry import get_default
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
@@ -94,34 +91,6 @@ async def _builtin_dto() -> SourceDTO:
     )
 
 
-def _browser_dto() -> SourceDTO:
-    """内置的「任意网站（无头浏览器）」来源。
-
-    `supports_doc_types=False` 让前端自动隐藏文种筛选；`keyword/date_server_side=False`
-    告诉前端这些筛选不是站点检索参数（发现循环会按目标挑选，但不是在服务端过滤）。
-    """
-    return SourceDTO(
-        id=None,
-        key=BROWSER_SOURCE_KEY,
-        label=BROWSER_SOURCE_LABEL,
-        level="other",
-        organization=None,
-        status="active",
-        builtin=True,
-        version=1,
-        verified=True,  # 内置能力，不需要来源接入验收
-        entrypoints=[],
-        supports_doc_types=False,
-        keyword_server_side=False,
-        date_server_side=False,
-        search_entrypoints=[],
-        notes=(
-            "内置来源（无头浏览器）：需要填写入口网址与浏览目标；只读浏览、遵守 robots.txt，"
-            "不支持定时任务。"
-        ),
-    )
-
-
 def _row_to_dto(row: dict, *, verified: bool) -> SourceDTO:
     """`content_source` 行 → DTO。入口名同时是「发布机构」筛选的可选值。"""
     config = row.get("config") or {}
@@ -142,6 +111,7 @@ def _row_to_dto(row: dict, *, verified: bool) -> SourceDTO:
         builtin=False,
         version=int(row.get("version") or 1),
         verified=verified,
+        engine=str(config.get("engine") or "html_list"),
         entrypoints=entrypoints,
         supports_doc_types=bool(config.get("doc_type_patterns")),
         keyword_server_side=caps["keyword"] == "server",
@@ -166,6 +136,8 @@ def _job_dto(job: source_import.ImportJob) -> SourceImportJobDTO:
         registered=job.registered,
         error=job.error,
         error_kind=job.error_kind,  # type: ignore[arg-type]
+        headless_eligible=job.headless_eligible,
+        browser_source=job.browser_source,
         started_at=job.started_at,
         finished_at=job.finished_at,
     )
@@ -227,29 +199,6 @@ async def create_import_batch(payload: SourceBatchImportRequest) -> SourceBatchI
     `GET /api/sources/import/batch/{batch_id}/stream`。
     """
     return source_import.start_batch(payload)
-
-
-@router.get("/import", response_model=list[SourceJobDTO])
-async def list_import_jobs(limit: int = Query(50, ge=1, le=200)) -> list[SourceJobDTO]:
-    """进程内导入作业列表（倒序，含排队中的；日志/报告等大字段走单作业接口）。
-
-    只是进度快照：进程重启或超窗（30 分钟）后从这里消失，持久留痕见接入记录。
-    """
-    return [
-        SourceJobDTO(
-            job_id=j.job_id,
-            url=j.url,
-            batch_id=j.batch_id,
-            status=j.status,  # type: ignore[arg-type]
-            phase=j.phase,  # type: ignore[arg-type]
-            phase_text=j.phase_text,
-            error=j.error,
-            error_kind=j.error_kind,  # type: ignore[arg-type]
-            started_at=j.started_at,
-            finished_at=j.finished_at,
-        )
-        for j in source_import.list_jobs(limit)
-    ]
 
 
 @router.get("/import/{job_id}", response_model=SourceImportJobDTO)
@@ -404,16 +353,47 @@ async def stream_import_batch(batch_id: str) -> StreamingResponse:
 # ---------- 来源清单 / 详情 / 管理 ----------
 
 
+@router.post("/browser", status_code=201)
+async def create_browser_source(payload: SourceBrowserCreateRequest) -> dict[str, Any]:
+    """「保存为无头浏览器来源」：把一个地址（通常是导入失败的 JS 渲染站）落成
+    engine=browser_driven 的 active 来源。
+
+    服务端做轻量校验（无头浏览器真打开入口页一次，渲染后有可见内容即通过），通过即
+    已验收 + 已启用，可直接在抓取页选用（浏览目标在抓取配置里填）。地址不合法 400；
+    同站点已有已启用的静态来源 409（先停用/删除它）；渲染后仍无内容 422。
+    """
+    try:
+        result = await save_browser_source(url=payload.url, label=payload.label)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=400, detail=f"地址不合法：{exc}") from exc
+    if not result.get("ok"):
+        code = 409 if result.get("conflict") else 422
+        raise HTTPException(status_code=code, detail=str(result.get("error") or "保存失败"))
+    if payload.job_id:
+        # 从导入失败条目点进来的：把结果回写到作业快照（重拉可见），来源列表照常由前端刷新
+        source_import.mark_browser_saved(
+            payload.job_id,
+            {
+                "source_id": result["source_id"],
+                "key": result["key"],
+                "label": result["label"],
+                "created": result["created"],
+            },
+        )
+    return result
+
+
 @router.get("", response_model=SourceListResponse)
 async def list_sources() -> SourceListResponse:
     """来源下拉的数据源：内置 gov.cn + `content_source` 里的全部行。
 
     列表**不过滤状态**（草案/停用也要看得见），`status` 与 `verified` 交给前端决定
     能不能选：只有 `active` 的来源才应该被正式抓取任务用上。
+
+    无头浏览器抓取走持久化的 engine=browser_driven 来源行（与配置化来源同一个表、
+    同一条 status/verified 口径）；旧的「任意网站」伪来源不再注入本列表。
     """
     items: list[SourceDTO] = [await _builtin_dto()]
-    if browser_source_available():
-        items.append(_browser_dto())
     try:
         rows = await repo.list_content_sources()
     except Exception:  # noqa: BLE001 - 表还没建 / 库不可用时至少给内置来源，页面不白屏
@@ -477,14 +457,6 @@ async def get_source(source_id: int) -> SourceDetailDTO:
     )
 
 
-@router.get("/{source_id}/runs")
-async def list_source_runs(source_id: int, limit: int = Query(10, ge=1, le=100)) -> dict[str, Any]:
-    """该来源的接入记录（每次勘察/试运行的原始报告都在这里，供人工复核）。"""
-    row = await _get_source_or_404(source_id)
-    runs = await repo.list_onboarding_runs(source_key=row["key"], limit=limit)
-    return {"source_id": source_id, "key": row["key"], "items": [_run_dto(r) for r in runs]}
-
-
 @router.post("/{source_id}/enable")
 async def enable_source(source_id: int, payload: SourceEnableRequest | None = None) -> dict[str, Any]:
     """启用来源（人工确认那一下）。
@@ -537,6 +509,7 @@ async def trial_source(source_id: int, payload: SourceTrialRequest | None = None
         source_id=source_id,
         keywords=payload.keywords,
         max_policies=payload.max_policies,
+        goal=payload.goal,
     )
     if not result.get("ok"):
         # 不是参数错，是「当前状态不允许试运行」——冲突语义

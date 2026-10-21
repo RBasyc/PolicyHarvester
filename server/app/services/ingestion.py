@@ -86,7 +86,6 @@ def available_sources() -> list[dict[str, Any]]:
     常量：配置化来源是随接入工作流长出来的，清单写死在工具里第二天就过期。
     """
     default_key = get_default().key
-    browser_ok = browser_source_available()
     return [
         {
             "key": source.key,
@@ -94,9 +93,9 @@ def available_sources() -> list[dict[str, Any]]:
             "default": source.key == default_key,
         }
         for source in all_sources()
-        # 浏览器来源始终在注册表里（服务端解析任务需要），但没装/没开时不该出现在
-        # 给模型/页面看的「可用来源」清单里——否则模型会去选一个注定 400 的来源。
-        if source.key != BROWSER_SOURCE_KEY or browser_ok
+        # 遗留伪来源「任意网站」始终在注册表里（存量任务 label 解析需要），但不该出现在
+        # 给模型/页面看的「可用来源」清单里——新任务一律走持久化的 browser_driven 来源。
+        if source.key != BROWSER_SOURCE_KEY
     ]
 
 
@@ -201,26 +200,32 @@ async def start_ingestion(
     `awaiting_confirmation`，**不会自己入库**——入库要等 `confirm_ingestion`。
     本函数立即返回，不等检索；要等就用 `wait_for_settled`。
 
-    `browse_url` / `browse_goal` 只对「任意网站（无头浏览器）」来源有效：前者是必填
-    入口地址，后者是发现循环的自然语言目标。非浏览器来源传了入口地址会直接拒绝
-    （否则用户以为它生效了，实际流水线走的是站点检索）。
-    `pipeline_overrides` 是页面「高级设置」的直通口（键为 `pipeline_*` 列名，见
-    `TaskCreate`）；对话侧只填 `pipeline_max_policies`，其余沿用 `.env` 默认。
+    `browse_url` / `browse_goal` 只对无头浏览器来源有效。两种形态：
+
+    - **持久化的 browser_driven 来源**（推荐）：入口网址来自来源配置（`source_obj
+      .entry_url`），payload 里的 `browse_url` 被**忽略**（来源才是入口的权威）；
+      `browse_goal` 取自 payload（抓取时填的自然语言目标）。
+    - **遗留伪来源「任意网站（无头浏览器）」**（仅存任务兼容）：`browse_url` 必填。
+      新代码不要再生成这种任务——从来源管理保存无头来源后在抓取页选它。
+
+    非浏览器来源传了入口地址会直接拒绝（否则用户以为它生效了，实际流水线走的是
+    站点检索）。`pipeline_overrides` 是页面「高级设置」的直通口（键为 `pipeline_*`
+    列名，见 `TaskCreate`）；对话侧只填 `pipeline_max_policies`，其余沿用 `.env` 默认。
     """
     _validate_range(date_from, date_to)
 
-    is_browser = get_by_label(source).key == BROWSER_SOURCE_KEY
+    source_obj = get_by_label(source)
     url_value = (browse_url or "").strip() or None
     goal_value = (browse_goal or "").strip()[:500] or None
-    if is_browser:
+    if getattr(source_obj, "browser_driven", False):
         if not browser_source_available():
             from app.browser import runtime as browser_runtime
 
             raise IngestionRejected(browser_runtime.unavailable_reason())
+        # browser_driven：入口以来源配置为准；遗留 browser_any：用 payload 的地址。
+        url_value = url_value or str(source_obj.entry_url).strip()
         if not url_value:
-            raise IngestionRejected("「任意网站（无头浏览器）」来源必须提供入口网址（browse_url）")
-        # 入口地址在建任务前先过安全校验（协议 / 公网 / 白名单）；此时还不查 robots，
-        # robots 是真正打开页面时由浏览器的 guard 判定（并给出可读的原因）。
+            raise IngestionRejected("无头浏览器来源缺少入口网址（来源配置里没有 browse.url）")
         from app.browser.guard import BrowserBlocked, ensure_navigable_sync
 
         try:
@@ -230,7 +235,7 @@ async def start_ingestion(
     else:
         if url_value:
             raise IngestionRejected(
-                "只有「任意网站（无头浏览器）」来源可以填写入口网址；"
+                "只有无头浏览器来源可以携带入口网址；"
                 f"当前来源「{source}」请改用关键词检索"
             )
         goal_value = None
@@ -247,7 +252,7 @@ async def start_ingestion(
         pipeline_overrides=_sanitize_overrides(pipeline_overrides),
     )
 
-    if is_browser:
+    if getattr(source_obj, "browser_driven", False):
         log_line = f"已创建浏览器抓取任务（入口：{url_value}；目标：{goal_value or '未填写'}）"
     else:
         keyword_hint = "、".join(keywords) if keywords else "未设置"
