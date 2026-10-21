@@ -98,7 +98,11 @@ export interface PolicyMeta {
   source_name: string | null
   title: string
   agency: string | null
+  /** 机构来源：null=页面结构解析；'model'=模型从页面内容补提（前端标注「模型提取」） */
+  agency_source: string | null
   doc_no: string | null
+  /** 文号来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  doc_no_source: string | null
   publish_date: string | null
   /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
   publish_date_source: string | null
@@ -145,9 +149,13 @@ export interface LibraryPolicyItem {
   id: number
   title: string
   agency: string | null
+  /** 机构来源：null=页面结构解析；'model'=模型从页面内容补提 */
+  agency_source: string | null
   /** 由文号里第一个括号符之前的部分推导（国发〔2026〕3号 → 国发，粤府〔2026〕1号 → 粤府）；
    *  无括号时退回 gov.cn 名单，仍推不出为 null */
   doc_type: string | null
+  /** 文号来源：null=页面结构解析；'model'=模型从页面内容补提（文种随之为模型推导） */
+  doc_no_source: string | null
   publish_date: string | null
   /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
   publish_date_source: string | null

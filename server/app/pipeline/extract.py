@@ -13,10 +13,10 @@ Kimi 的 `https://api.moonshot.cn/v1`）用它们覆盖。
 
 两条都失败则抛异常，由流水线把该篇标记为 `failed`（不影响其他篇）。
 
-另有一个**按需**的小入口 `extract_publish_date()`：结构解析没拿到发布日期时，流水线
-单独调它从页面文本里找明确写出的发布日期（见 `crawl_graph._backfill_model_publish_date`）。
-它不属于上面的三区提取，失败也不影响提取结果；补到的日期带 `publish_date_source='model'`
-标记，前端显示「模型提取」。
+另有一个**按需**的小入口 `extract_policy_fields()`：结构解析没拿到发布日期 / 发文机关 /
+文号时，流水线单独调它从页面文本里补提（见 `crawl_graph._preflight_bodies` 与
+`_backfill_model_fields`）。它不属于上面的三区提取，失败也不影响提取结果；补到的字段分别带
+`publish_date_source` / `agency_source` / `doc_no_source` = `'model'` 标记，前端显示「模型提取」。
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -91,12 +92,68 @@ SYSTEM_PROMPT = load_prompt("extract")
 # 回退路径（纯文本 JSON）时追加的指令，同样来自 prompts/。
 JSON_FALLBACK_INSTRUCTION = load_prompt("extract_json_fallback")
 
-# 日期兜底抽取的提示词（结构解析拿不到发布日期时才调用），同样是 import 时读一次。
-DATE_PROMPT = load_prompt("extract_date")
+# 元信息兜底抽取的提示词（结构解析拿不到日期/机构/文号时才调用），同样是 import 时读一次。
+FIELDS_PROMPT = load_prompt("extract_fields")
 
 # 模型兜底日期的合理区间：发布日期不可能在未来，太早的日期几乎都是页面其他内容
 # （版权年、相关链接）被误读。区间外一律当没抽到，不写库。
 _MIN_MODEL_DATE_YEAR = 1990
+
+# 机构/文号的长度上限：超长值基本是把整行标签或正文句子误当成了字段。
+_MAX_AGENCY_CHARS = 100
+_MAX_DOC_NO_CHARS = 60
+
+# gov.cn / 政务模板的零宽字符（前端复制、页面源码里都常见）。
+_ZERO_WIDTH = "\u200b\u200c\u200d\ufeff"
+_STRIP_ZERO_WIDTH = str.maketrans("", "", _ZERO_WIDTH)
+
+# 模型偶尔把「没有」直接写成这些值；它们不是字段内容。
+_PLACEHOLDERS = {"无", "暂无", "未知", "null", "none", "n/a", "-", "—", "－"}
+
+
+@dataclass
+class PolicyFields:
+    """模型从页面文本补提出的元信息；没抽到的字段保持 None。"""
+
+    publish_date: date | None = None
+    agency: str | None = None
+    doc_no: str | None = None
+
+
+def _clean_text(value: Any, limit: int) -> str | None:
+    """去零宽、压空白、限长；非字符串或空串返回 None。"""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.translate(_STRIP_ZERO_WIDTH).split())
+    if not text or len(text) > limit:
+        return None
+    return text
+
+
+def _valid_agency(value: Any) -> str | None:
+    """发文机关的轻校验：中文机关名、不是标签串，长度合理。"""
+    text = _clean_text(value, _MAX_AGENCY_CHARS)
+    if text is None or text.lower() in _PLACEHOLDERS:
+        return None
+    if re.match(r"^(来源|转载来源|涉及机构|主题分类|索引号)[:：]", text):
+        return None
+    if not re.search(r"[\u4e00-\u9fff]", text):
+        return None
+    return text
+
+
+def _valid_doc_no(value: Any) -> str | None:
+    """文号的轻校验：必须含数字，且像「XX〔年〕号 / 第…号」而不是索引号或日期。"""
+    text = _clean_text(value, _MAX_DOC_NO_CHARS)
+    if text is None or text.lower() in _PLACEHOLDERS:
+        return None
+    if "索引号" in text or "生成日期" in text:
+        return None
+    if not re.search(r"\d", text):
+        return None
+    if not re.search(r"[〔\[（(]|第.{0,8}号|号$", text):
+        return None
+    return text
 
 
 def _build_extract_llm(entry: ModelRegistryEntry) -> Any:
@@ -168,39 +225,49 @@ async def extract_policy(
     return payload, entry.model
 
 
-async def extract_publish_date(
+async def extract_policy_fields(
     *,
     title: str,
     text: str,
     url: str | None = None,
+    fields: list[str] | None = None,
     max_text_chars: int | None = None,
     model_id: str | None = None,
     config: RunnableConfig | None = None,
-) -> date | None:
-    """结构解析没拿到发布日期时的**兜底**：让模型从页面文本里找明确写出的日期。
+) -> PolicyFields:
+    """结构解析没拿到发布日期 / 发文机关 / 文号时的**兜底**：让模型从页面文本里补提。
 
-    为什么要单独一次调用：发布日期常写在正文容器之外的页头/元信息块，正文 `body` 里
-    根本没有；而正文提取的提示词只关心三区内容，不应为了一个日期把整页噪声塞进去。
-    只在缺日期时调用（见 `crawl_graph._backfill_model_publish_date`），失败按「无日期」
-    处理——日期补不上不能拖垮已经成功的提取。
+    为什么要单独一次调用：这些元信息常写在正文容器之外的页头/元信息块，正文 `body` 里
+    根本没有；而正文提取的提示词只关心三区内容，不应为了几个字段把整页噪声塞进去。
+    只在缺字段时调用（见 `crawl_graph._preflight_bodies` / `_backfill_model_fields`），
+    三个字段一次调用补全，失败按「没抽到」处理——补不齐不能拖垮已经成功的提取。
 
-    防幻觉是硬约束：提示词要求只认页面明确写出的「发布日期/发布时间」，不许拿成文/
-    施行日期顶替，也不许推测；返回后再按合理区间校验（未来日期、过早日期一律丢弃）。
+    `fields` 指定本次要补的字段（`publish_date` / `agency` / `doc_no`）；为空表示不需要
+    调用，直接返回空结果。调用方只会把它真正缺失的字段传进来。
+
+    防幻觉是硬约束：提示词要求只认页面明确写出的字段，不许拿成文/施行日期、来源、
+    索引号顶替，也不许推测；返回后再做轻校验（日期合理区间、机构/文号长度与形态）。
     """
+    wanted = [name for name in (fields or []) if name in {"publish_date", "agency", "doc_no"}]
+    if not wanted:
+        return PolicyFields()
+
     settings = get_settings()
     limit = max_text_chars or settings.pipeline_max_body_chars
     truncated = (text or "").strip()
     if not truncated:
-        return None
+        return PolicyFields()
     if len(truncated) > limit:
         truncated = truncated[:limit] + "\n…（页面文本过长已截断）"
 
+    field_labels = {"publish_date": "发布日期", "agency": "发文机关", "doc_no": "文号"}
     messages = [
-        SystemMessage(content=DATE_PROMPT),
+        SystemMessage(content=FIELDS_PROMPT),
         HumanMessage(
             content=(
                 f"政策标题：{title}\n"
-                f"原文链接：{url or '（无）'}\n\n"
+                f"原文链接：{url or '（无）'}\n"
+                f"本次只需补提：{'、'.join(field_labels[name] for name in wanted)}\n\n"
                 f"页面文本：\n{truncated}"
             )
         ),
@@ -215,17 +282,23 @@ async def extract_publish_date(
             else _blocks_to_text(response.content)
         )
         data = _loads_lenient(content)
-        parsed = parse_date(data.get("publish_date"))
-    except Exception as exc:  # noqa: BLE001 - 日期兜底失败不能影响提取结果
-        logger.warning("模型补提发布日期失败（%s），按「无日期」处理", exc)
-        return None
+    except Exception as exc:  # noqa: BLE001 - 元信息兜底失败不能影响提取结果
+        logger.warning("模型补提政策元信息失败（%s），按未抽到处理", exc)
+        return PolicyFields()
 
-    if parsed is None:
-        return None
-    if parsed < date(_MIN_MODEL_DATE_YEAR, 1, 1) or parsed > date.today():
-        logger.warning("模型补提的发布日期不合理（%s），已丢弃", parsed)
-        return None
-    return parsed
+    result = PolicyFields()
+    if "publish_date" in wanted:
+        parsed = parse_date(data.get("publish_date"))
+        # 模型给出的日期必须落在合理区间内；否则当作没抽到，不写库。
+        if parsed is not None and date(_MIN_MODEL_DATE_YEAR, 1, 1) <= parsed <= date.today():
+            result.publish_date = parsed
+        elif parsed is not None:
+            logger.warning("模型补提的发布日期不合理（%s），已丢弃", parsed)
+    if "agency" in wanted:
+        result.agency = _valid_agency(data.get("agency"))
+    if "doc_no" in wanted:
+        result.doc_no = _valid_doc_no(data.get("doc_no"))
+    return result
 
 
 async def _extract_via_tool(

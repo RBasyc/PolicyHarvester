@@ -45,6 +45,9 @@ const headSource = computed(() => policy.value?.source_name || fulltextMeta.valu
 const signedDate = computed(
   () => policy.value?.metadata?.signed_date || fulltextMeta.value?.signed_date || '',
 )
+/** 机构/文号是模型补提的（页面结构没解析到）时打标；fulltextMeta 补缺的值不算模型提取 */
+const agencyFromModel = computed(() => policy.value?.agency_source === 'model')
+const docNoFromModel = computed(() => policy.value?.doc_no_source === 'model')
 
 /** 文号里可能出现的左括号符（半角/全角），文种就取它之前的那一段 */
 const DOC_NO_BRACKETS = ['〔', '[', '（', '【']
@@ -156,14 +159,24 @@ function backToLibrary() {
 
         <div class="tag-row">
           <span v-if="headAgency" class="head-tag">{{ headAgency }}</span>
+          <span
+            v-if="agencyFromModel"
+            class="model-tag"
+            title="页面结构未解析到发文机关，该机关由模型从页面内容提取，建议核对原文"
+          >模型提取</span>
           <span v-if="docType" class="head-tag">{{ docType }}</span>
+          <span
+            v-if="docType && docNoFromModel"
+            class="model-tag"
+            title="页面结构未解析到文号，文种由模型补提的文号推导，建议核对原文"
+          >模型提取</span>
           <span class="tag-spacer"></span>
           <span v-if="policy" class="head-date">
             <AppIcon name="calendar" :size="13" />
             发布于 {{ policy.publish_date ?? '无日期' }}
             <span
               v-if="policy.publish_date_source === 'model'"
-              class="model-date-tag"
+              class="model-tag"
               title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
             >模型提取</span>
           </span>
@@ -173,6 +186,11 @@ function backToLibrary() {
           <span v-if="headDocNo" class="meta-item">
             <AppIcon name="file-text" :size="13" />
             文号：{{ headDocNo }}
+            <span
+              v-if="docNoFromModel"
+              class="model-tag"
+              title="页面结构未解析到文号，该文号由模型从页面内容提取，建议核对原文"
+            >模型提取</span>
           </span>
           <span v-if="headSource" class="meta-item">
             <AppIcon name="globe" :size="13" />
@@ -334,7 +352,7 @@ function backToLibrary() {
   flex-shrink: 0;
 }
 
-.model-date-tag {
+.model-tag {
   padding: 0 6px;
   border-radius: 999px;
   background: var(--blue-bg);

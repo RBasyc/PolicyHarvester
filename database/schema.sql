@@ -120,7 +120,9 @@ CREATE TABLE IF NOT EXISTS policy_document (
     source_name  TEXT,                                        -- 来源（国务院政策文件库）
     source_url   TEXT,                                        -- 原文链接
     agency       TEXT,                                        -- 发文机关
+    agency_source TEXT,                                       -- 机构来源：NULL=页面解析，'model'=模型从页面内容补提
     doc_no       TEXT,                                        -- 文号
+    doc_no_source TEXT,                                       -- 文号来源：NULL=页面解析，'model'=模型从页面内容补提
     catalog      TEXT,                                        -- 来源目录（gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读）
     fetched_by   TEXT,                                        -- 抓取方式（如 China-Central-Policy-MCP）
     fetched_at   TIMESTAMPTZ,
@@ -149,6 +151,10 @@ ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEF
 -- 'model' = 结构解析没拿到，提取阶段由模型从页面内容补提（前端据此标注「模型提取」）。
 -- 单独一列而不是塞 metadata：表格/详情都要读它，且它约束的是 publish_date 这一标准列的可信度。
 ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS publish_date_source TEXT;
+-- 补丁：发文机关 / 文号来源。NULL = 抓取时从页面结构解析；'model' = 结构解析没拿到，
+-- 预检或提取阶段由模型从页面内容补提（前端据此标注「模型提取」）。
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS agency_source TEXT;
+ALTER TABLE policy_document ADD COLUMN IF NOT EXISTS doc_no_source TEXT;
 
 -- 提取结果（与 policy_document 一对一；对应抽屉「事实 / 信息 / 知识」三区）
 CREATE TABLE IF NOT EXISTS extraction (

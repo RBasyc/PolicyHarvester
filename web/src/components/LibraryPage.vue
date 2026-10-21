@@ -230,7 +230,17 @@ async function onConfirmClear() {
             {{ item.source_name }}
           </span>
           <span v-if="item.agency" class="card-tag">{{ item.agency }}</span>
+          <span
+            v-if="item.agency && item.agency_source === 'model'"
+            class="card-model"
+            title="页面结构未解析到发文机关，该机关由模型从页面内容提取，建议核对原文"
+          >模型提取</span>
           <span v-if="item.doc_type" class="card-tag">{{ item.doc_type }}</span>
+          <span
+            v-if="item.doc_type && item.doc_no_source === 'model'"
+            class="card-model"
+            title="页面结构未解析到文号，文种由模型补提的文号推导，建议核对原文"
+          >模型提取</span>
           <span class="card-tag-spacer"></span>
           <span class="card-date" :class="{ none: !item.publish_date && !item.signed_date }">
             {{ item.publish_date ?? item.signed_date ?? '无日期' }}
@@ -595,6 +605,17 @@ async function onConfirmClear() {
 .card-date.none {
   color: var(--text-tertiary);
   opacity: 0.75;
+}
+
+.card-model {
+  margin-left: -4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: nowrap;
 }
 
 .card-date-signed {

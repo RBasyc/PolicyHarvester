@@ -85,7 +85,11 @@ class PolicyMeta(BaseModel):
     source_name: str | None = None
     title: str
     agency: str | None = None
+    # 机构来源：NULL=页面解析，'model'=模型从页面内容补提（前端标注「模型提取」）
+    agency_source: str | None = None
     doc_no: str | None = None
+    # 文号来源：NULL=页面解析，'model'=模型从页面内容补提（前端标注「模型提取」）
+    doc_no_source: str | None = None
     publish_date: date | None = None
     # 发布日期来源：NULL=页面解析，'model'=模型从页面内容补提（前端标注「模型提取」）
     publish_date_source: str | None = None
@@ -190,7 +194,9 @@ def build_extraction_response(detail: dict[str, Any]) -> PolicyExtractionRespons
         source_name=row.get("source_name"),
         title=row["title"],
         agency=row.get("agency"),
+        agency_source=row.get("agency_source"),
         doc_no=row.get("doc_no"),
+        doc_no_source=row.get("doc_no_source"),
         publish_date=row.get("publish_date"),
         publish_date_source=row.get("publish_date_source"),
         source_url=row.get("source_url"),
@@ -250,7 +256,9 @@ class LibraryPolicyItem(BaseModel):
     id: int
     title: str
     agency: str | None = None
+    agency_source: str | None = None  # NULL=页面解析，'model'=模型从页面内容补提
     doc_type: str | None = None  # 由文号前缀推导（首个括号符之前，如 国发/粤府），推导不出为 null
+    doc_no_source: str | None = None  # 文号来源：NULL=页面解析，'model'=模型从页面内容补提
     publish_date: date | None = None
     publish_date_source: str | None = None  # NULL=页面解析，'model'=模型从页面内容补提
     # 成文日期（标签规则/正文落款）：发布日期为空时卡片上的展示兜底
@@ -269,7 +277,9 @@ class LibraryPolicyItem(BaseModel):
             id=row["id"],
             title=row["title"],
             agency=row.get("agency"),
+            agency_source=row.get("agency_source"),
             doc_type=row.get("doc_type"),
+            doc_no_source=row.get("doc_no_source"),
             publish_date=row.get("publish_date"),
             publish_date_source=row.get("publish_date_source"),
             signed_date=row.get("signed_date"),
