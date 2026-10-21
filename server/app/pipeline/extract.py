@@ -2,10 +2,10 @@
 
 模型由「高级设置 → 提取模型」按任务选择（`crawl_task.pipeline_model` 存注册表 id，
 `app/config.py::get_model_registry()` **热读** `.env` 的 `PIPELINE_MODELS`——改完无需重启）。
-注册表统一走 Anthropic 兼容协议（一条 ChatAnthropic 代码路径）：不填 `base_url`/`api_key_env`
-的项沿用 ANTHROPIC_* 网关（Kimi Bearer）；自带端点的项（DeepSeek 的
-`https://api.deepseek.com/anthropic`）用 `api_key_env` 指向的 key 做 x-api-key 认证。
-注册表项默认 `thinking=false`——提取只要结构化结果，把思考显式关掉（又快又省）。
+注册表统一走 OpenAI 兼容协议（一条 ChatOpenAI 代码路径）：不填 `base_url`/`api_key_env`
+的项沿用 .env 的 OPENAI_BASE_URL / OPENAI_API_KEY 网关；自带端点的项（跨网关，如
+Kimi 的 `https://api.moonshot.cn/v1`）用它们覆盖。
+注册表项默认 `thinking=false`——提取只要结构化结果，不开思考（又快又省）。
 
 两条提取路径：
 1. 工具调用拿严格 schema —— 但**不强制** `tool_choice`（见 `_extract_via_tool`）；
@@ -100,10 +100,11 @@ _MIN_MODEL_DATE_YEAR = 1990
 
 
 def _build_extract_llm(entry: ModelRegistryEntry) -> Any:
-    """按注册表项构建提取用 LLM（统一 Anthropic 兼容协议，认证分流见 `_build_llm`）。
+    """按注册表项构建提取用 LLM（统一 OpenAI 兼容协议，认证/base_url 见 `_build_llm`）。
 
     项里配了 `api_key_env` 但取不到值时抛 RuntimeError（单篇记 failed，文案直达用户）。
-    `thinking` 默认关（False → 显式 `thinking={"type": "disabled"}`）；项里写 true 才交给服务端默认。
+    `thinking` 默认关（False → 不传 reasoning_effort，交给服务端默认）；
+    项里写 true 才传 `reasoning_effort="high"` 显式开思考。
     """
     api_key = resolve_model_api_key(entry) if entry.api_key_env else None
     if entry.api_key_env and not api_key:
@@ -113,7 +114,7 @@ def _build_extract_llm(entry: ModelRegistryEntry) -> Any:
     return _build_llm(
         model=entry.model,
         max_tokens=entry.max_tokens,
-        thinking=None if entry.thinking else False,
+        thinking=True if entry.thinking else None,
         base_url=entry.base_url,
         api_key=api_key,
     )
@@ -232,11 +233,9 @@ async def _extract_via_tool(
 ) -> ExtractionPayload:
     """首选路径：把 schema 绑成一个工具，让模型自己决定调用。
 
-    刻意**不**走 `with_structured_output`——它会强制 `tool_choice={"type": "tool", ...}`，
-    而 Anthropic 兼容协议里「thinking 开启 + tool_choice 指定工具」必然 400：
-    `tool_choice 'specified' is incompatible with thinking enabled`
-    （Kimi `kimi-for-coding` 默认开启 thinking，实测必现）。
-    不指定 `tool_choice` 时模型照样会调用该工具（实测 stop_reason=tool_use），
+    刻意**不**走 `with_structured_output`——它会强制 `tool_choice={"type": "function", ...}`，
+    而部分网关（开思考的推理模型，历史上有 Kimi anthropic 端点 400 实测）会拒绝
+    「思考开启 + 指定工具」的组合。不指定 `tool_choice` 时模型照样会调用该工具，
     真没调再回退纯文本 JSON，所以这里不必强制。
     """
     response = await llm.bind_tools([ExtractionPayload]).ainvoke(messages, config=config)

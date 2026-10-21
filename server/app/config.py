@@ -24,9 +24,8 @@ _REPO_ROOT = REPO_ROOT
 _REAL_ENV = dict(os.environ)
 
 # .env 统一放在仓库根目录（与 web/、database/ 平级），与启动时的工作目录无关。
-# 先把 .env 加载进 os.environ：
-# anthropic SDK 会自动读取 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL 等变量，
-# 而 pydantic-settings 只把 .env 读进 Settings 对象，不会写回环境。
+# 先把 .env 加载进 os.environ：openai SDK 会自动读取 OPENAI_API_KEY / OPENAI_BASE_URL
+# 等变量，而 pydantic-settings 只把 .env 读进 Settings 对象，不会写回环境。
 load_dotenv(_REPO_ROOT / ".env")
 
 # China-Central-Policy-MCP 本地构建产物（tools/ 下克隆并自带 build/）
@@ -44,11 +43,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- LLM ---
-    anthropic_api_key: str = ""
-    anthropic_auth_token: str = ""  # Bearer token 认证（如 Kimi 等兼容网关）
-    anthropic_base_url: str | None = None  # 可选：自定义 API 网关
-    model_name: str = "claude-opus-5-5"
+    # --- LLM：OpenAI 兼容协议（DeepSeek / Moonshot / OpenAI / 本地 vLLM… 一个格式通吃）---
+    openai_api_key: str = ""  # 网关 API Key（OpenAI SDK 以 Bearer 头发出，一把 key 即可）
+    openai_base_url: str | None = None  # OpenAI 兼容端点，如 https://api.deepseek.com
+    model_name: str = "deepseek-flash"
     max_tokens: int = 16000
     # 提取模型注册表（PIPELINE_MODELS）不走 Settings：它要**热读** .env（改完不重启），
     # 见 get_model_registry() / _live_env()。
@@ -162,26 +160,25 @@ def get_settings() -> Settings:
 
 
 class ModelRegistryEntry(BaseModel):
-    """`PIPELINE_MODELS` JSON 数组里的一项（全部走 **Anthropic 兼容协议**，统一 ChatAnthropic）。
+    """`PIPELINE_MODELS` JSON 数组里的一项（全部走 **OpenAI 兼容协议**，统一 ChatOpenAI）。
 
     - `id`         稳定标识，落库到 `crawl_task.pipeline_model` / `schedule_job.pipeline_model`；
     - `model`      发往 API 的模型名（也会写进 extraction.model 做溯源）；
-    - `base_url`   Anthropic 兼容端点；**不填 = 复用 ANTHROPIC_BASE_URL 网关**（如 Kimi）。
-                   DeepSeek 填 https://api.deepseek.com/anthropic；
-    - `api_key_env` 从哪个环境变量取 key 做 x-api-key 认证；**不填 = 复用 ANTHROPIC_*
-                   网关认证**（AUTH_TOKEN Bearer / ANTHROPIC_API_KEY）；
+    - `base_url`   OpenAI 兼容端点；**不填 = 复用 OPENAI_BASE_URL 网关**（同一个网关只换 model 名）。
+                   跨网关示例：Kimi 填 https://api.moonshot.cn/v1；
+    - `api_key_env` 从哪个环境变量取 key 做 Bearer 认证；**不填 = 复用 OPENAI_API_KEY**；
     - `max_tokens` 不填用 .env 的 MAX_TOKENS；
-    - `thinking`   是否保留思考模式，**默认 False（关）**——提取只要结构化结果，思考又慢
-                   又烧 token；需要时在项里写 "thinking": true 交给服务端默认。
+    - `thinking`   是否开启思考，**默认 False（关）**——为 true 时传 `reasoning_effort="high"`
+                   （提取只要结构化结果，思考又慢又烧 token）。
     """
 
     id: str
     label: str
     model: str
-    base_url: str | None = None  # 不填 = 复用 ANTHROPIC_BASE_URL 网关
-    api_key_env: str | None = None  # 不填 = 复用 ANTHROPIC_* 网关认证；DeepSeek 用 DEEPSEEK_API_KEY
+    base_url: str | None = None  # 不填 = 复用 OPENAI_BASE_URL 网关
+    api_key_env: str | None = None  # 不填 = 复用 OPENAI_API_KEY；另用一把 key 就填它的变量名
     max_tokens: int | None = None  # 不填用 .env 的 MAX_TOKENS
-    thinking: bool = False  # 默认关思考：thinking={"type": "disabled"}（Anthropic 协议统一参数）
+    thinking: bool = False  # 默认关思考：true 才传 reasoning_effort="high"（OpenAI 协议无通用「关思考」参数，缺省 = 服务端默认）
 
 
 def _live_env(name: str) -> str:
@@ -242,4 +239,4 @@ def resolve_model_entry(model_id: str | None) -> ModelRegistryEntry:
 
 def resolve_model_api_key(entry: ModelRegistryEntry) -> str:
     """注册表项自带 key 时从 `api_key_env` 取（同样热读：换 key 改 .env 即生效，不用重启）。"""
-    return _live_env(entry.api_key_env or "DEEPSEEK_API_KEY")
+    return _live_env(entry.api_key_env or "OPENAI_API_KEY")

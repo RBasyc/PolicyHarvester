@@ -12,7 +12,7 @@
 | 加抓取流水线阶段   | `server/app/pipeline/crawl_graph.py` 加节点与边（分支还要动 `_route_after_fetch`）                    |
 | **加一个落库字段** | 需**同时**改四处（见下）                                                                              |
 | 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
-| 换模型 / 网关      | `.env` 的 `MODEL_NAME`、`ANTHROPIC_*`，或往 `PIPELINE_MODELS` 注册表加一项                            |
+| 换模型 / 网关      | `.env` 的 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`，或往 `PIPELINE_MODELS` 注册表加一项  |
 | 接入一个新网站     | 写一份 `SourceConfig`，**不要**写爬虫（见下）                                                         |
 | 改无头浏览器       | `server/app/browser/` + 两个提示词；导航必须过 `guard`（见下）                                        |
 

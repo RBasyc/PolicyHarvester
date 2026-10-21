@@ -42,10 +42,10 @@ server/
 # 1. 安装依赖（需要 uv）
 uv sync
 
-# 2. 配置认证：复制仓库根目录（../.env.example）的模板为 ../.env，二选一
-#    （.env 统一放在仓库根目录，server 会自动定位，与启动时的工作目录无关）
-#    - ANTHROPIC_API_KEY       官方 API Key
-#    - ANTHROPIC_AUTH_TOKEN    Bearer Token（Kimi 等兼容网关，需配合 ANTHROPIC_BASE_URL）
+# 2. 配置模型网关：复制仓库根目录（../.env.example）的模板为 ../.env，
+#    填写 OPENAI_API_KEY + OPENAI_BASE_URL + MODEL_NAME（OpenAI 兼容协议，
+#    DeepSeek / Kimi(Moonshot) / OpenAI / 本地 vLLM 通吃；.env 统一放在仓库根目录，
+#    server 会自动定位，与启动时的工作目录无关）
 #    抓取流水线还需要 DATABASE_URL（默认 postgresql://kos:kos@localhost:5433/agent_demo）
 
 # 3. 准备数据库（docker 容器 server-db-1 运行中）
@@ -150,6 +150,6 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 - **改图结构**：在 `app/agent/graph.py` 中添加节点和边（如人工审批 `interrupt`、条件路由等）。
 - **改状态**：在 `app/agent/state.py` 的 `AgentState` 中添加字段（配合自定义 reducer）。
 - **改流水线**：在 `app/pipeline/crawl_graph.py` 加节点与边；新增落库字段需同时改 `database/schema.sql`、`app/db/repositories.py`、`app/schemas/*.py` 与 `web/src/api/types.ts`（前端类型是手工镜像，不会自动生成）。
-- **换模型 / 网关**：修改根目录 `.env` 中的 `MODEL_NAME`、`ANTHROPIC_BASE_URL`。
+- **换模型 / 网关**：修改根目录 `.env` 中的 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`（OpenAI 兼容协议），或往 `PIPELINE_MODELS` 注册表加一项。
 - **调流水线参数**：根目录 `.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）；页面「高级设置」可在创建任务时按任务覆盖（值落在 `crawl_task.pipeline_*` 列，NULL = 用全局默认）。
 - **接可观测性**：`app/tracing.py`（Langfuse / Litefuse，**自托管**）。在根目录 `.env` 配 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`（`LANGFUSE_HOST` 也认）即可，对话每轮一条 trace、每篇提取一条 trace；密钥不配或 `LANGFUSE_ENABLED=false` 就是关的，不影响业务。新调用点只要 `config.update(trace_config(...))`，关掉时它返回 `{}`。
