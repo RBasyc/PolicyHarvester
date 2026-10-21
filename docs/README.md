@@ -21,6 +21,7 @@
 | 命令、环境变量、脚本 | [guides/commands.md](guides/commands.md) |
 | ⛔「不要主动构建/运行」的约定 | [guides/building.md](guides/building.md) |
 | 扩展点一览（加工具 / 加阶段 / 加字段 / 镜像清单） | [guides/extending.md](guides/extending.md) |
+| **agent 线与流水线线的差距清单**（待排期，Phase 33） | [plans/2026-10-21-agent-alignment.md](plans/2026-10-21-agent-alignment.md) |
 | 进度日志（2026-10-12 起，明细） | [progress/log.md](progress/log.md) |
 
 ## 目录结构
@@ -39,6 +40,8 @@ docs/
 │   ├── commands.md               #   命令 + 环境变量
 │   ├── building.md               #   构建/运行约定（硬性规则）
 │   └── extending.md              #   扩展指引 + 镜像清单
+├── plans/                        # 中文：改造计划与待排期清单（定稿后落档）
+│   └── 2026-10-21-agent-alignment.md   #   Agent 线与流水线线的对齐清单（Phase 33）
 └── progress/
     └── log.md                    # 中文：进度日志明细（TODO.md 的下沉）
 ```

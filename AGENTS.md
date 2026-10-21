@@ -46,6 +46,7 @@ uv run python scripts/test_source_import.py
 uv run python scripts/test_judge.py
 uv run python scripts/test_ingest_filter.py
 uv run python scripts/test_browser.py
+uv run python scripts/test_library_search.py
 ```
 
 Many need network access, the `server-db-1` container, or a running MCP; `--db-scratch` creates and drops a throwaway DB. Report which script to run and the expected pass signal instead of executing it.

@@ -64,6 +64,7 @@
 | 工具注册表 | `server/app/agent/tools.py` | `TOOLS`（本地）+ `MCP_TOOLS`（启动加载），`all_tools()` 统一给 ToolNode / bind_tools |
 | 对话 SSE | `server/app/api/routes/agent.py` | `POST /api/chat/stream`，`token` / `done` / `error` 事件 |
 | 通用工具 | `server/app/agent/tools.py` | `get_current_time` |
+| 政策库检索（只读） | `server/app/agent/library_tools.py` | `search_policy_library`：`sources`（列已启用来源与覆盖范围）/ `search`（只读检索）/ `fulltext`（取正文）。**不建任务、不落库、不花提取的模型费**——问「有没有」用它，问「抓进库里」用 `ingest_policies` |
 
 ### 2.2 MCP 工具（`tools/China-Central-Policy-MCP`，启动时经 stdio 加载）
 

@@ -1163,3 +1163,28 @@ cd web && pnpm dev
 - [x] **顺手修掉截图配错**：原 README 末尾三张图错位（结果抽屉指向 `library.png`、成果库指向 `sources.png`、来源管理指向 `result-drawer.png`），两版均已改正
 - [x] **补 AGENTS.md 入口**：文档索引表与目录树各加一行（`AGENTS.md` 是根级 coding agent 硬规则）
 - [ ] **实机验收**：纯文档，无运行时行为
+
+## Phase 32 — Agent 调用逻辑：先查系统已启用的来源，再决定用哪个检索工具
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-21，待实机验收） ｜ **目标**：用户问「浙江省关于科技的政策法规库」时，Agent 应当**先去系统里已启用的来源找浙江的内容**，而不是拿只覆盖国家层面的 gov.cn 工具查一遍就回答「浙江本省的文件不在这库里」
+
+- [x] **根因**：Agent 手上能用的检索只有 MCP 的 `get_latest_policies` / `get_policy_facets`（**只覆盖国务院政策文件库**）；接入工作流加进来的一手地方来源在进程内注册表里（`status=active` 的配置化来源）却**没有一条只读的路**给模型用——`ingest_policies` 能搜地方来源，但它**会建任务、落 `policy_document`、停在人工确认闸**，拿它来「看看有没有」代价太大且污染成果库
+- [x] **新增服务 `app/services/library_search.py`**（只读，不写任何表、不花提取的模型费）：`list_sources()`（列已启用来源 + 覆盖范围：层级/机构/栏目/域名/检索能力）、`search_sources()`（按来源适配器 `search_plan` → `search` → `validate_item` → `normalize_item` 检索，附 `in_library` 标注）、`fetch_source_fulltext()`（按 URL 取正文；gov.cn 走 MCP 全文工具，其余走来源适配器）
+- [x] **新增工具 `search_policy_library`**（`app/agent/library_tools.py`，并入 `TOOLS`）：三个动作 `sources` / `search` / `fulltext`；参数 `keywords` / `scope`（地域·机构线索）/ `source`（严格解析，名字对不上报错并列可用清单）/ `date_from` / `date_to` / `limit` / `url`；**工具不抛异常**（失败一律 `{"ok": false, "error": ...}`）
+- [x] **选源口径**：「已启用」= 进程内注册表（内置 gov.cn + 启动时装载的 `status=active` 配置化来源）；遗留伪来源「任意网站（无头浏览器）」与 `routes/sources.list_sources` 同口径排除；数据库只补 `level` / `organization` 展示元信息，读不到时降级不报错
+- [x] **单源失败不拖垮全局**：每个来源的异常写进该来源的 `error` 字段，其它来源照常出结果；**`normalize_item` 解析失败必须留痕**（静默丢条目会被下游读成「没检索到」，那是谎报）
+- [x] **提示词改调用顺序**（`prompts/chat.md`）：新增「先查来源，再检索」一节——地方/部门/领域问题先 `search_policy_library(action="sources")` 看覆盖范围，再用 `action="search"`（带 `scope` + `keywords`）检索；明说「没问过系统里有没有该来源就回答『不在这库里』是错的」；系统没覆盖时如实说覆盖边界并可建议接入（**不擅自接入**）
+- [x] **文档镜像**：`docs/architecture/chat-agent.md`（新增 *Policy-library search* 条目）、`docs/architecture/source-onboarding.md`（共享 `tool_utils` 的三个模块）、skill `references/tool-map.md`（2.1 现有能力表补一行）、`docs/guides/commands.md` + `AGENTS.md`（冒烟脚本清单）
+- [x] **离线冒烟脚本**：`server/scripts/test_library_search.py`（**不联网不连库**：假浙江来源 → 列来源 / 只读检索 / 无命中覆盖边界 / 取正文 / 未知来源报错 / **解析失败不许静默丢条目** / 工具层坏输入不抛异常，共 20 项断言）
+- [ ] **实机验收待用户执行**：`cd server && uv run python scripts/test_library_search.py`（应打印「全部通过」）；重启 server 后问「浙江省关于科技的政策法规库」→ Agent 先列来源（能看到浙江来源）再检索并给出文号/日期/链接，而不是「不在这库里」；② 没有对应来源时如实说覆盖边界；③ `ingest_policies` 入库链路行为不变（检索工具不建任务、不落库）
+
+## Phase 33 — Agent 线与流水线线的对齐清单（盘点先行，代码下轮）
+
+**状态**：🟨 进行中（**本轮只出清单，不改代码**；2026-10-21，待排期） ｜ **目标**：流水线连续换代（Phase 22/25/26/27）后，把 agent 线与流水线线的差距逐条盘点清楚，形成可排期的清单。计划全文：[docs/plans/2026-10-21-agent-alignment.md](docs/plans/2026-10-21-agent-alignment.md)
+
+- [x] **盘点结论**：agent 的**入库链路**（`ingest_policies` → `services/ingestion.py` → `crawl_graph`）与页面共用同一段代码，**自动继承**流水线换代；真正没对齐的是 agent **自己那三条路**：① Phase 32 新增的只读检索 `services/library_search.py`；② agent 的 9 个接入工具（阶段手工版）vs 页面走的 `services/source_import.py` 六阶段编排 + `save_browser_source`；③ agent 完全没有的能力（读成果库 / 终止任务 / 任务日志 / 找回当前任务 / 定时任务 / facets）
+- [x] **P0 口径 bug（会给出错误信息）**：A1 gov.cn 全文的**成文日期**被当**发布日期**返回（`library_search.py:521` vs `gov_cn.py:30-34`；流水线口径见 `crawl_graph.py:607/634-640/982`）；A2 正文未过 `split_fulltext`（带元信息表/零宽字符）；A3 无 `body_metrics` 预检（分不清正文与页面壳）；A4 附件只给个数不给清单
+- [x] **P1 能力缺口（页面有、agent 没有）**：B1 **读不到成果库**（`/api/policies` 四件套 + 提取三栏，agent 一个工具都没有）；C1 停不了任务（`POST /api/tasks/{id}/cancel`）；C2 看不到任务日志；C3 找不回当前任务；D1 定时任务无入口；E1 各来源 facets 无 agent 入口；F1 接入侧缺「一键导入网址」编排与「保存为无头浏览器来源」入口
+- [x] **P2 口径漂移**：G1 只读检索自造预算/组合数/只取第一页，不读 `pipeline_*` settings；G2 只读不判别（取舍保留，但要写进提示词）；G3 机构/文号为空时表述要诚实
+- [x] **文档落档**：`docs/plans/2026-10-21-agent-alignment.md`（含 file:line 证据、影响、建议做法、涉及文件、验收方式、四个批次建议）；`docs/README.md` 补 `plans/` 目录树与索引行；`docs/architecture/chat-agent.md` 加 *Known gaps / backlog* 指针
+- [ ] **待用户排期**：按「批次 1（P0 口径）→ 批次 2（P1 读侧）→ 批次 3（P1 写侧）→ 批次 4（P2）」逐批实现；每批实现时同步本 Phase 的勾选与 `docs/progress/log.md`
