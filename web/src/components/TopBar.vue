@@ -29,8 +29,10 @@ const activeNav = computed(() => (isLibraryFamily.value ? 'library' : route.name
 <template>
   <header class="topbar">
     <div class="brand">
+      <!-- 品牌标记：仓库 static/logo 的方形 mark（复制到 web/public/brand/，
+           角像素自带圆角与透明背景，36px 槽位直接铺满） -->
       <div class="logo">
-        <AppIcon name="wheat" :size="20" />
+        <img src="/brand/policyharvester-mark.png" alt="PolicyHarvester" />
       </div>
       <div class="titles">
         <p class="product">PolicyHarvester</p>
@@ -135,16 +137,20 @@ const activeNav = computed(() => (isLibraryFamily.value ? 'library' : route.name
   color: var(--primary);
 }
 
+/* 品牌标记：图片自带圆角与透明背景，这里只做尺寸与裁切 */
 .logo {
   width: 36px;
   height: 36px;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--primary);
+  overflow: hidden;
   border-radius: 9px;
-  color: #ffffff;
+}
+
+.logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .titles {

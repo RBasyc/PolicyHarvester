@@ -45,6 +45,7 @@
 | 25 | 渲染取数引擎 + 验收失败归因（JS 渲染空壳） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 26 | 无头浏览器来源落库（保存为无头来源 + 取值方式开关） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 27 | 来源页体验修复与改版（向导完成后重置 + 卡片列表 + 来源详情页） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 28 | 品牌视觉：Logo 落到顶栏 / 首页 / 浏览器标签 | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1120,3 +1121,14 @@ cd web && pnpm dev
 - [x] **全路径废代码清扫（2026-10-21）**：删两条无人调用的死链——① 进程内作业列表：`GET /sources/import`（list）端点 + `SourceJobDTO` + `source_import.list_jobs` + 前端 `api.listImportJobs` + `SourceJob` 类型 + store `jobList`/`jobsLoading`/`refreshJobList`（来源页改版后列表 UI 已不存在，refs 只写不读）；② 孤儿端点 `GET /sources/{id}/runs` + 前端 `api.sourceRuns` + `SourceRunsResponse`（详情页走 `getSource` 内嵌 runs，无人调用）；③ `AppIcon` 删 3 个 unused 图标（chart-column / heart-pulse / rotate-ccw）；核对 store 全部导出、`manage_source` 各 action（经 `manage_ingestion_job` 工具全可达）、组件引用均无死项；镜像同步 README 端点清单 / tool-map 路由表 / source-onboarding 内存边界段
 - [x] **文档镜像**：`docs/architecture/overview.md`（路由 + 来源页结构）、`docs/progress/log.md`、计划落档 `docs/plans/`
 - [ ] **实机验收待用户执行**：单条导入 → 启用 → 页面回表单且列表已更新；静态链路导入失败 → 条目右侧出现「启用无头抓取模式」按钮，点击后列表出现已启用无头来源（404/robots/5xx 失败无此按钮）；列表卡片摘要行与 toggle 启停、强制启用确认；chevron 进详情看到结论卡/判据等高网格/实测/双卡，页头试运行与健康检查可用
+
+## Phase 28 — 品牌视觉：Logo 落到顶栏 / 首页 / 浏览器标签
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-21，待实机验收） ｜ **目标**：把仓库 `static/logo/` 的品牌图形真正用进前端——顶栏品牌位、首页欢迎区、浏览器标签页图标
+
+- [x] **素材入库**：`static/logo/` 的两个 PNG（方形 mark 1024×1024、横版 banner 2460×320）复制到 `web/public/brand/`，按实际显示尺寸降采样为 mark 256×256（8.6KB）与 banner 800×104（20.5KB）；Vite `public/` 原样拷进 `dist/` 根，运行时走 `/brand/…` 绝对路径（与既有 `/favicon.svg` 同一约定）
+- [x] **顶栏品牌位**：`TopBar.vue` 的 36×36 红色圆角方块（原先是 lucide `wheat` 图标）换成方形 mark 图片，样式改为 `overflow:hidden` + `border-radius:9px` + `object-fit:cover`（图片角像素自带圆角与透明背景，不再叠底色）
+- [x] **首页欢迎区**：`AgentPage.vue` 空态在主标题上方放横版 banner（`.welcome-logo`，260px 宽、`max-width:100%` 随窄屏缩放）
+- [x] **浏览器标签页**：`index.html` 的 favicon 由 Vite 模板遗留的 `favicon.svg`（紫色 Vite 标）换成品牌 mark PNG，并补 `apple-touch-icon`；`web/public/favicon.svg` 随之删除
+- [x] **废图标清扫**：`AppIcon.vue` 里唯一使用者被替换掉的 `wheat` 图标一并下线（延续 Phase 27 的「全路径废代码清扫」口径）
+- [ ] **实机验收待用户执行**：`cd web && pnpm dev` → ① 顶栏左上角显示新品牌标记（36px，与文字基线齐平）；② `/agent` 空态标题上方显示横版 Logo；③ 浏览器标签页图标为新 Logo（旧的紫色 Vite 标消失，必要时硬刷新清缓存）

@@ -126,6 +126,12 @@ watch(
     <section ref="scrollEl" class="chat" @scroll="onScroll">
       <div v-if="isEmpty" class="chat-inner">
         <div class="welcome">
+          <!-- 横幅 Logo：仓库 static/logo 的横版（复制到 web/public/brand/） -->
+          <img
+            class="welcome-logo"
+            src="/brand/policyharvester-logo.png"
+            alt="PolicyHarvester"
+          />
           <h1>你好，我是政策研究助手</h1>
           <p class="welcome-sub">
             接入国务院政策检索工具链，支持最新政策查询、全文要点提取与分面统计，回答流式输出。
@@ -384,6 +390,13 @@ watch(
   font-weight: 700;
   color: var(--text-primary);
   text-align: center;
+}
+
+/* 横幅 Logo：图片自带留白，按 260px 宽展示；窄屏跟着缩 */
+.welcome-logo {
+  width: 260px;
+  max-width: 100%;
+  height: auto;
 }
 
 .welcome-sub {
