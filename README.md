@@ -2,11 +2,15 @@
 
 <img src="static/logo/policyharvester-logo.png" alt="PolicyHarvester" width="420" />
 
+<p align="center">
+  <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 # PolicyHarvester
 
-**一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
+**A policy-extraction agent with a human confirmation gate — filter first, then spend tokens.**
 
-> 大多数政策爬取工具要么乱抓一气、要么黑箱烧钱。PolicyHarvester 把「人类判断」放回流程中间：先检索候选、标出建议入库的、等你勾选确认，再逐篇做结构化提取。**不确认，不提取，不浪费 token。**
+> Most policy crawlers either grab everything or burn money in a black box. PolicyHarvester puts human judgment back in the middle of the flow: retrieve candidates, flag the ones worth keeping, wait for you to confirm, and only then extract structure. **No confirmation, no extraction, no wasted tokens.**
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](server/pyproject.toml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](server/app/main.py)
@@ -21,308 +25,300 @@
 
 ---
 
-## 它解决什么问题
+## The problem it solves
 
-政策研究者、合规团队、投资机构每周要处理几十份政策文件。现有的 AI 工具普遍有两个问题：
+Policy researchers, compliance teams and investment firms process dozens of policy documents every week. Most AI tools fail in one of two ways:
 
-- **乱抓**：一次拉回几十篇，一半是无关的薄壳通知或图片版红头文件
-- **不透明**：token 花在哪、为什么提取这几篇，全程黑箱
+- **Grabbing everything** — one pull returns fifty documents, half of them irrelevant thin-shell notices or image-only red-headed files.
+- **Opaque costs** — where the tokens went, and why *these* documents were extracted, is a black box.
 
-PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之后**。检索阶段只做廉价判断（标题级入库判别 + 正文预检），你确认后再进入昂贵的结构化提取。
+PolicyHarvester's answer: **put the most expensive step after human confirmation.** The retrieval stage only makes cheap judgements (title-level admission scoring plus a body preflight); once you confirm, the expensive structured extraction starts.
 
-这也是它和一般「政策 RAG」或「爬虫 demo」的核心区别——**它把成本控制设计成了流程的一部分，而不是事后补救。**
-
----
-
-## 一句话能力清单
-
-| 能力               | 一句话说明                                                                  |
-| ------------------ | --------------------------------------------------------------------------- |
-| **人工确认闸门**   | 检索完先停住，前端标注「建议入库 / 不建议 / 已在库」，勾选后才开始提取      |
-| **检索续抓**       | 在调用预算内翻页凑够新增篇数，已在库/不建议的条目不占配额                   |
-| **正文预检**       | 抓全文后清洗，挡下正文过短的薄壳通知与图片版红头文件                        |
-| **三段式提取**     | 每篇产出 事实 / 信息 / 知识 三区，失败可单篇重试                            |
-| **跨任务成果库**   | 按 source_url 去重沉淀，支持机构/文种/年份筛选                              |
-| **定时入库**       | 按分钟/小时/每日/每周自动抓取，跳过确认闸门直接入库                         |
-| **成本可观测**     | 可用页数、正文长度、并发数、检索预算均可按任务覆盖                          |
-| **网站来源接入**   | 粘贴网址自动勘察 → 生成配置 → 试运行验收 → 注册启用，接入任意政策站点       |
-| **无头浏览器来源** | JS 渲染站自动落为浏览器取数来源；对话侧「浏览网页」工具同源共用（可选启用） |
-| **站内检索优先**   | 带站点自带检索入口时，关键词/日期推给站点检索页执行，而非取回后过滤         |
-| **筛选能力声明**   | 机读声明关键词/日期筛选在哪一层生效，前端如实标注召回边界                   |
+That is the real difference from a generic "policy RAG" or a crawler demo — **cost control is designed into the flow, not patched up afterwards.**
 
 ---
 
-## 它长什么样
+## Capabilities at a glance
 
-**政策助手** — ReAct 对话 Agent 入口，接入国务院政策检索工具链与「浏览网页」工具，回答流式输出
-
-![政策助手](static/screenshot/agent-chat.png)
-
-**抓取任务页** — 选择来源，配置时间范围 / 关键词 / 机构 / 文种；「高级设置」可按任务覆盖流水线参数与提取模型
-
-![抓取任务页](static/screenshot/crawl-task.png)
-
-**人工确认闸门** — 检索完先停住：标注「建议入库 / 不建议入库」，勾选确认后才开始逐篇提取
-
-![人工确认闸门](static/screenshot/confirmation-gate.png)
-
-**结果抽屉** — 点击结果表任意一行，右侧抽屉即时展开该篇的「事实 / 信息 / 知识」三段式提取
-
-![提取结果抽屉](static/screenshot/library.png)
-
-**成果库** — 跨任务按 source_url 去重沉淀，支持机构 / 文种 / 年份筛选与分页
-
-![政策成果库](static/screenshot/sources.png)
-
-**来源管理** — 已接入来源列表：导入网址自动勘察 → 试运行验收 → 启用后进入抓取注册表（含无头浏览器来源）
-
-![来源管理](static/screenshot/result-drawer.png)
+| Capability              | One-line description                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| **Confirmation gate**   | Retrieval stops and waits; the UI flags "recommended / not recommended / already in library", and extraction starts only after you tick the ones you want |
+| **Paged retrieval**     | Keeps paging within the call budget until enough new documents are found; already-stored or rejected entries do not consume the quota |
+| **Body preflight**      | Cleans the fetched page and drops thin-shell notices and image-only documents with too little text  |
+| **Three-part extraction** | Every document yields Facts / Information / Knowledge; a single failure can be retried alone        |
+| **Cross-task library**  | Deduplicated by `source_url` across tasks, filterable by agency / document type / year              |
+| **Scheduled ingestion** | Runs on a minute / hourly / daily / weekly schedule, skipping the confirmation gate and ingesting directly |
+| **Observable cost**     | Page budget, body length, concurrency and retrieval budget can be overridden per task                |
+| **Website onboarding**  | Paste a URL → reconnaissance → generated config → dry-run acceptance → registered and enabled      |
+| **Headless-browser sources** | JS-rendered sites become browser-based sources automatically; the chat-side "browse the web" tool shares the same engine (optional) |
+| **Native site search**  | When a site exposes its own search, keywords / dates are pushed to the site's search page instead of filtering after the fact |
+| **Declared filter layers** | Machine-readable statement of where keyword / date filtering actually happens, so the UI can show the recall boundary honestly |
 
 ---
 
-## 快速开始
+## What it looks like
 
-**前置依赖**：uv ≥ 0.4、Node.js ≥ 18、pnpm ≥ 8、Docker
+**Policy assistant** — the ReAct chat agent entry point, wired to the State Council policy search toolchain and a "browse the web" tool, with streaming answers
+
+![Policy assistant](static/screenshot/agent-chat.png)
+
+**Crawl task page** — pick a source, configure the time range / keywords / agencies / document types; "Advanced settings" can override pipeline parameters and the extraction model per task
+
+![Crawl task page](static/screenshot/crawl-task.png)
+
+**Human confirmation gate** — retrieval stops: documents are flagged "recommended / not recommended", and per-document extraction starts only after you confirm your selection
+
+![Human confirmation gate](static/screenshot/confirmation-gate.png)
+
+**Result drawer** — click any row of the result table; the drawer on the right instantly shows that document's Facts / Information / Knowledge
+
+![Extraction result drawer](static/screenshot/result-drawer.png)
+
+**Library** — deduplicated by `source_url` across tasks, filterable by agency / document type / year, with pagination
+
+![Policy library](static/screenshot/library.png)
+
+**Source management** — the list of onboarded sources: import a URL → reconnaissance → dry-run acceptance → enabled and registered for crawling (headless-browser sources included)
+
+![Source management](static/screenshot/sources.png)
+
+---
+
+## Quick start
+
+**Prerequisites**: uv ≥ 0.4, Node.js ≥ 18, pnpm ≥ 8, Docker
 
 ```bash
 git clone https://github.com/RBasyc/policyharvester
 cd policyharvester
-cp .env.example .env   # 填入 LLM 认证
+cp .env.example .env   # fill in your LLM credentials
 ./start.sh
 ```
 
-Windows 用户双击 `start.bat`。脚本会自动完成环境自检、依赖安装、数据库就绪检查、并发拉起前后端。
+Windows users can double-click `start.bat`. The script runs an environment self-check, installs dependencies, verifies the database is ready, and starts the front end and back end together.
 
-启动后：
+Once it is up:
 
-| 服务          | 地址                       |
-| ------------- | -------------------------- |
-| 前端界面      | http://localhost:5173      |
-| 后端 API 文档 | http://localhost:8000/docs |
+| Service          | Address                       |
+| ---------------- | ----------------------------- |
+| Web UI           | http://localhost:5173         |
+| API docs         | http://localhost:8000/docs    |
 
-**LLM 网关（OpenAI 兼容协议，任何 `/v1/chat/completions` 端点都能接）：**
+**LLM gateway (OpenAI-compatible — any `/v1/chat/completions` endpoint works):**
 
 ```bash
-OPENAI_API_KEY=sk-...                        # 网关 API Key（DeepSeek / Kimi / OpenAI…）
-OPENAI_BASE_URL=https://api.deepseek.com     # OpenAI 兼容端点
+OPENAI_API_KEY=sk-...                        # gateway API key (DeepSeek / Kimi / OpenAI…)
+OPENAI_BASE_URL=https://api.deepseek.com     # OpenAI-compatible endpoint
 ```
 
-其他命令：
+Other commands:
 
 ```bash
-./start.sh stop     # 停止服务
-./start.sh check    # 只做环境自检
-./start.sh --help   # 查看全部用法
+./start.sh stop     # stop the services
+./start.sh check    # environment self-check only
+./start.sh --help   # full usage
 ```
 
 ---
 
-## 架构总览
+## Architecture at a glance
 
 ```
-浏览器（Vue 3 + TS, :5173）
-   │  /api ← Vite 代理 + SSE
+Browser (Vue 3 + TS, :5173)
+   │  /api ← Vite proxy + SSE
    ▼
-FastAPI（:8000）
-   ├─ A. 对话 Agent   agent ⇄ tools → END（ReAct 循环）
-   ├─ B. 抓取流水线   prepare → fetch →「人工确认闸门」→ extract → summarize
-   ├──► China-Central-Policy-MCP（国务院政策检索，node stdio）
-   ├──► PostgreSQL :5433（docker 容器 server-db-1）
-   ├──► LLM 网关（OpenAI 兼容协议）
-   └──► 无头浏览器（可选 Playwright 栈，BROWSER_ENABLED=true 才装配）
+FastAPI (:8000)
+   ├─ A. Chat agent     agent ⇄ tools → END (ReAct loop)
+   ├─ B. Crawl pipeline  prepare → fetch →「human confirmation gate」→ extract → summarize
+   ├──► China-Central-Policy-MCP (State Council policy search, node stdio)
+   ├──► PostgreSQL :5433 (docker container server-db-1)
+   ├──► LLM gateway (OpenAI-compatible protocol)
+   └──► Headless browser (optional Playwright stack, only assembled when BROWSER_ENABLED=true)
 ```
 
-两条链路**互相独立**：
+The two tracks are **fully independent**:
 
-- **A · 对话 Agent**（`app/agent/`）— 经典 ReAct 循环，工具来自本地 `@tool` + 启动时经 stdio 拉起的 MCP 工具；MCP 不可用时自动降级为仅本地工具。装配了无头浏览器时，模型可调用 `browser_*` 工具在 Guard 约束下「浏览网页」（点击 / 滚动 / 抽取正文）。
-- **B · 抓取流水线**（`app/pipeline/`）— **确定性的两段式图**，中间夹一道人工确认闸门：第一段检索候选并落库后停住（`awaiting_confirmation`），用户勾选/剔除后再跑第二段逐篇提取。检索候选可来自 gov.cn（MCP），也可来自任意已接入的**配置化网站来源**（`app/sources/`，栏目列表页或站点自带检索页；JS 渲染站走无头浏览器取数引擎）。
-
----
-
-## 配置
-
-所有配置集中在仓库根目录的 `.env`。完整注释见 `.env.example`。
-
-| 分组     | 关键项                                              | 说明                                                                 |
-| -------- | --------------------------------------------------- | -------------------------------------------------------------------- |
-| LLM 网关 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME` | OpenAI 兼容协议，DeepSeek / Kimi / OpenAI / 本地 vLLM 通吃           |
-| 模型     | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS`     | `PIPELINE_MODELS` 是高级设置下拉框的数据源，热读                     |
-| 数据库   | `DATABASE_URL`                                      | 默认 `postgresql://kos:kos@localhost:5433/agent_demo`                |
-| 流水线   | `PIPELINE_*`                                        | 最大篇数、每页条数、检索预算、提取并发、正文截断、预检阈值           |
-| 入库判别 | `JUDGE_*`                                           | 判别服务地址与提示词；**不可达时 fail-open**，不阻断抓取             |
-| 浏览器   | `BROWSER_ENABLED` + `BROWSER_*`                     | 无头浏览器总开关与动作/页面/时长预算；关闭时浏览工具与渲染来源不可用 |
-
-页面的「高级设置」可在创建任务时按任务覆盖其中几项与提取模型。
+- **A · Chat agent** (`app/agent/`) — a classic ReAct loop whose tools come from local `@tool` definitions plus MCP tools launched over stdio at startup; when MCP is unavailable it degrades to local tools only. With the headless browser assembled, the model can call `browser_*` tools to "browse the web" under Guard constraints (click / scroll / extract body text).
+- **B · Crawl pipeline** (`app/pipeline/`) — a **deterministic two-phase graph** with a human confirmation gate in the middle: phase one retrieves candidates, writes them to the database and stops (`awaiting_confirmation`); once the user has ticked / removed the selection, phase two extracts each document. Candidates can come from gov.cn (via MCP) or from any onboarded **config-driven website source** (`app/sources/`: column list pages or the site's own search page; JS-rendered sites go through the headless-browser engine).
 
 ---
 
-## API 速览
+## Configuration
 
-完整字段与进度语义见 `server/README.md`，交互式文档在 http://localhost:8000/docs。
+All configuration lives in `.env` at the repository root; see `.env.example` for the annotated reference.
 
-**对话（ReAct Agent）**
+| Group        | Key items                                               | Notes                                                                                        |
+| ------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| LLM gateway  | `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`     | OpenAI-compatible protocol; works with DeepSeek / Kimi / OpenAI / local vLLM                  |
+| Models       | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS`          | `PIPELINE_MODELS` feeds the "Advanced settings" dropdown and is hot-read                        |
+| Database     | `DATABASE_URL`                                           | Default `postgresql://kos:kos@localhost:5433/agent_demo`                                       |
+| Pipeline     | `PIPELINE_*`                                             | Max documents, items per page, retrieval budget, extraction concurrency, body truncation, preflight thresholds |
+| Admission judge | `JUDGE_*`                                            | Judge service address and prompt; **fails open when unreachable** and never blocks a crawl      |
+| Browser      | `BROWSER_ENABLED` + `BROWSER_*`                          | Master switch plus action / page / time budgets; browsing tools and rendered sources disappear when off |
 
-- `POST /api/chat` — 非流式；相同 `thread_id` 共享记忆（`InMemorySaver`，重启丢失）
-- `POST /api/chat/stream` — SSE：`{"type":"token"|"tool"|"done"|"error", ...}`（工具调用有 start/done 步骤条事件）
+The page's "Advanced settings" panel can override some of these — and the extraction model — per task.
 
-**抓取任务**
+---
 
-- `POST /api/tasks` — 创建并后台启动，返回 `201 {"task_id": n}`
-- `POST /api/tasks/{id}/confirm` — 提交确认勾选，触发第二段提取
+## API at a glance
+
+Full field lists and progress semantics are in `server/README.md`; the interactive docs are at http://localhost:8000/docs.
+
+**Chat (ReAct agent)**
+
+- `POST /api/chat` — non-streaming; the same `thread_id` shares memory (`InMemorySaver`, lost on restart)
+- `POST /api/chat/stream` — SSE: `{"type":"token"|"tool"|"done"|"error", ...}` (tool calls emit start/done step events)
+
+**Crawl tasks**
+
+- `POST /api/tasks` — create and start in the background, returns `201 {"task_id": n}`
+- `POST /api/tasks/{id}/confirm` — submit the confirmed selection, triggering phase-two extraction
 - `GET /api/tasks/current` / `GET /api/tasks/{id}` / `GET /api/tasks/{id}/logs`
-- `GET /api/tasks/{id}/policies` — 结果表格 `{items, summary}`
-- `GET /api/tasks/{id}/stream` — SSE 进度
+- `GET /api/tasks/{id}/policies` — result table `{items, summary}`
+- `GET /api/tasks/{id}/stream` — SSE progress
 - `POST /api/tasks/{id}/cancel` · `DELETE /api/tasks/{id}` · `DELETE /api/tasks`
 
-**政策与成果库**
+**Policies and library**
 
 - `GET /api/policies` / `/api/policies/meta` / `/api/policies/{id}`
 - `GET|POST /api/policies/{id}/extraction|retry|reextract`
 
-**定时入库**
+**Scheduled ingestion**
 
 - `GET|POST /api/schedules` · `POST /api/schedules/{id}/toggle|run` · `DELETE /api/schedules/{id}`
 
-**来源管理**
+**Source management**
 
-- `GET /api/sources` — 来源列表（含内置 gov.cn 与每个来源的取数引擎声明）
-- `POST /api/sources/import` — 粘贴网址启动接入勘察（异步 job，`201`）；`POST /api/sources/import/batch` 批量导入
-- `GET /api/sources/import/{job_id}` · `POST /api/sources/import/{job_id}/cancel` · `GET /api/sources/import/{job_id}/stream`（SSE）
-- `POST /api/sources/browser` — 把 JS 渲染站落成无头浏览器来源（`201`）
-- `GET /api/sources/{id}`（含接入记录） · `GET /api/sources/runs/recent`
+- `GET /api/sources` — source list (including the built-in gov.cn and each source's declared fetch engine)
+- `POST /api/sources/import` — paste a URL to start onboarding reconnaissance (async job, `201`); `POST /api/sources/import/batch` for bulk import
+- `GET /api/sources/import/{job_id}` · `POST /api/sources/import/{job_id}/cancel` · `GET /api/sources/import/{job_id}/stream` (SSE)
+- `POST /api/sources/browser` — turn a JS-rendered site into a headless-browser source (`201`)
+- `GET /api/sources/{id}` (with onboarding records) · `GET /api/sources/runs/recent`
 - `POST /api/sources/{id}/enable|disable|trial|health` · `DELETE /api/sources/{id}`
 
-**其他**
+**Misc**
 
 - `GET /health` · `GET /api/filters/facets` · `GET /api/config/pipeline`
 
-> 错误统一为 `{"detail": "<字符串>"}`，前端 `ApiError` 直接渲染该字段。
+> Errors are always `{"detail": "<string>"}`; the front end renders that field directly in its `ApiError`.
 
 ---
 
-## 常见问题
+## FAQ
 
-**报 401 / 认证失败**
+**401 / authentication failures**
 
-`OPENAI_API_KEY` 不是真实 Key（还留着 `sk-...` 占位符），或 `OPENAI_BASE_URL` 指向的网关不认这把 key。另外 `load_dotenv()` **不覆盖**已存在的环境变量：如果 shell 里已经设了 `OPENAI_*`，`.env` 会被静默忽略。用 `env | grep OPENAI` 自查。
+`OPENAI_API_KEY` is not a real key (the `sk-...` placeholder is still there), or the gateway behind `OPENAI_BASE_URL` does not accept that key. Also note that `load_dotenv()` does **not** override existing environment variables: if `OPENAI_*` is already exported in your shell, `.env` is silently ignored. Check with `env | grep OPENAI`.
 
-**服务起来了，但抓取任务直接失败 / 没有结果**
+**The service starts, but crawl tasks fail immediately or return nothing**
 
-先看数据库是否可用——数据库连不上时服务照常启动（只在日志里告警），对话 Agent 不受影响，但抓取流水线会失败：
+First check the database — when it is unreachable the service still starts (it only warns in the log), the chat agent is unaffected, but the crawl pipeline fails:
 
 ```bash
-docker ps | grep server-db-1     # 容器在跑吗
-./start.sh check                 # 端口、.env、数据库、MCP 产物一起体检
+docker ps | grep server-db-1     # is the container running?
+./start.sh check                 # ports, .env, database and MCP artifacts in one go
 ```
 
-注意检索结果为「空」有时是**正常**的：政务站点在无严格匹配时会返回整张未过滤的浏览列表，流水线会做客户端二次校验后如实报「未检索到」。
+Note that an empty retrieval result is sometimes **normal**: government sites often return the whole unfiltered listing when there is no strict match, and the pipeline re-validates client-side and honestly reports "no matching policy documents found".
 
-**提取总是失败 / 提示 JSON 解析不了**
+**Extraction always fails / JSON parse errors**
 
-代码已规避：本仓库默认网关（Kimi）常开思考模式，而「思考开启 + 指定 tool_choice」会被拒。因此结构化调用不强绑工具，由模型自行调用，失败再退回宽松的 JSON 文本解析。换网关/模型时请沿用同一策略。调试单篇：`POST /api/policies/{id}/reextract`。
+The code already works around this: the default gateway (Kimi) often enables thinking mode, and "thinking on + a pinned `tool_choice`" gets rejected. So structured calls do not force tool use — the model calls tools on its own, and a failure falls back to lenient JSON text parsing. Keep the same strategy when you switch gateways or models. To debug a single document: `POST /api/policies/{id}/reextract`.
 
-**改了 `tools/China-Central-Policy-MCP/src/` 却不生效**
+**I changed `tools/China-Central-Policy-MCP/src/` and nothing happened**
 
-服务端加载的是构建产物 `build/index.js`，源码改动必须先构建：
+The server loads the build artifact `build/index.js`, so source changes must be built first:
 
 ```bash
 cd tools/China-Central-Policy-MCP && npm install && npm run build
 ```
 
-**端口被占用 / 服务没退干净**
+**Port already in use / services did not shut down cleanly**
 
 ```bash
-./start.sh stop     # 先按记录下来的 PID 停，再按端口兜底清理
+./start.sh stop     # stops by the recorded PID first, then falls back to a port sweep
 ```
 
-**「入库判别」和「定时入库」能跑吗**
+**Do the admission judge and scheduled ingestion work here?**
 
-判别服务默认指向内网地址，外部环境大概率不通。不通时按 fail-open 处理（全部视为「建议入库」），不会阻断抓取。定时入库需要本机数据库可用。
+The judge service points at an internal address by default and is most likely unreachable from the outside. When unreachable it fails open (everything counts as "recommended"), so it never blocks a crawl. Scheduled ingestion needs a working local database.
 
-**重启后对话失忆 / 任务卡在「运行中」**
+**The chat forgets everything after a restart / a task is stuck in "running"**
 
-对话记忆用 `InMemorySaver`，重启即丢，换 `PostgresSaver` 可持久化。任务卡住是上次进程被杀留下的行——启动时的 lifespan 会自动把它们标记为失败；停在确认闸门的任务不受影响。
+Chat memory uses `InMemorySaver`, so it is lost on restart — switch to `PostgresSaver` to persist it. A stuck task is a leftover row from a killed process; the startup lifespan marks those as failed automatically. Tasks waiting at the confirmation gate are unaffected.
 
 ---
 
-## 目录结构
+## Directory structure
 
 ```
 policyharvester/
-├── start.sh / start.bat     # 一键启动 / 自检 / 停止
-├── .env.example             # 环境变量模板
-├── PLAN.md / TODO.md        # 实施计划 / 进度清单
-├── CLAUDE.md                # AI 编码助手的入口（索引 + 硬性规则）
-├── docs/                    # 项目文档 wiki（架构 / 指南 / 进度）
-├── static/                  # 静态资源（README 引用的图片）
-│   ├── logo/                #   Logo（横幅 / 方形图标）
-│   └── screenshot/          #   界面截图
-├── database/                # PostgreSQL 建库 / 建表 / 种子数据
-├── server/                  # 后端：FastAPI + LangGraph + psycopg3
+├── start.sh / start.bat     # one-shot start / self-check / stop
+├── .env.example             # environment variable template
+├── PLAN.md / TODO.md        # implementation plan / progress checklist
+├── CLAUDE.md                # entry point for AI coding assistants (index + hard rules)
+├── AGENTS.md                # repo-level hard rules and architecture quick reference
+├── docs/                    # project documentation wiki (architecture / guides / progress)
+├── static/                  # static assets (images referenced by this README)
+│   ├── logo/                #   logo (banner / square mark)
+│   └── screenshot/          #   UI screenshots
+├── database/                # PostgreSQL schema / tables / seed data
+├── server/                  # back end: FastAPI + LangGraph + psycopg3
 │   └── app/
-│       ├── agent/           #   A. ReAct 对话 Agent（+ onboarding_tools）
-│       ├── pipeline/        #   B. 抓取 / 提取流水线
-│       ├── sources/         #   C. 配置化来源接入层（静态 / 无头浏览器渲染两种引擎）
-│       ├── browser/         #   可选无头浏览器栈（Guard 约束 + 会话池，对话浏览与渲染来源共用）
-│       ├── services/        #   接入编排（onboarding / source_import）
-│       ├── db/              #   连接池 + 全部 SQL
+│       ├── agent/           #   A. ReAct chat agent (+ onboarding_tools)
+│       ├── pipeline/        #   B. crawl / extract pipeline
+│       ├── sources/         #   C. config-driven source layer (static / headless-browser engines)
+│       ├── browser/         #   optional headless browser stack (Guard constraints + session pool, shared by chat browsing and rendered sources)
+│       ├── services/        #   onboarding orchestration (onboarding / source_import)
+│       ├── db/              #   connection pool + all SQL
 │       ├── api/routes/      #   health / agent / tasks / policies / filters / config / schedules / sources
-│       └── scheduler.py     #   定时入库轮询循环
-├── tools/                   # China-Central-Policy-MCP（已 vendored）
-└── web/                     # 前端：Vue 3 + TypeScript + Vite
+│       └── scheduler.py     #   scheduled ingestion polling loop
+├── tools/                   # China-Central-Policy-MCP (vendored)
+└── web/                     # front end: Vue 3 + TypeScript + Vite
 ```
 
 ---
 
-## 如何扩展
+## How to extend
 
-| 想做的事           | 改哪里                                                                                                |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| 加一个对话工具     | `server/app/agent/tools.py` 用 `@tool` 定义并加入 `TOOLS`，图自动识别                                 |
-| 改对话图结构       | `server/app/agent/graph.py`（新增节点/边、`interrupt` 人工审批、条件路由）                            |
-| 加抓取流水线阶段   | `server/app/pipeline/crawl_graph.py` 加节点与边                                                       |
-| **加一个落库字段** | 需**同时**改四处：`database/schema.sql` → `repositories.py` → `schemas/*.py` → `web/src/api/types.ts` |
-| 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
-| 换模型 / 网关      | `.env` 的 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`，或往 `PIPELINE_MODELS` 注册表加一项    |
+| What you want to do   | Where to change it                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------- |
+| Add a chat tool      | Define it with `@tool` in `server/app/agent/tools.py` and add it to `TOOLS`; the graph picks it up automatically |
+| Change the chat graph | `server/app/agent/graph.py` (new nodes / edges, `interrupt` for human approval, conditional routing)       |
+| Add a pipeline stage | Add a node and its edges in `server/app/pipeline/crawl_graph.py`                                            |
+| **Add a stored field** | Change **all four** places: `database/schema.sql` → `repositories.py` → `schemas/*.py` → `web/src/api/types.ts` |
+| Tune pipeline parameters | `PIPELINE_*` in the root `.env`; the page's "Advanced settings" can override them per task              |
+| Swap model / gateway | `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME` in `.env`, or add an entry to the `PIPELINE_MODELS` registry |
 
-> ⚠️ 任何改变 `policy_document` / `extraction` 行的写操作，都要跟着调用 `refresh_task_counts()`，否则派生的进度计数会与结果表格漂移。
-
----
-
-## 文档
-
-深度文档已 wiki 化，入口是 **[docs/README.md](docs/README.md)**（含完整文档地图）。
-
-| 文档                                         | 内容                                                                      |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| [docs/README.md](docs/README.md)             | 文档 wiki 首页 / 索引 / 维护规则                                          |
-| [docs/architecture/](docs/architecture/)     | 架构说明：总览、对话 Agent、流水线、无头浏览器、gov.cn 检索踩坑、来源接入 |
-| [docs/guides/](docs/guides/)                 | 命令与配置、构建/运行约定、扩展指引与镜像清单                             |
-| [docs/progress/log.md](docs/progress/log.md) | 进度日志明细（逐条踩坑与验收证据）                                        |
-| [PLAN.md](PLAN.md)                           | 打通三端的整体实施计划                                                    |
-| [TODO.md](TODO.md)                           | 逐阶段任务清单与状态（明细日志见 docs/progress/log.md）                   |
-| [CLAUDE.md](CLAUDE.md)                       | 面向 AI 编码助手的入口（索引 + 硬性规则）                                 |
-| [server/README.md](server/README.md)         | 后端 API 字段、进度语义                                                   |
-| [database/README.md](database/README.md)     | 表结构设计                                                                |
+> ⚠️ Any write that changes `policy_document` / `extraction` rows must be followed by `refresh_task_counts()`, otherwise the derived progress counters drift away from the result table.
 
 ---
 
-- 作者声明：本项目仅供学习、教学与学术研究使用。 开源的目的在于帮助有需要的分析师与研究者更高效地开展政策信息分析与复现工作。
-  使用边界：本项目不面向生产环境或商业化部署，作者不对任何此类用途进行背书或提供保证。 如需用于生产/商业场景，请自行完成充分的合规审查与测试，并自行承担全部风险与责任。
+## Documentation
 
-- 禁止性用途：不得将本项目用于任何违法、侵权、违规或不道德的用途，包括但不限于：
-  绕过网站服务条款、访问控制或反爬机制；
-  大规模抓取、存储、传播受版权保护或包含个人信息的数据；
-  制造或传播虚假/误导性内容，或用于舆论操纵；
-  任何违反适用法律法规、数据合规与隐私保护要求的行为。
+The deep documentation is wiki-ed; the entry point is **[docs/README.md](docs/README.md)** (with the full document map).
 
-- 数据来源与合规：本项目对接公开的政府网站入口。 使用者应自行确认目标站点的使用条款、robots 协议、访问频率限制与版权要求，合理控制请求频率，避免对对方服务造成不当负载。
+| Document                                       | Contents                                                                        |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- |
+| [docs/README.md](docs/README.md)             | Wiki home / index / maintenance rules                                           |
+| [docs/architecture/](docs/architecture/)     | Architecture: overview, chat agent, pipeline, headless browser, gov.cn search quirks, source onboarding |
+| [docs/guides/](docs/guides/)                 | Commands and configuration, build/run conventions, extension guide and mirror lists |
+| [docs/progress/log.md](docs/progress/log.md) | Detailed progress log (every pitfall and acceptance evidence)                  |
+| [PLAN.md](PLAN.md)                           | The overall plan for wiring up all three ends                                    |
+| [TODO.md](TODO.md)                           | Per-phase task checklist and status (detailed log in docs/progress/log.md)      |
+| [CLAUDE.md](CLAUDE.md)                       | Entry point for AI coding assistants (index + hard rules)                      |
+| [AGENTS.md](AGENTS.md)                       | Repo-level hard rules and architecture quick reference for coding agents        |
+| [server/README.md](server/README.md)         | Back-end API fields and progress semantics                                      |
+| [database/README.md](database/README.md)     | Table design                                                                    |
 
-- 免责声明：项目按“现状”提供，不作任何明示或默示担保（包括但不限于适销性、特定用途适用性与非侵权）。 在法律允许的最大范围内，作者不对因使用本项目而导致的任何直接或间接损失承担责任。
+---
 
-- 版权与许可：本项目采用 Apache-2.0 许可证发布。 许可证条款是约束使用的唯一法律文本； 本节“法律声明与使用限制”表述的是作者的使用态度与合规提示，不构成对许可证的修改。 如对许可证与本声明存在理解冲突，以许可证条款为准。
-
-- 合规与移除：如您认为本项目中的说明或工具可能引发合规风险，或出于正当权利主张提出移除/更正请求，请通过下述联系方式与作者取得联系。
+- Author's statement: this project is provided for learning, teaching and academic research only. It is open-sourced in the hope of helping analysts and researchers carry out policy analysis and reproduce work more efficiently. Usage boundary: it is not intended for production or commercial deployment; the author does not endorse or guarantee any such use. If you need it in a production or commercial setting, please perform your own thorough compliance review and testing, and bear all risks and responsibilities yourself.
+- Prohibited uses: this project must not be used for any illegal, infringing, non-compliant or unethical purpose, including but not limited to: bypassing a site's terms of service, access controls or anti-scraping mechanisms; large-scale scraping, storage or distribution of copyrighted or personal data; creating or spreading false or misleading content, or using it for opinion manipulation; anything that violates applicable law, data-compliance or privacy-protection requirements.
+- Data sources and compliance: this project talks to public government website entry points. Users are responsible for checking the target site's terms of use, robots protocol, rate limits and copyright requirements, and for keeping the request rate reasonable so the site is not overloaded.
+- Disclaimer: the project is provided "as is", without any express or implied warranty (including but not limited to merchantability, fitness for a particular purpose, or non-infringement). To the maximum extent permitted by law, the author is not liable for any direct or indirect loss arising from the use of this project.
+- Copyright and license: this project is released under the Apache-2.0 license. The license terms are the only legally binding text; the "Legal notice and usage restrictions" section above states the author's attitude and compliance guidance and does not modify the license. If there is any conflict between the license terms and that notice, the license terms prevail.
+- Compliance and takedown: if you believe something in this project may raise a compliance risk, or if you have a legitimate claim for removal or correction, please get in touch with the author.
 
 ---
 
