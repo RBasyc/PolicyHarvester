@@ -1153,3 +1153,13 @@ cd web && pnpm dev
 
 - [x] **AGENTS.md 落地**：七节——硬规则（不构建不运行只交付命令、新增持久化字段要落 4 处、`schema.sql` 幂等补丁、计数器是派生值、MCP 源码改动需 `npm run build`、浏览器导航前后各断言一次、收尾要勾 TODO + 追加日志行）、架构事实（两段式流水线、两个独立图、网站即数据、提示词冷热、`design.pen` 不能直接读、子 README 已漂移、`.claude/worktrees/` 会污染 grep）、命令（只交付不执行）、验证现实（无 CI/无 pytest，验收靠 `server/scripts/` 冒烟脚本）、配置怪癖（`.env` 在仓库根、OpenAI 兼容协议、`PIPELINE_MODELS` 热读、DB 端口、无头浏览器为可选附加项）、前端怪癖（无 Pinia 的模块级 store、EventSource vs POST 流、路由与 /agent 视口约束）
 - [ ] **实机验收**：纯文档，无运行时行为
+
+## Phase 31 — 双语 README（默认英文 + 中文版互链）
+
+**状态**：🟩 已完成（2026-10-21） ｜ **目标**：README 默认英文（与 `docs/architecture`、`docs/guides` 的英文口径一致），中文版另存并在两份文件顶部互链
+
+- [x] **`README.md` 改为英文版**：徽章、问题陈述、能力清单、截图说明、快速开始、架构图、配置表、API 速览、FAQ、目录结构、扩展指引、文档索引、法务声明逐节翻译；顶部加 `English | 简体中文` 语言切换条
+- [x] **`README.zh-CN.md` 保留中文版**：原 README 内容整体迁入，顶部加 `English | 简体中文` 切换条（当前语言加粗）
+- [x] **顺手修掉截图配错**：原 README 末尾三张图错位（结果抽屉指向 `library.png`、成果库指向 `sources.png`、来源管理指向 `result-drawer.png`），两版均已改正
+- [x] **补 AGENTS.md 入口**：文档索引表与目录树各加一行（`AGENTS.md` 是根级 coding agent 硬规则）
+- [ ] **实机验收**：纯文档，无运行时行为
