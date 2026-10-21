@@ -32,14 +32,6 @@ onMounted(() => void loadFeatures())
  * 前端不留历史（刷新即新会话），「新对话」按钮换 id 即可。
  */
 
-/** 输入卡片底部的能力标签：只在空态显示，进入对话后让位给「新对话」 */
-const tools: { label: string; icon: string }[] = [
-  { label: '政策检索', icon: 'search' },
-  { label: '全文阅读', icon: 'file-text' },
-  { label: '分面统计', icon: 'chart-column' },
-  { label: '流式输出', icon: 'zap' },
-]
-
 const suggestions: { icon: string; text: string }[] = [
   { icon: 'newspaper', text: '查询最新发布的国务院政策文件，按发文日期排序列出' },
   { icon: 'file-text', text: '打开一份政策全文，提取发文机关、文号与核心条款' },
@@ -246,7 +238,7 @@ watch(
       ></textarea>
 
       <div class="composer-tools">
-        <!-- 左槽：「浏览网页」开关 + 空态能力标签 / 对话态「新对话」 -->
+        <!-- 左槽：「浏览网页」开关 / 对话态「新对话」。空态下不再列能力标签（它们不可点，容易被误认成按钮） -->
         <div class="tools-left">
           <button
             v-if="browserAvailable"
@@ -262,13 +254,7 @@ watch(
             <span>浏览网页</span>
           </button>
 
-          <div v-if="isEmpty" class="tool-tags">
-            <div v-for="tool in tools" :key="tool.label" class="tool-tag">
-              <AppIcon :name="tool.icon" :size="12" />
-              <span>{{ tool.label }}</span>
-            </div>
-          </div>
-          <button v-else class="new-chat" type="button" @click="resetChat">
+          <button v-if="!isEmpty" class="new-chat" type="button" @click="resetChat">
             <AppIcon name="plus" :size="13" />
             <span>新对话</span>
           </button>
@@ -303,7 +289,12 @@ watch(
  * 顶栏与页面外壳（内边距 / 最大宽度）都由外面提供：顶栏是共享的 TopBar，
  * 容器宽度沿用 App.vue 的 `.content`——本页只负责「中间滚动 + 底部输入框」两段。
  */
+/* 对话 + 输入卡片收窄成一列居中：不再铺满 `.content` 的 1280px 宽，
+   长回答的行长更短、更好读；窄屏下自动退回到可用宽度 */
 .agent {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -705,8 +696,8 @@ watch(
   min-width: 0;
 }
 
-/* 「浏览网页」开关：与 tool-tag 同一观感，激活时用 accent（scoped 样式，不复用
-   ConfigPanel 的 .chip——那两个类名只在本组件内有效） */
+/* 「浏览网页」开关：胶囊观感，激活时用 accent（scoped 样式，不复用 ConfigPanel 的
+   .chip——那两个类名只在本组件内有效） */
 .browse-toggle {
   display: flex;
   align-items: center;
@@ -737,27 +728,6 @@ watch(
 .browse-toggle:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-.tool-tags {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.tool-tag {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  padding: 6px 11px;
-  background: var(--bg);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: normal;
-  white-space: nowrap;
 }
 
 .new-chat {

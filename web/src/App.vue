@@ -112,33 +112,33 @@ onBeforeUnmount(() => {
   padding-bottom: 28px;
 }
 
-/* 顶部居中弹出，浅色卡片风；类型决定左侧图标的颜色（见下方 toast--*） */
+/* 页面右下角常驻弹出（不挡顶部 tab 与页头），从右侧滑入；浅色卡片风，
+   类型决定左侧图标的颜色（见下方 toast--*） */
 .toast {
   position: fixed;
-  left: 50%;
-  top: 16px;
-  transform: translateX(-50%);
+  right: 24px;
+  bottom: 24px;
   z-index: 200;
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(680px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 48px));
   padding: 12px 14px;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px #1f23291f;
-  animation: toast-drop 0.18s ease-out;
+  animation: toast-slide 0.2s ease-out;
 }
 
-@keyframes toast-drop {
+@keyframes toast-slide {
   from {
     opacity: 0;
-    transform: translate(-50%, -8px);
+    transform: translateX(24px);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateX(0);
   }
 }
 
@@ -205,6 +205,12 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
+  .toast {
+    right: 16px;
+    bottom: 16px;
+    max-width: calc(100vw - 32px);
+  }
+
   .content {
     padding: 16px 16px 32px;
   }

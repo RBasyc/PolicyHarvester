@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 导入接入（Phase 16 自 SourceModal 平移 + 批量新增）：
- *   单条导入 —— 输入 → 进行中（SSE）→ 验收报告 → （补救）候选替换重跑 / 启用该来源；
+ *   单条导入 —— 输入 → 进行中（SSE）→ 启用条（启用该来源置顶）+ 验收报告 → （补救）候选替换重跑；
  *   批量导入 —— 粘贴 N 个地址排队逐个跑，聚合 SSE 推队列进度，行展开看报告。
  *
  * 状态全部在 `store/sourceImports.ts`（模块级）：切 tab / 组件重挂载都不丢；
@@ -27,6 +27,7 @@ import {
   LOG_LEVEL_TONE,
   refreshRecentRuns,
   registeredId,
+  registeredLabel,
   registeredStatus,
   reportPassed,
   requestUrl,
@@ -312,6 +313,68 @@ async function enableHeadlessFromWizard(url: string, jobId: string | null) {
 
         <!-- ---------- 3. 报告 ---------- -->
         <template v-else>
+          <!-- 主行动作置顶（2026-10-21 用户反馈）：验收报告很长，「启用该来源」原来在页尾，
+               得一路翻到底才点得到。现在把启用条放到报告上面，状态说明 + 按钮一眼可见。 -->
+          <div
+            v-if="wizard.job?.browser_source || registeredId != null || wizardHeadlessEligible"
+            class="enable-bar"
+          >
+            <p v-if="wizard.job?.browser_source" class="enable-note ok">
+              <AppIcon name="circle-check" :size="13" />
+              <span>
+                已启用无头抓取模式：来源「{{ wizard.job.browser_source.label || '未命名来源' }}」
+                已验收 · 已启用——可在抓取页直接选用
+              </span>
+            </p>
+            <p v-else-if="registeredStatus === 'active'" class="enable-note ok">
+              <AppIcon name="circle-check" :size="13" />
+              <span>「{{ registeredLabel }}」已启用——可在抓取页直接选用</span>
+            </p>
+            <p v-else-if="wizardHeadlessEligible" class="enable-note">
+              <AppIcon name="info" :size="13" />
+              <span>静态管线没取到内容：确认后改用无头抓取模式，通过校验即已验收 · 已启用。</span>
+            </p>
+            <p v-else-if="reportPassed" class="enable-note">
+              <AppIcon name="info" :size="13" />
+              <span>
+                已登记为 <b>{{ STATUS_LABEL[registeredStatus ?? 'draft'] }}</b>：通过验收后需人工点
+                「启用该来源」才会进入抓取来源。
+              </span>
+            </p>
+            <p v-else class="enable-note warn">
+              <AppIcon name="triangle-alert" :size="13" />
+              <span>这份配置没有通过验收，先换候选重跑或回到来源列表用「强制启用」。</span>
+            </p>
+
+            <div class="enable-actions">
+              <!-- 静态管线拿不到内容的失败（服务端 headless_eligible）：人工确认后启用无头抓取 -->
+              <button
+                v-if="wizardHeadlessEligible"
+                class="primary"
+                type="button"
+                :disabled="savingHeadlessUrl === (wizard.job?.url ?? '')"
+                title="真用无头浏览器打开入口页轻量校验，通过后即成为已验收、已启用的来源；浏览目标在抓取配置里填"
+                @click="enableHeadlessFromWizard(wizard.job?.url ?? '', wizard.job?.job_id ?? null)"
+              >
+                {{ savingHeadlessUrl === (wizard.job?.url ?? '') ? '校验中…' : '启用无头抓取模式' }}
+              </button>
+              <button
+                v-if="registeredId != null && registeredStatus !== 'active'"
+                class="primary"
+                type="button"
+                :disabled="!canEnableRegistered"
+                :title="
+                  reportPassed
+                    ? '纳入抓取来源（有通过验收）'
+                    : '这份配置没有通过验收，先换候选重跑或回到来源列表用「强制启用」'
+                "
+                @click="enableRegistered"
+              >
+                启用该来源
+              </button>
+            </div>
+          </div>
+
           <SourceReport
             :report="wizard.job?.report ?? null"
             :error-kind="wizard.job?.error_kind ?? null"
@@ -382,37 +445,16 @@ async function enableHeadlessFromWizard(url: string, jobId: string | null) {
             <span>{{ wizard.streamError }}</span>
           </p>
 
-          <!-- 已启用过无头抓取模式（对表回来时）：只显示一行结果，不再给按钮 -->
-          <p v-if="wizard.job?.browser_source" class="auto-saved">
-            <AppIcon name="circle-check" :size="13" />
-            <span>
-              已启用无头抓取模式：来源「{{ wizard.job.browser_source.label || '未命名来源' }}」
-              已验收 · 已启用——可在抓取页直接选用
-            </span>
-          </p>
-
           <div class="foot">
-            <p class="foot-hint">
-              <template v-if="registeredStatus">
-                已登记为 <b>{{ STATUS_LABEL[registeredStatus] }}</b>
-                ：通过验收后需人工点「启用」才会进入抓取来源
-              </template>
-              <template v-else-if="wizard.job?.status === 'cancelled'">作业已取消，未登记任何来源</template>
-              <template v-else>这次没有登记新配置（失败不覆盖已在跑的来源）</template>
+            <p v-if="wizard.job?.status === 'cancelled'" class="foot-hint">
+              作业已取消，未登记任何来源
             </p>
+            <p v-else-if="registeredId == null" class="foot-hint">
+              这次没有登记新配置（失败不覆盖已在跑的来源）
+            </p>
+            <p v-else class="foot-hint">验收报告见上方，可逐条复核后再决定是否重新接入</p>
             <button class="ghost" type="button" @click="emit('switchTab', 'list')">回到列表</button>
             <button class="ghost" type="button" @click="resetWizard">重新接入</button>
-            <!-- 静态管线拿不到内容的失败（服务端 headless_eligible）：人工确认后启用无头抓取 -->
-            <button
-              v-if="wizardHeadlessEligible"
-              class="primary"
-              type="button"
-              :disabled="savingHeadlessUrl === (wizard.job?.url ?? '')"
-              title="真用无头浏览器打开入口页轻量校验，通过后即成为已验收、已启用的来源；浏览目标在抓取配置里填"
-              @click="enableHeadlessFromWizard(wizard.job?.url ?? '', wizard.job?.job_id ?? null)"
-            >
-              {{ savingHeadlessUrl === (wizard.job?.url ?? '') ? '校验中…' : '启用无头抓取模式' }}
-            </button>
             <button
               v-if="canRerunCandidate"
               class="ghost"
@@ -422,20 +464,6 @@ async function enableHeadlessFromWizard(url: string, jobId: string | null) {
               @click="rerunSelectedCandidate"
             >
               {{ wizard.starting ? '提交中…' : '替换为该候选并重跑' }}
-            </button>
-            <button
-              v-if="registeredId != null && registeredStatus !== 'active'"
-              class="primary"
-              type="button"
-              :disabled="!canEnableRegistered"
-              :title="
-                reportPassed
-                  ? '纳入抓取来源（有通过验收）'
-                  : '这份配置没有通过验收，先换候选重跑或回到来源列表用「强制启用」'
-              "
-              @click="enableRegistered"
-            >
-              启用该来源
             </button>
           </div>
         </template>
@@ -1221,6 +1249,67 @@ async function enableHeadlessFromWizard(url: string, jobId: string | null) {
 .auto-saved svg {
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+/* ---------- 报告页顶部启用条 ---------- */
+/*
+ * 「启用该来源」从页尾提到报告上方（用户 2026-10-21 反馈：报告太长，要翻到底才点得到）。
+ * 状态用一句话写在左侧、按钮固定在右侧，跨行时状态先占满一行、动作仍靠右。
+ * 注意这里只是版式容器，按钮样式沿用 `.primary`，不要再单独定义一套主按钮。
+ */
+.enable-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  background: #f7f8f9;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.enable-note {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.enable-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.enable-note b {
+  color: var(--text-primary);
+}
+
+/* 已启用 / 已落成来源 —— 绿 */
+.enable-note.ok,
+.enable-note.ok svg {
+  color: var(--green, #1f7a3d);
+}
+
+.enable-note.ok b {
+  color: inherit;
+}
+
+/* 未通过验收 —— 红色警示，和「启用」按钮的禁用态区分开 */
+.enable-note.warn svg {
+  color: var(--accent);
+}
+
+.enable-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .queue-saved {
