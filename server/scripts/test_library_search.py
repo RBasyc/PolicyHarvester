@@ -330,6 +330,39 @@ async def main() -> int:
         ok = payload.get("ok") is False and bool(message) and message != "None"
         check(f"{args} → ok=false + 中文原因（不抛异常）", ok, message[:60])
 
+    print("\n=== 10. facets：某来源能按什么筛（离线走静态名单）===")
+    raw = await search_policy_library.ainvoke({"action": "facets"})
+    payload = json.loads(raw)
+    check("facets 返回 ok=true", payload.get("ok") is True)
+    check("facets 给机构名单", isinstance(payload.get("agencies"), list))
+    check("facets 给文种名单", isinstance(payload.get("doc_types"), list))
+    check("facets 说明筛选在哪一层生效", bool(payload.get("note")))
+
+    print("\n=== 11. manage_schedule / import_source：坏输入不抛异常 ===")
+    from app.agent.onboarding_tools import import_source
+    from app.agent.schedule_tools import manage_schedule
+
+    cases = [
+        (manage_schedule, {"action": "bogus"}, "action 需要是"),
+        (manage_schedule, {"action": "toggle"}, "需要 job_id"),
+        (manage_schedule, {"action": "run"}, "需要 job_id"),
+        (manage_schedule, {"action": "delete"}, "需要 job_id"),
+        # 周期参数缺失 / 非法：由 ScheduleCreate 的校验器拦（不进数据库）
+        (manage_schedule, {"action": "create", "schedule_kind": "weekly"}, "运行时刻"),
+        (manage_schedule, {"action": "create", "schedule_kind": "daily", "run_time": "25:00"}, "运行时刻"),
+        (manage_schedule, {"action": "create", "schedule_kind": "minutely"}, "间隔数值"),
+        (import_source, {"action": "bogus"}, "action 需要是"),
+        (import_source, {"action": "status"}, "需要 job_id"),
+        (import_source, {"action": "import"}, "需要 url"),
+        (import_source, {"action": "save_browser"}, "需要 url"),
+        (import_source, {"action": "import", "url": "not-a-url"}, "地址不可用"),
+    ]
+    for tool_fn, args, expect in cases:
+        raw = await tool_fn.ainvoke(args)
+        payload = json.loads(raw)
+        ok = payload.get("ok") is False and expect in str(payload.get("error"))
+        check(f"{tool_fn.name} {args} → ok=false + 中文原因", ok, str(payload.get("error"))[:60])
+
     if args_db:
         await db_cases()
 

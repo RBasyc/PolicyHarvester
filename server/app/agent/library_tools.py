@@ -34,7 +34,7 @@ from app.agent.tool_utils import dump as _dump
 from app.agent.tool_utils import error as _error
 from app.agent.tool_utils import parse_iso_date as _parse_date
 
-_ACTIONS = ("sources", "search", "fulltext")
+_ACTIONS = ("sources", "search", "fulltext", "facets")
 
 # 一次检索每个来源最多返回几条（模型要的是「够不够挑」）
 _DEFAULT_LIMIT = 10
@@ -66,6 +66,9 @@ async def search_policy_library(
     - `fulltext` 取某篇正文（给出 `url`）。用于精读条款、核对原文。返回的正文已清洗
       （去掉元信息表与页头噪声），并给出 `publish_date` / `signed_date`（**成文日期单列**，
       别把它当发布日期）、`body_ok`（正文质量）与附件清单。
+    - `facets`  某个来源的**可选筛选值**：发布机构、文种 + 每个值有多少条。
+      口径与页面筛选器**完全一致**（gov.cn 走实时统计，其它来源给栏目名）。
+      不知道能筛什么时先查这个，别猜机构名。
 
     **为什么先查来源**：`get_latest_policies` / `get_policy_facets` 这两个 MCP 工具
     **只覆盖国务院政策文件库（国家层面）**。用户问「浙江省的政策」时，直接拿它们去答，
@@ -107,6 +110,39 @@ async def search_policy_library(
             if not target:
                 return _error("fulltext 需要 url（原文链接）")
             return _dump(await svc.fetch_source_fulltext(target, source=source))
+
+        if action == "facets":
+            start, err = _parse_date(date_from, "date_from")
+            if err:
+                return _error(err)
+            end, err = _parse_date(date_to, "date_to")
+            if err:
+                return _error(err)
+            from app.services import facets as facet_svc
+
+            facets = await facet_svc.get_facets(
+                q=(keywords[0] if keywords else None),
+                date_from=start,
+                date_to=end,
+                source=source,
+            )
+            return _dump(
+                {
+                    "ok": True,
+                    "action": "facets",
+                    "source": facets.source,
+                    "source_label": facets.source_label,
+                    "agencies": [{"name": item.name, "count": item.count} for item in facets.agencies],
+                    "doc_types": [{"name": item.name, "count": item.count} for item in facets.doc_types],
+                    "supports": facets.supports.model_dump(mode="json"),
+                    "note": (
+                        "这是内置静态名单（实时 facet 不可用，或该来源本身没有 facet 接口）；"
+                        "配置化来源的「发布机构」其实是站点栏目名，文种只能从文号解析。"
+                        if facets.source == "fallback"
+                        else "实时统计的结果，条数随关键词与时间范围变化。"
+                    ),
+                }
+            )
 
         start, err = _parse_date(date_from, "date_from")
         if err:

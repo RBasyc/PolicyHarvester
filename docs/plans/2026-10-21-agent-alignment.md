@@ -1,6 +1,6 @@
 # Agent 线与流水线线的对齐清单
 
-> Phase 33 · 2026-10-21 · 状态：**批次 1（P0 口径 A1–A4）与批次 2（P1 读侧 B1/C1/C2/C3）已落地**；批次 3–4 待排期
+> Phase 33 · 2026-10-21 · 状态：**批次 1（P0 口径 A1–A4）、批次 2（P1 读侧 B1/C1/C2/C3）、批次 3（P1 写侧 D1/E1/F1）已落地**；批次 4（P2）待排期
 
 ## Context（为什么做）
 
@@ -86,12 +86,14 @@
 
 ## 三、P1：能力缺口 —— 页面有、agent 没有
 
-> **状态：批次 2（B1 / C1 / C2 / C3）已落地（2026-10-21）。** 新增
-> `app/services/library_query.py` + 工具 `search_library`（查库内）；
+> **状态：批次 2（B1 / C1 / C2 / C3）与批次 3（D1 / E1 / F1）已落地（2026-10-21）。**
+> 批次 2：新增 `app/services/library_query.py` + 工具 `search_library`（查库内）；
 > `app/services/ingestion.py` 增 `cancel_ingestion`、给 `inspect_ingestion` 加日志
 > 与「最近一次任务」兜底；`POST /api/tasks/{id}/cancel` 转调服务层（一处实现两处用）。
-> 回归断言在 `server/scripts/test_library_search.py` 第 8–11 节（离线部分已跑通，
-> 读库部分需 `--db`）。
+> 批次 3：`app/services/facets.py`（`GET /api/facets` 下沉，工具加 `action="facets"`）、
+> `app/services/schedule.py` + 工具 `manage_schedule`（`/api/schedules*` 下沉）、
+> 工具 `import_source`（复用页面那套六阶段导入编排 + `save_browser_source`）。
+> 回归断言在 `server/scripts/test_library_search.py`（离线已跑通，读库用例需 `--db`）。
 
 ### B1 agent 读不到成果库（**最大的洞**）
 
@@ -216,7 +218,7 @@
 | --- | --- | --- |
 | 批次 1（P0）✅ | A1–A4 | 现在会给出**错误日期**与脏正文；改动集中在一个文件 + 提示词一句，风险最低 |
 | 批次 2（P1 读侧）✅ | B1、C1、C2、C3 | 「聊得起也停得下」：能读库、能取消、能看日志、能找回任务 |
-| 批次 3（P1 写侧） | D1、E1、F1 | 让 agent 能建定时任务、拿 facets、走页面同款接入编排 |
+| 批次 3（P1 写侧）✅ | D1、E1、F1 | 让 agent 能建定时任务、拿 facets、走页面同款接入编排 |
 | 批次 4（P2） | G1–G3 | 消除两套预算/口径；G2/G3 主要是提示词与返回值的措辞 |
 
 ## 六、验证（用户侧，硬规则 1：不构建不运行）

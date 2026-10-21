@@ -3,11 +3,12 @@
 使用 @tool 装饰器定义，LangGraph 的 ToolNode 会自动执行。
 在这里添加你自己的工具函数即可。
 
-工具分四块：本文件的通用工具、`library_tools.py` 的**政策库检索**工具
-（search_policy_library：列已启用来源 → 只读检索 → 取正文）、
+工具分五块：本文件的通用工具、`library_tools.py` 的**政策库检索**工具
+（search_policy_library：列已启用来源 → 只读检索 → 取正文；search_library：查成果库）、
 `onboarding_tools.py` 的**网站来源接入**工具
-（inspect_source / dry_run_ingestion / register_source 等 9 个，阶段边界见该文件 docstring），
-以及 `ingestion_tools.py` 的**抓取入库**工具（ingest_policies：检索 → 确认 → 提取入库）。
+（inspect_source / dry_run_ingestion / register_source 等 9 个，阶段边界见该文件 docstring）、
+`ingestion_tools.py` 的**抓取入库**工具（ingest_policies：检索 → 确认 → 提取入库）、
+`schedule_tools.py` 的**定时任务**工具（manage_schedule：列表 / 新建 / 启停 / 触发 / 删除）。
 后三者只依赖服务层、不依赖 MCP，所以可以顶层导入并直接进 `TOOLS`。
 """
 
@@ -18,6 +19,7 @@ from langchain_core.tools import BaseTool, tool
 from app.agent.ingestion_tools import INGESTION_TOOLS
 from app.agent.library_tools import LIBRARY_TOOLS
 from app.agent.onboarding_tools import ONBOARDING_TOOLS
+from app.agent.schedule_tools import SCHEDULE_TOOLS
 from app.browser.tools import browser_tools
 
 
@@ -31,7 +33,14 @@ def get_current_time() -> str:
 # 浏览器工具（browser_*）必须无条件进 `ToolNode`，否则开了「浏览网页」开关后模型发出的
 # 工具调用会「没有对应工具」；但**绑定给模型**时按当前请求过滤（见 agent/nodes.py），
 # 没开开关的对话看不到这些 schema，省 token。
-TOOLS = [get_current_time, *LIBRARY_TOOLS, *ONBOARDING_TOOLS, *INGESTION_TOOLS, *browser_tools()]
+TOOLS = [
+    get_current_time,
+    *LIBRARY_TOOLS,
+    *ONBOARDING_TOOLS,
+    *INGESTION_TOOLS,
+    *SCHEDULE_TOOLS,
+    *browser_tools(),
+]
 
 # MCP 工具（China-Central-Policy-MCP 等），由应用启动时（lifespan）异步加载后填充
 MCP_TOOLS: list[BaseTool] = []

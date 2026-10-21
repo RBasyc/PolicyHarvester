@@ -32,16 +32,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from langchain_core.tools import tool
+from pydantic import ValidationError
 
 # 共用小工具（结果压缩 / 统一失败返回 / 日期参数校验）只有一份，见 `tool_utils`；
 # 这里起回原名，函数体一个字都不用改。
 from app.agent.tool_utils import dump as _dump
 from app.agent.tool_utils import error as _error
 from app.agent.tool_utils import parse_iso_date as _parse_date
+from app.agent.tool_utils import validation_message as _validation_message
 
 
 def _load_json(raw: str | dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -780,6 +783,189 @@ async def diagnose_source(
     )
 
 
+@tool
+async def import_source(
+    action: str = "import",
+    url: str | None = None,
+    target: str | None = None,
+    keywords: list[str] | None = None,
+    limit: int = 3,
+    label: str | None = None,
+    job_id: str | None = None,
+    wait_seconds: float = 180.0,
+) -> str:
+    """**一键接入一个网站**（与页面「导入网址」同一套编排）。
+
+    页面那条路走的是 `app/services/source_import.py` 的六阶段编排
+    （勘察 → 内容发现 → 生成配置 → 试运行验收 → 注册），外加失败归因
+    （哪个阶段卡住、能不能转无头浏览器）；本工具走**同一段代码**，所以
+    结论、失败归因与「保存为无头浏览器来源」的出口都和页面一致。
+
+    三个动作：
+
+    - `import`        给一个栏目/入口页地址，跑完整接入流程并等它结束
+                      （真实抓取，要几十秒）。返回验收结论、失败原因与建议。
+    - `status`        看一个还在跑的接入作业（`job_id`）。
+    - `save_browser`  把一个「静态抓不到、但确实是 JS 站」的地址**保存为无头浏览器来源**
+                      （真用无头浏览器打开一次做轻量校验，通过即已启用）。
+
+    **注册出来的来源默认是草案（draft）**：验收通过也不会自动启用，要人工启用——
+    除非用户明确要你直接启用，那就用 `register_source(approved=True)`。
+
+    Args:
+        action: `import` / `status` / `save_browser` 之一。
+        url: 栏目/入口页地址（列出政策条目的那一页，不是门户首页）。
+        target: 这次要采集什么（自然语言，进勘察报告）。
+        keywords: 试抓关键词（留空 = 不按关键词过滤）。
+        limit: 试抓篇数（1–10，默认 3）。
+        label: 来源展示名（`save_browser` 用；留空 = 按页面标题自动取）。
+        job_id: 作业 id（`import` 的返回里有；`status` 用）。
+        wait_seconds: `import` 最多等多久（秒，默认 180）。
+
+    Returns:
+        JSON 文本。含 `status`（作业状态）、`phase_text`、`error`（失败原因）、
+        `headless_eligible`（能不能转无头）、`report`（验收结论摘要）与 `next`。
+        失败时 `ok=false` + 中文原因。
+    """
+    action = (action or "").strip().lower()
+    if action not in ("import", "status", "save_browser"):
+        return _error(f"action 需要是 import / status / save_browser 之一，收到：{action or '（空）'}")
+
+    try:
+        from app.services import source_import as import_svc
+        from app.services.onboarding import save_browser_source
+    except Exception as exc:  # noqa: BLE001 - 依赖装不全时也要给模型一句人话
+        return _error(f"接入服务不可用：{exc}")
+
+    try:
+        if action == "save_browser":
+            address = (url or "").strip()
+            if not address:
+                return _error("save_browser 需要 url")
+            result = await save_browser_source(url=address, label=(label or None))
+            if not result.get("ok"):
+                return _dump(
+                    {
+                        "ok": False,
+                        "error": result.get("error") or "保存无头来源失败",
+                        "conflict": bool(result.get("conflict")),
+                        "next": "如实转述失败原因；robots/403/内网地址不要尝试绕过。",
+                    }
+                )
+            return _dump(
+                {
+                    "ok": True,
+                    "action": action,
+                    "source_id": result.get("source_id"),
+                    "key": result.get("key"),
+                    "label": result.get("label"),
+                    "created": result.get("created"),
+                    "next": "无头浏览器来源已创建并启用（轻量校验通过）；"
+                    "它按「浏览目标」采集，抓取时要填目标。",
+                }
+            )
+
+        if action == "status":
+            if not job_id:
+                return _error("status 需要 job_id（import 的返回里有）")
+            job = import_svc.get_job(job_id)
+            if job is None:
+                return _error(f"作业不存在或已过期：{job_id}")
+            return _dump({"ok": True, "action": action, **_job_summary(job)})
+
+        # import
+        address = (url or "").strip()
+        if not address:
+            return _error("import 需要 url")
+        from app.schemas.source import SourceImportRequest
+
+        try:
+            request = SourceImportRequest(
+                url=address,
+                target=target,
+                keywords=list(keywords or []),
+                limit=max(1, min(int(limit or 3), 10)),
+            )
+            job = import_svc.start_import(request)
+        except import_svc.ImportUnavailable as exc:
+            return _error(f"地址不可用：{exc}")
+        except import_svc.ImportRejected as exc:
+            return _error(str(exc))
+        except ValidationError as exc:  # pragma: no cover - 参数层校验
+            return _error(_validation_message(exc))
+
+        # 等作业结束（六阶段含真实抓取与试运行，要几十秒）
+        deadline = asyncio.get_running_loop().time() + max(5.0, float(wait_seconds or 180))
+        while True:
+            current = import_svc.get_job(job.job_id)
+            if current is None:
+                return _error(f"作业不见了（可能被清理）：{job.job_id}")
+            if current.status in ("done", "error", "cancelled"):
+                return _dump({"ok": True, "action": action, **_job_summary(current)})
+            if asyncio.get_running_loop().time() >= deadline:
+                return _dump(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "settled": False,
+                        **_job_summary(current),
+                        "next": "作业还在跑（别重复发起）：过一会儿用 action=status + job_id 看结果。",
+                    }
+                )
+            await asyncio.sleep(0.5)
+    except Exception as exc:  # noqa: BLE001 - 兜底：工具绝不抛异常
+        return _error(f"接入动作失败：{exc}")
+
+
+def _job_summary(job: Any) -> dict[str, Any]:
+    """接入作业的精简视图（模型要的是结论与下一步，不是整份报告）。"""
+    report = job.report or {}
+    criteria = report.get("criteria") or []
+    failed = [
+        {"name": row.get("name"), "actual": row.get("actual")}
+        for row in criteria
+        if row.get("passed") is False
+    ]
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "phase": job.phase,
+        "phase_text": job.phase_text,
+        "error": job.error,
+        "error_kind": job.error_kind,
+        # 静态链路拿不到内容、但无头浏览器可能救得回 → 页面会给「启用无头抓取模式」按钮
+        "headless_eligible": bool(job.headless_eligible),
+        "registered": job.registered,
+        "report": {
+            "status": report.get("status"),
+            "criteria_total": len(criteria),
+            "criteria_failed": failed,
+            "summary": report.get("summary"),
+        },
+        "logs": [row.get("message") for row in (job.logs or [])[-8:]],
+        "next": _job_next(job),
+    }
+
+
+def _job_next(job: Any) -> str:
+    """作业结束后的下一步（按状态分）。"""
+    if job.status == "done":
+        if job.registered:
+            return (
+                "接入完成，来源已登记为**草案**：还需要人工启用（页面来源管理里点启用，"
+                "或让用户确认后用 register_source(approved=True)）。"
+            )
+        return "接入流程跑完了，但来源没有登记——看 report 与 error，如实转述。"
+    if job.status == "cancelled":
+        return "作业被取消了（如实说明，不要当成失败原因）。"
+    if job.headless_eligible:
+        return (
+            "静态链路拿不到内容，但这个站可能是 JS 渲染站：可以改用 action=save_browser "
+            "把它保存为无头浏览器来源（真用无头浏览器打开一次做轻量校验）。"
+        )
+    return "接入失败：如实转述 error 与卡住的阶段，不要绕过访问控制。"
+
+
 # 注册表：`app/agent/tools.py` 把它并进 TOOLS（顶层导入，不含服务依赖）
 ONBOARDING_TOOLS = [
     inspect_source,
@@ -791,4 +977,5 @@ ONBOARDING_TOOLS = [
     register_source,
     manage_ingestion_job,
     diagnose_source,
+    import_source,
 ]

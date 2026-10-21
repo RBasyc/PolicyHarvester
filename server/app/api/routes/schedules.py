@@ -6,22 +6,16 @@
 - POST   /api/schedules/{id}/run    立即运行一轮（不等下一个触发点）
 - DELETE /api/schedules/{id}        删除（已触发的抓取任务保留，可追溯）
 
-触发逻辑本身在 `app/scheduler.py`；本文件只做参数校验与 DTO 转换。
+**实现不在本文件**，而在 `app/services/schedule.py`：对话侧的 `manage_schedule` 工具
+走同一段代码（一处实现两个出入口）。本文件只做参数校验与 DTO 转换。
+
+触发逻辑本身在 `app/scheduler.py`。
 """
 
 from __future__ import annotations
 
-from datetime import datetime, time
-
 from fastapi import APIRouter, HTTPException
 
-from app.db import repositories as repo
-from app.scheduler import (
-    describe_schedule,
-    is_schedule_job_running,
-    next_run_of,
-    trigger_schedule_job,
-)
 from app.schemas.schedule import (
     ScheduleCreate,
     ScheduleDeleted,
@@ -29,90 +23,52 @@ from app.schemas.schedule import (
     ScheduleToggled,
     ScheduleTriggered,
 )
+from app.services import schedule as schedule_service
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
 
 
-async def _get_job_or_404(job_id: int) -> dict:
-    job = await repo.fetch_schedule_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"定时任务不存在：{job_id}")
-    return job
-
-
 @router.get("", response_model=list[ScheduleJobDTO])
 async def list_schedules() -> list[ScheduleJobDTO]:
-    rows = await repo.fetch_schedule_jobs()
-    return [ScheduleJobDTO.from_row(row) for row in rows]
+    return [ScheduleJobDTO.model_validate(row) for row in await schedule_service.list_jobs()]
 
 
 @router.post("", response_model=ScheduleJobDTO, status_code=201)
 async def create_schedule(payload: ScheduleCreate) -> ScheduleJobDTO:
     """新建定时任务：抓取配置**快照**落库，并按调度参数排出首次触发时间。"""
-    now = datetime.now().astimezone()
-    name = payload.name or (
-        f"定时任务 · {describe_schedule(payload.schedule_kind, payload.interval_minutes, _to_time(payload.run_time), payload.run_weekday)}"
-    )
-    job_id = await repo.create_schedule_job(
-        name=name,
-        source=payload.source,
-        date_from=payload.date_from,
-        keywords=payload.keywords,
-        agencies=payload.agencies,
-        doc_types=payload.doc_types,
-        pipeline_overrides={
-            "pipeline_max_policies": payload.pipeline_max_policies,
-            "pipeline_per_keyword_limit": payload.pipeline_per_keyword_limit,
-            "pipeline_extract_concurrency": payload.pipeline_extract_concurrency,
-            "pipeline_max_body_chars": payload.pipeline_max_body_chars,
-            "pipeline_mcp_timeout": payload.pipeline_mcp_timeout,
-            "pipeline_model": payload.pipeline_model,
-        },
-        schedule_kind=payload.schedule_kind,
-        interval_minutes=payload.interval_minutes,
-        run_time=_to_time(payload.run_time),
-        run_weekday=payload.run_weekday,
-        next_run_at=None,  # 由下方统一按当前时刻排首次触发（与启停同一口径）
-    )
-    job = await _get_job_or_404(job_id)
-    await repo.set_schedule_job_next_run(job_id, next_run_of(job, after=now))
-    return ScheduleJobDTO.from_row(await _get_job_or_404(job_id))
+    try:
+        row = await schedule_service.create_job(payload)
+    except ValueError as exc:  # ScheduleCreate 的字段校验（如无头浏览器来源）已在上游拦过
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ScheduleJobDTO.model_validate(row)
 
 
 @router.post("/{job_id}/toggle", response_model=ScheduleToggled)
 async def toggle_schedule(job_id: int) -> ScheduleToggled:
     """启用 / 停用切换。停用清空 next_run_at（NULL = 不排程）；启用按当前时刻排下一个触发点。"""
-    job = await _get_job_or_404(job_id)
-    enabled = not job["enabled"]
-    next_run = next_run_of(job, after=datetime.now().astimezone()) if enabled else None
-    row = await repo.toggle_schedule_job(job_id, enabled, next_run)
-    return ScheduleToggled(job=ScheduleJobDTO.from_row(row))
+    try:
+        row = await schedule_service.toggle_job(job_id)
+    except schedule_service.ScheduleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ScheduleToggled(job=ScheduleJobDTO.model_validate(row))
 
 
 @router.post("/{job_id}/run", response_model=ScheduleTriggered)
 async def run_schedule(job_id: int) -> ScheduleTriggered:
     """立即触发一轮（后台执行，不等下一个触发点）。进度到「抓取进度」面板看。"""
-    job = await _get_job_or_404(job_id)
-    if is_schedule_job_running(job_id):
-        # 防重入（Phase 13）：同一任务同一时刻只允许一轮——调度轮次正在跑时拒绝手动触发，
-        # 否则会并发两轮（重复建任务、重复提取、游标双写）。
-        raise HTTPException(
-            status_code=409,
-            detail=f"定时任务「{job['name']}」已有一轮在执行中，请等本轮结束后再试",
-        )
-    trigger_schedule_job(job_id)
+    try:
+        await schedule_service.run_job(job_id)
+    except schedule_service.ScheduleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except schedule_service.ScheduleConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ScheduleTriggered()
 
 
 @router.delete("/{job_id}", response_model=ScheduleDeleted)
 async def delete_schedule(job_id: int) -> ScheduleDeleted:
-    if not await repo.delete_schedule_job(job_id):
-        raise HTTPException(status_code=404, detail=f"定时任务不存在：{job_id}")
-    return ScheduleDeleted(deleted=1)
-
-
-def _to_time(value: str | None) -> time | None:
-    """"HH:MM" → time（ScheduleCreate 已校验格式，这里只做类型转换）。"""
-    if value is None:
-        return None
-    return time.fromisoformat(value)
+    try:
+        result = await schedule_service.delete_job(job_id)
+    except schedule_service.ScheduleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ScheduleDeleted(deleted=result["deleted"])

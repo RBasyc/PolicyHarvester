@@ -39,3 +39,22 @@ def parse_iso_date(raw: str | None, field: str) -> tuple[date | None, str | None
         return date.fromisoformat(raw.strip()), None
     except ValueError:
         return None, f"{field} 需要 YYYY-MM-DD 格式，收到：{raw}"
+
+
+def validation_message(exc: Exception) -> str:
+    """把 pydantic 的校验错误翻成一句中文（模型要能照着改）。
+
+    pydantic 的 `msg` 形如 "Value error, 未知文种：…"，去掉前缀后与字段名拼在一起，
+    模型看到的是「哪个字段错在哪」，而不是一堆英文校验器术语。
+    """
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return str(exc)
+    parts: list[str] = []
+    for err in errors():
+        field = "、".join(str(item) for item in err.get("loc") or []) or "参数"
+        message = str(err.get("msg") or "")
+        if message.startswith("Value error, "):
+            message = message[len("Value error, ") :]
+        parts.append(f"{field}：{message}")
+    return "；".join(parts) or "参数不合法"
