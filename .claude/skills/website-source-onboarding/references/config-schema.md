@@ -18,9 +18,10 @@
 | `level` | enum | 否 | `other` | `national` / `province` / `city` / `county` / `other` |
 | `organization` | str | 否 | `null` | 发布机构（展示用） |
 | `source_type` | enum | 否 | `government_portal` | `government_portal` / `open_api` / `rss` / `mixed`（当前引擎均为 HTML 取数，此项仅供归类与未来分流） |
-| `engine` | enum | 否 | `html_list` | 取数引擎。**目前只有 `html_list`** |
+| `engine` | enum | 否 | `html_list` | 取数引擎，两值：`html_list` = httpx 静态取数；`browser_driven` = 无头浏览器驱动来源（**没有选择器/入口**，只有 `browse.url` + 抓取时填的浏览目标，由来源管理导入失败条目的「启用无头抓取模式」创建，不能手工组装）。JS 渲染空壳站一律走 browser_driven——原 `html_list_rendered` 渲染取数已按 2026-10-21 裁定删除，无头只有这一条路径 |
 | `scope` | object | **是** | — | 来源边界，见下 |
-| `entrypoints` | array | **是** | — | ≥1 个内容入口，入口名不能重复 |
+| `entrypoints` | array | 条件 | — | **engine=browser_driven 时必须为空**；其余引擎 ≥1 个内容入口，入口名不能重复 |
+| `browse` | object | 条件 | `null` | **仅 engine=browser_driven 必填**：`{"url": 入口页}`。浏览目标不落配置（抓取任务创建时由用户填，进 `crawl_task.browse_goal`）；其余引擎必须不填 |
 | `detail` | object | 否 | 见下 | 详情页解析规则 |
 | `doc_type_patterns` | object | 否 | `{}` | 文号前缀 → 文种，如 `{"浙政发": "浙政发"}`；空 = 不做文种归类 |
 | `keyword_match` | enum | 否 | `substring` | 关键词**复核**口径：`substring`（标题须含完整关键词）/ `any_char`（至少共享一个字）。检索型入口（`entrypoints[].search`）也要过这道复核——站内检索同样分词，不复核会漏进无关条目；没有检索入口时它就是唯一的过滤手段 |

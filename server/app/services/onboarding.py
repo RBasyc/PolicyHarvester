@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -36,9 +37,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.browser.runtime import BrowserUnavailable
 from app.config import get_settings
 from app.sources import net
-from app.sources.analyze import analyze_page
+from app.sources.analyze import analyze_page, looks_like_js_shell
 from app.sources.config import (
     SEARCH_PROBE_KEYWORD,
     EntrypointConfig,
@@ -227,6 +229,16 @@ async def inspect_source(
 
     analysis = analyze_page(fetched.text, fetched.url, listed_as="entry")
     hosts = _hosts_in(analysis, fetched.url)
+    # 空壳信号：可见文本极少 + 一堆 script = 内容要等 JS 填充，静态取数从此无效。
+    # 勘察阶段就亮出来；导入流程里这类失败会给「启用无头抓取模式」按钮
+    # （落成 browser_driven 来源），对话接入则提示走同一条无头路径。
+    js_shell_hint = None
+    if analysis.get("js_render_suspected"):
+        js_shell_hint = (
+            "静态取回的页面疑似 JS 渲染空壳（可见文本极少、脚本很多）：列表/正文可能都在"
+            "等前端填充，engine=html_list 会抓不到内容——建议改用无头浏览器来源"
+            "（engine=browser_driven：入口页 + 抓取目标，无选择器配置），以试运行为准"
+        )
     report.update(
         {
             "final_url": fetched.url,
@@ -237,6 +249,8 @@ async def inspect_source(
             "host": host,
             "page_title": analysis["page_title"],
             "text_len": analysis["text_len"],
+            "js_render_suspected": analysis["js_render_suspected"],
+            "js_shell_hint": js_shell_hint,
             "list_candidates": analysis["list_candidates"],
             "detail_candidates": analysis["detail_candidates"],
             "meta_candidates": analysis["meta_candidates"],
@@ -255,6 +269,7 @@ async def inspect_source(
         "columns": len(analysis["columns"]),
         "feeds": len(analysis["feeds"]["feeds"]),
         "search_forms": len(analysis["search_forms"]),
+        "js_render_suspected": analysis["js_render_suspected"],
     }
     await _close_run(run_id, status=_STATUS_PASSED, summary=summary, report=report)
     return {**report, "ok": True, "run_id": run_id, "summary": summary}
@@ -327,10 +342,17 @@ async def discover_content(
             break
 
     entrypoints = _collect_entrypoints(pages, keywords or [])
+    js_shell_pages = sum(1 for page in pages if page.get("js_render_suspected"))
+    # 失败归因：入口发现不了且抓回的页面大多是 JS 渲染空壳 → 静态引擎（html_list）拿不到内容。
+    # 文案保持简短（2026-10-21 用户裁定）：跑不通的地址由导入作业的兜底逻辑自动落成
+    # 无头浏览器来源（已验收 · 已启用），不再附「点这里保存为无头来源」式的操作提示；
+    # js_shell_pages 计数留在 summary 里作数据证据。
+    discovery_error = "未发现可用的内容入口（列表候选为空）"
     summary = {
         "pages_analyzed": len(pages),
         "entrypoints": len(entrypoints),
         "errors": len(errors),
+        "js_shell_pages": js_shell_pages,
     }
     report = {
         "url": url,
@@ -345,14 +367,14 @@ async def discover_content(
         status=report["status"],
         summary=summary,
         report=report,
-        failure_reason=None if entrypoints else "未发现可用的内容入口（列表候选为空）",
+        failure_reason=None if entrypoints else discovery_error,
     )
     return {
         **report,
         "ok": bool(entrypoints),
         "run_id": run_id,
         "summary": summary,
-        "error": None if entrypoints else "未发现可用的内容入口（列表候选为空）",
+        "error": None if entrypoints else discovery_error,
     }
 
 
@@ -589,6 +611,7 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
         "container_selector": None,
         "image_count": 0,
         "attachments": [],
+        "js_shell": False,
         "warnings": [],
     }
     try:
@@ -596,6 +619,7 @@ async def _sample_one(link: dict[str, Any], rules: dict[str, Any], domains: list
     except (net.FetchError, net.UnsafeURLError) as exc:
         row["warnings"].append(f"取回失败：{exc}")
         return row
+    row["js_shell"] = looks_like_js_shell(fetched.text)
 
     parsed = parse_detail_page(strip_zero_width(fetched.text), detail, fetched.url)
     row["warnings"].extend(parsed.warnings)
@@ -677,6 +701,16 @@ async def dry_run_ingestion(
             "problems": built["problems"],
         }
     config = SourceConfig.model_validate(built["config"])
+    if config.engine == "browser_driven":
+        # 防御：无头浏览器来源的验收在「保存为无头来源」端点完成（真浏览器轻量校验 +
+        # dry_run passed 凭据），这条静态试运行链路对它没有意义（没有入口可探）。
+        return {
+            "ok": False,
+            "kind": "failed",
+            "status": _STATUS_FAILED,
+            "error": "browser_driven（无头浏览器）来源不走静态试运行验收：它的验收在"
+            "保存时已完成（真浏览器打开入口页）；如需复核请用来源卡片上的「试运行」",
+        }
     run_id = await _open_run(
         "dry_run", source_key=source_key or config.key, source_id=None,
         payload={"key": config.key, "limit": limit, "pages": pages, "keywords": keywords or []},
@@ -780,6 +814,24 @@ async def dry_run_ingestion(
         config, date_from, date_to, keyword=probe_keyword
     )
 
+    # 失败归因（2026-10-20）：所有入口取回的都是疑似 JS 渲染空壳 → 不是配置写错，是
+    # 静态引擎（html_list）根本拿不到内容。给出明确的换引擎建议，别让用户在配置里瞎调。
+    render_suggestion = None
+    if (
+        config.engine == "html_list"
+        and per_entry
+        and all(row.get("items") == 0 for row in per_entry)
+        and any(row.get("js_shell") for row in per_entry)
+    ):
+        render_suggestion = (
+            "所有入口取回的都是疑似 JS 渲染空壳（可见文本极少、内容在前端填充）："
+            "静态引擎 html_list 抓不到内容，这不是配置写错。改用无头浏览器来源"
+            "（engine=browser_driven：入口页 + 抓取目标，无选择器配置）——页面导入的"
+            "失败条目上点「启用无头抓取模式」即可，对话接入用 generate_source_config "
+            "写 engine=\"browser_driven\"（需 BROWSER_ENABLED=true 且已安装 playwright）"
+        )
+        report["suggestion"] = render_suggestion
+
     # 全部入口都失败，且失败原因是「访问控制 / 安全策略」→ 报受阻而不是失败：
     # 这类问题不是配置写错，而是站点不允许，按接入规范不绕过（第七节硬要求）。
     if per_entry and entry_errors and all(row["items"] == 0 for row in per_entry):
@@ -817,7 +869,8 @@ async def dry_run_ingestion(
                 f"最少 {min_items} 条",
                 passed=min_items >= 1,
                 hard=True,
-                note="；".join(entry_errors) or None,
+                # 空壳归因优先于逐条取数错误——换引擎才是正解，逐条错误只是表象
+                note=render_suggestion or "；".join(entry_errors) or None,
             )
         )
     else:
@@ -1106,6 +1159,7 @@ async def _probe_entries(
     source = HtmlListSource(config)
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    fetch_timeout = int(get_settings().source_fetch_timeout)
     for entry in config.entrypoints:
         kind = "search" if entry.is_search else "list"
         url = build_entry_url(
@@ -1130,13 +1184,20 @@ async def _probe_entries(
             )
             continue
         try:
-            fetched = await net.fetch_text(url, allowed_domains=config.scope.allowed_domains)
+            # 经 `HtmlListSource._get_text` 取数——试运行验收的必须是被验收配置
+            # 自己的那条链路（无头是另一条 engine=browser_driven 路径，不走这里）
+            text = await source._get_text(url, fetch_timeout)
+            final_url = url
+        except BrowserUnavailable as exc:
+            errors.append(f"{entry.name}：{exc}")
+            rows.append({"name": entry.name, "kind": kind, "url": url, "items": 0, "error": str(exc)})
+            continue
         except (net.FetchError, net.UnsafeURLError) as exc:
             errors.append(f"{entry.name}：{exc}")
             rows.append({"name": entry.name, "kind": kind, "url": url, "items": 0, "error": str(exc)})
             continue
         items = parse_list_page(
-            fetched.text, entry, fetched.url, limit=config.scope.max_items_per_entry
+            text, entry, final_url, limit=config.scope.max_items_per_entry
         )
         # 检索型入口按探测关键词复核（站内检索同样会分词命中，这里量的是「取回来还能剩几条」）；
         # 栏目型入口不复核关键词——那一路量的是「这个栏目本身有多少条」。
@@ -1160,6 +1221,8 @@ async def _probe_entries(
                 "kept_after_filter": len(kept),
                 "probe_keyword": keyword if entry.is_search else None,
                 "sample_titles": [item["title"][:40] for item in items[:3]],
+                # 空壳信号：取回的是疑似 JS 渲染空壳时亮出来，dry-run 据此给换引擎建议
+                "js_shell": looks_like_js_shell(text),
             }
         )
     return rows, errors
@@ -1550,6 +1613,155 @@ async def verify_source_config(config: SourceConfig) -> dict[str, Any]:
 # ---------- 阶段 7：来源管理与诊断 ----------
 
 
+# ---------- 无头浏览器驱动来源（engine="browser_driven"） ----------
+
+
+async def save_browser_source(*, url: str, label: str | None = None) -> dict[str, Any]:
+    """把「导入失败但确实是 JS 站」的地址直接保存为无头浏览器驱动来源（Phase 26）。
+
+    验收 = **轻量校验**：真用无头浏览器打开一次入口页，渲染后有可见内容即通过——
+    几秒完成，证明「打得开、有内容」；发现循环能不能收到条目由来源卡片上的
+    「试运行」验收（那一刻才真跑）。通过即 `status=active`，并写一条 dry_run/passed
+    凭据（kind 沿用 `'dry_run'`：现有 `_PASSING_DRY_RUN_SQL` 与部分索引原样命中零迁移，
+    报告里 `light_check=true` 标明这是渲染轻量校验而非静态全链路试运行）。
+
+    撞名防护：同 key 已存在且是**已启用的非无头来源**时拒绝（不静默覆盖已验收配置）；
+    同 key 已是无头来源则幂等更新（重复保存 = 重新校验）。
+    """
+    from app.browser import manager as browser_manager
+    from app.browser import runtime as browser_runtime
+    from app.browser.guard import BrowserBlocked, ensure_navigable_sync
+    from app.db import repositories as repo
+    from app.sources.config import BrowseConfig
+
+    # kind 用 'dry_run' 而非 'validate'：verified/启用闸只看 _PASSING_DRY_RUN_SQL（kind='dry_run'），
+    # 引入新 kind 老库的部分索引不会重建——零迁移的关键就是沿用这个 kind，用 light_check 标记区分。
+    run_id = await _open_run(
+        "dry_run",
+        source_key=None,
+        source_id=None,
+        payload={"url": url, "kind": "save_browser_source"},
+    )
+
+    async def _fail(error: str, *, conflict: bool = False) -> dict[str, Any]:
+        # 失败也要把 run 记录收尾，否则「接入记录」里永远挂着一条 running
+        await _close_run(
+            run_id,
+            status=_STATUS_FAILED,
+            summary={"light_check": True},
+            report={"light_check": True, "url": url},
+            failure_reason=error,
+        )
+        return {"ok": False, "error": error, "conflict": conflict, "run_id": run_id}
+
+    target = net.check_url(url)  # 协议 / 公网 / 非云元数据（不合法抛 UnsafeURLError，路由转 400）
+    try:
+        target = await asyncio.to_thread(ensure_navigable_sync, target)
+    except BrowserBlocked as exc:
+        return await _fail(f"入口网址不可用：{exc}")
+
+    if not browser_runtime.available():
+        return await _fail(
+            "无头浏览器不可用，无法保存无头来源：" + browser_runtime.unavailable_reason()
+        )
+
+    # ---- 轻量校验：真打开入口页一次 ----
+    timeout = float(get_settings().source_fetch_timeout)
+    try:
+        page = await browser_manager.fetch_html(target, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - 打开失败按「站点此刻不允许」处理
+        return await _fail(f"无头浏览器打开入口页失败：{exc}")
+    html = str(page.get("html") or "")
+    analysis = analyze_page(html, str(page.get("url") or target))
+    text_len = int(analysis.get("text_len") or 0)
+    if text_len < 80 or looks_like_js_shell(html):
+        return await _fail(
+            f"入口页渲染后可见文本仅 {text_len} 字（或仍是 JS 空壳）："
+            "无头浏览器也取不到内容，可能是需要登录/验证码的页面，或入口地址不对"
+        )
+
+    # ---- 组装配置 ----
+    from app.services.source_import import _host_domains, _key_for, _label_for
+
+    domains = _host_domains(target)
+    key = _key_for(domains)
+    final_label = (label or "").strip() or _label_for(
+        {"page_title": analysis.get("page_title")}, domains
+    )
+    config = SourceConfig(
+        key=key,
+        label=final_label,
+        engine="browser_driven",
+        scope={"allowed_domains": domains},
+        entrypoints=[],
+        browse=BrowseConfig(url=target),
+        notes="由「导入失败（JS 渲染空壳归因）→ 保存为无头浏览器来源」创建；"
+        "入口页已用无头浏览器轻量校验",
+    )
+    problems = validate_source_config(config)
+    if problems:
+        return await _fail("配置不可执行：" + "；".join(problems))
+
+    existing = await repo.fetch_content_source_by_key(key)
+    if existing is not None:
+        existing_engine = (existing.get("engine") or "").lower()
+        if existing_engine != "browser_driven" and existing.get("status") == "active":
+            return await _fail(
+                f"同站点已有已启用的「{existing.get('label')}」（{existing_engine}）："
+                "先停用或删除它，再保存为无头来源",
+                conflict=True,
+            )
+
+    try:
+        saved = await repo.save_content_source(
+            config=config.model_dump(),
+            label=config.label,
+            level=config.level,
+            organization=config.organization,
+            source_type=config.source_type,
+            engine=config.engine,
+            status="active",
+            fingerprint=config.config_fingerprint(),
+            entrypoint_count=0,
+            notes=config.notes,
+            change_note="保存为无头浏览器来源（JS 渲染空壳归因，轻量校验通过）",
+            changed_by="web",
+        )
+    except Exception as exc:  # noqa: BLE001 - label UNIQUE 冲突等落库错误
+        return await _fail(f"保存来源失败：{exc}", conflict="unique" in str(exc).lower())
+    register_configured(config, replace=True)
+    row = saved["row"]
+
+    await _close_run(
+        run_id,
+        status=_STATUS_PASSED,
+        summary={
+            "url": target,
+            "text_len": text_len,
+            "light_check": True,
+            "entrypoints": 0,
+        },
+        report={
+            "fingerprint": config.config_fingerprint(),
+            "light_check": True,
+            "url": target,
+            "final_url": str(page.get("url") or target),
+            "page_title": analysis.get("page_title"),
+            "text_len": text_len,
+            "js_render_suspected_after_render": looks_like_js_shell(html),
+        },
+    )
+    return {
+        "ok": True,
+        "source_id": row["id"],
+        "key": config.key,
+        "label": config.label,
+        "engine": config.engine,
+        "created": saved["created"],
+        "text_len": text_len,
+    }
+
+
 async def manage_source(
     action: str,
     *,
@@ -1557,6 +1769,7 @@ async def manage_source(
     source_id: int | None = None,
     keywords: list[str] | None = None,
     max_policies: int = 3,
+    goal: str | None = None,
 ) -> dict[str, Any]:
     """阶段 7：来源管理。
 
@@ -1663,7 +1876,7 @@ async def manage_source(
         return {"ok": removed, "key": row["key"], "error": None if removed else "删除失败"}
 
     if action == "run_trial":
-        return await _run_trial(row, keywords=keywords or [], max_policies=max_policies)
+        return await _run_trial(row, keywords=keywords or [], max_policies=max_policies, goal=goal)
 
     if action == "health":
         from app.sources.config import config_from_row
@@ -1672,6 +1885,17 @@ async def manage_source(
             config = config_from_row(row)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"配置无法解析：{exc}"}
+        if config.engine == "browser_driven":
+            # 没有静态入口可探：入口页的可用性在「保存为无头来源」时已真浏览器验过，
+            # 这里如实说明而不是跑一个注定误导的检查。
+            return {
+                "ok": True,
+                "key": row["key"],
+                "loaded": get(row["key"]) is not None,
+                "entrypoints": [],
+                "note": "无头浏览器来源不做静态健康检查：入口页在保存时已用无头浏览器"
+                "真打开校验过；浏览器可用性以抓取时为准",
+            }
         checked = []
         for entry in config.entrypoints:
             if entry.is_search:
@@ -1727,12 +1951,17 @@ async def _resolve_source_row(*, key: str | None, source_id: int | None) -> dict
     return None
 
 
-async def _run_trial(row: dict[str, Any], *, keywords: list[str], max_policies: int) -> dict[str, Any]:
+async def _run_trial(
+    row: dict[str, Any], *, keywords: list[str], max_policies: int, goal: str | None = None
+) -> dict[str, Any]:
     """发起一次真实的小批量抓取任务（走完整流水线，用户可在抓取页看到进度与结果）。
 
     这是「真的跑一遍」的那一步：建 `crawl_task`（source=来源展示名）→ `start_pipeline`。
     任务会停在**人工确认**这一道闸（阶段一跑完等确认），与手动抓取完全一致——
     试抓也不越过确认环节。
+
+    browser_driven 来源：keywords 无意义（search 会抛错），改走发现循环——入口地址
+    来自配置，`goal` 作为这次试抓的浏览目标。
     """
     from app.db import repositories as repo
     from app.pipeline.crawl_graph import start_pipeline
@@ -1750,14 +1979,18 @@ async def _run_trial(row: dict[str, Any], *, keywords: list[str], max_policies: 
         return {"ok": False, "error": f"来源状态为 {row['status']}，未启用不能发起抓取"}
 
     today = date.today()
+    # 遗留伪来源 BrowserAnySource 没有 browser_driven 标记，天然落在 False——正好
+    is_browser_driven = bool(getattr(source, "browser_driven", False))
     try:
         task_id = await repo.create_task(
             source=row["label"],
             date_from=None,
             date_to=today,
-            keywords=list(keywords or []),
+            keywords=[] if is_browser_driven else list(keywords or []),
             agencies=None,
             doc_types=None,
+            browse_url=str(source.entry_url).strip() if is_browser_driven else None,
+            browse_goal=(goal or "").strip()[:500] or None if is_browser_driven else None,
             pipeline_overrides={
                 "pipeline_max_policies": max(1, min(max_policies, 5)),
                 "pipeline_per_keyword_limit": max(1, min(max_policies * 2, 10)),
@@ -1770,7 +2003,11 @@ async def _run_trial(row: dict[str, Any], *, keywords: list[str], max_policies: 
         "ok": True,
         "task_id": task_id,
         "status": "已发起，任务会在检索完成后停在「等确认」，可在抓取页查看",
-        "note": "这是走完整流水线的真实抓取（含判别与正文预检），不是模拟",
+        "note": (
+            "这是无头浏览器发现循环的真实试抓（小样本），走完整确认环节"
+            if is_browser_driven
+            else "这是走完整流水线的真实抓取（含判别与正文预检），不是模拟"
+        ),
     }
 
 
@@ -1798,7 +2035,11 @@ async def diagnose(
             config = config_from_row(row)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"配置无法解析：{exc}"}
-        target = target or config.entrypoints[0].url
+        target = target or (
+            config.browse.url
+            if config.engine == "browser_driven"
+            else config.entrypoints[0].url
+        )
         allowed_domains = allowed_domains or config.scope.allowed_domains
 
     if not target:

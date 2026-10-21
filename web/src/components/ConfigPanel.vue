@@ -259,19 +259,10 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         </div>
       </div>
 
-      <!-- 任意网站（无头浏览器）：用「入口网址 + 自然语言目标」取代站点检索；
-           机构 / 文种这类站点筛选对它没有意义，下面的整行筛选项会隐藏 -->
+      <!-- 无头浏览器来源（来源管理里「保存为无头浏览器来源」创建）：入口网址存在来源配置里
+           （服务端取用），这里只填这次抓取的浏览目标；机构 / 文种这类站点筛选对它没有意义 -->
       <div v-if="isBrowserSource" class="field browse-field">
-        <p class="label">入口网址（必填）</p>
-        <input
-          v-model.trim="form.browse_url"
-          type="url"
-          class="browse-input"
-          placeholder="https://example.com/policy/"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <p class="label">浏览目标（可选）</p>
+        <p class="label">浏览目标（本次抓取）</p>
         <textarea
           v-model="form.browse_goal"
           class="browse-textarea"
@@ -282,8 +273,9 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
         <div class="hint-row">
           <AppIcon name="info" :size="12" class="hint-icon" />
           <p class="hint-text">
-            无头浏览器会打开入口页并按目标浏览；仅公网站点，遵守 robots.txt，只读（不登录、不提交表单、不下载）。
-            关键词与时间范围仍作为筛选条件。
+            入口网址来自来源「{{ form.source }}」的配置；无头浏览器会打开它并按目标浏览。
+            仅公网站点，遵守 robots.txt，只读（不登录、不提交表单、不下载）。
+            时间范围仍作为筛选条件。
           </p>
         </div>
       </div>
@@ -797,7 +789,7 @@ function setPipelineValue(key: (typeof PIPELINE_KEYS)[number], event: Event) {
   gap: 5px;
 }
 
-/* 「任意网站（无头浏览器）」的入口 / 目标输入框：与来源下拉、日期框同一观感 */
+/* 无头浏览器来源的浏览目标输入框：与来源下拉、日期框同一观感 */
 .browse-field {
   gap: 8px;
 }

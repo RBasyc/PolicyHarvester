@@ -395,6 +395,9 @@ export interface SourceDTO {
   version: number
   /** 是否存在指纹一致的通过试运行（启用闸门就是它） */
   verified: boolean
+  /** 取数引擎：html_list = 静态取数；browser_driven = 无头浏览器驱动来源（没有选择器，
+   * 入口页 + 抓取时填的浏览目标）。无头只有这一条路径（html_list_rendered 已删除） */
+  engine: string
   /** 入口（栏目）名；同时是「发布机构」筛选的可选值（不含检索型入口） */
   entrypoints: string[]
   supports_doc_types: boolean
@@ -506,8 +509,20 @@ export interface SourceImportJob {
   registered: Record<string, unknown> | null
   error: string | null
   error_kind: ImportErrorKind | null
+  /** 失败是否给出「启用无头抓取模式」按钮：静态管线拿不到内容（找不到列表/正文、JS 渲染）为 true；404/robots/5xx 为 false */
+  headless_eligible?: boolean
+  /** 「启用无头抓取模式」的结果：点了按钮且轻量校验通过后才填充 */
+  browser_source?: SourceBrowserSourceRef | null
   started_at: string
   finished_at: string | null
+}
+
+/** 导入失败兜底自动保存的无头浏览器来源引用。 */
+export interface SourceBrowserSourceRef {
+  source_id?: number
+  key?: string
+  label?: string
+  created?: boolean
 }
 
 export interface SourceImportCreated {
@@ -545,12 +560,6 @@ export interface SourceOnboardingRun {
   failure_reason: string | null
   summary: Record<string, unknown> | null
   report: SourceImportReport | null
-}
-
-export interface SourceRunsResponse {
-  source_id: number
-  key: string
-  items: SourceOnboardingRun[]
 }
 
 /** 配置版本历史的一条（每次配置语义变化 +1）。 */
@@ -611,20 +620,6 @@ export interface SourceBatchImportCreated {
   rejected: SourceBatchImportItem[]
 }
 
-/** 进程内导入作业的行快照（GET /sources/import；大字段走单作业接口）。 */
-export interface SourceJob {
-  job_id: string
-  url: string
-  batch_id: string | null
-  status: ImportJobStatus
-  phase: ImportPhase
-  phase_text: string
-  error: string | null
-  error_kind: ImportErrorKind | null
-  started_at: string
-  finished_at: string | null
-}
-
 /** 批量聚合 SSE 里的子作业视图。position = 排队序号（1 起），不在队列为 null。 */
 export interface SourceBatchChild {
   job_id: string
@@ -634,6 +629,10 @@ export interface SourceBatchChild {
   phase_text: string
   error: string | null
   error_kind: ImportErrorKind | null
+  /** 同 SourceImportJob.headless_eligible */
+  headless_eligible?: boolean
+  /** 「启用无头抓取模式」的结果（同 SourceImportJob.browser_source） */
+  browser_source?: SourceBrowserSourceRef | null
   position: number | null
   /** 进度快照已被服务端清理（持久记录见「接入记录」） */
   gone: boolean
@@ -678,6 +677,27 @@ export interface SourceRecentRunsResponse {
 export interface SourceTrialPayload {
   keywords?: string[]
   max_policies?: number
+  /** 仅无头浏览器来源（engine=browser_driven）：这次试抓的浏览目标 */
+  goal?: string | null
+}
+
+/** 「启用无头抓取模式」提交体：把导入失败的地址落成无头浏览器来源（轻量校验在服务端）。 */
+export interface SourceBrowserCreatePayload {
+  url: string
+  label?: string | null
+  /** 从哪个导入作业点进来的：保存成功后服务端把结果回写到该作业快照 */
+  job_id?: string | null
+}
+
+/** 「启用无头抓取模式」返回体。 */
+export interface SourceBrowserCreated {
+  ok: boolean
+  source_id: number
+  key: string
+  label: string
+  engine: string
+  created: boolean
+  text_len: number
 }
 
 // ---------- 对话 Agent（Phase 19） ----------

@@ -3,7 +3,8 @@
 注册表里有**两类**来源，都在同一个 `_registry` 里按 key 索引：
 
 1. **内置源**（代码写的，如 `GovCnSource`）——启动时 `register()` 一次；
-2. **配置化源**（`HtmlListSource`，由接入 Skill 生成配置后落库、启动/注册时装载）
+2. **配置化源**（由接入 Skill 生成配置后落库、启动/注册时装载：`HtmlListSource`
+   （html_list，静态取数）与 `BrowserDrivenSource`（browser_driven，无头浏览器驱动））
    ——见 `register_configured` / `load_configured_from_db`。
 
 两类对流水线是**同一种东西**：流水线只认 `get_by_label(task_row["source"])`，拿到适配器就
@@ -79,6 +80,7 @@ def register_configured(config, *, replace: bool = False) -> PolicySource:
     为外键解析来源，同名会静默抓错站点，必须挡在注册这一步。重新注册同一份配置的
     新版请显式 `replace=True`。
     """
+    from app.sources.browser_driven import BrowserDrivenSource
     from app.sources.config import validate_source_config  # 局部导入：config 反向依赖 net
     from app.sources.html_source import HtmlListSource
 
@@ -93,10 +95,19 @@ def register_configured(config, *, replace: bool = False) -> PolicySource:
         if source.label == config.label and key != config.key:
             raise ValueError(f"来源名「{config.label}」与已有来源（{key}）冲突，请换一个展示名")
 
-    source = HtmlListSource(config)
+    source = (
+        BrowserDrivenSource(config)
+        if config.engine == "browser_driven"
+        else HtmlListSource(config)
+    )
     _registry[config.key] = source
     _configured.add(config.key)
-    logger.info("已注册配置化来源：%s（%s，%d 个入口）", config.label, config.key, len(config.entrypoints))
+    logger.info(
+        "已注册配置化来源：%s（%s，engine=%s）",
+        config.label,
+        config.key,
+        config.engine,
+    )
     return source
 
 
@@ -147,6 +158,7 @@ async def load_configured_from_db() -> tuple[list[str], list[str]]:
 
 
 register(GovCnSource())
-# 无头浏览器来源始终注册（服务端按 label 解析任务时需要它）；是否**展示**给用户由
-# `browser_any.browser_source_available()` 决定（BROWSER_ENABLED + 装了 playwright）。
+# 遗留伪来源「任意网站」：仅为存量任务行（source='任意网站（无头浏览器）'）的 stage 2
+# label 解析保留——它不再出现在任何清单（list_sources 不注入、available_sources 过滤），
+# 新任务一律走持久化的 browser_driven 来源。见 app/sources/browser_driven.py。
 register(BrowserAnySource())

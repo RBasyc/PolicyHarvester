@@ -83,6 +83,11 @@ class SourceImportJobDTO(BaseModel):
     registered: dict[str, Any] | None = None  # register_source 的返回（source_id / status / version）
     error: str | None = None
     error_kind: ImportErrorKind | None = None
+    # 失败是否给出「启用无头抓取模式」入口：静态管线拿不到内容（找不到列表/正文、
+    # JS 渲染、配置不可执行）为 True；勘察失败（404/5xx/robots/DNS）与未知异常为 False。
+    headless_eligible: bool = False
+    # 「启用无头抓取模式」人工确认的结果：点了按钮且轻量校验通过后才填充
+    browser_source: dict[str, Any] | None = None
     started_at: str
     finished_at: str | None = None
 
@@ -158,25 +163,6 @@ class SourceBatchImportCreated(BaseModel):
     rejected: list[SourceBatchImportItem] = Field(default_factory=list)
 
 
-class SourceJobDTO(BaseModel):
-    """进程内导入作业的行快照（`GET /api/sources/import` 列表用）。
-
-    不含日志/报告等大字段——那些走单作业 `GET /import/{job_id}`；
-    进程重启或超窗清理后作业会从列表消失，持久留痕在 `source_onboarding_run`。
-    """
-
-    job_id: str
-    url: str
-    batch_id: str | None = None
-    status: ImportJobStatus
-    phase: ImportPhase
-    phase_text: str
-    error: str | None = None
-    error_kind: ImportErrorKind | None = None
-    started_at: str
-    finished_at: str | None = None
-
-
 class SourceBatchChildDTO(BaseModel):
     """批量聚合 SSE 事件里的子作业视图：队列位置只在排队时给出。"""
 
@@ -187,6 +173,9 @@ class SourceBatchChildDTO(BaseModel):
     phase_text: str
     error: str | None = None
     error_kind: ImportErrorKind | None = None
+    # 同 SourceImportJobDTO.headless_eligible / browser_source
+    headless_eligible: bool = False
+    browser_source: dict[str, Any] | None = None
     position: int | None = None  # 排队中的序号（1 起）；不在队列则为 None
     # 进度快照已被内存边界清出 JOBS（按终态对待；持久记录见 source_onboarding_run）。
     # 必须显式声明：Pydantic v2 默认丢弃模型未声明的键，漏了这里前端就永远收不到 true。
@@ -210,6 +199,8 @@ class SourceDTO(BaseModel):
 
     `id` 为 `None` 表示**内置来源**（gov.cn），它不在 `content_source` 表里，只能选不能改。
     `verified` = 存在指纹一致的通过试运行；`active` 才能被正式抓取任务选中。
+    `engine` 是取数引擎（`html_list` 静态 / `browser_driven` 无头浏览器驱动），
+    前端据此如实标注；无头来源慢、占浏览器槽位，不适合高频抓。
     `entrypoints` 是入口名列表——同时就是「发布机构」筛选的可选值（配置化来源没有
     gov.cn 那样的机构 facet，口径就是入口名）。`supports_doc_types` 为 False 时
     前端必须隐藏「文种」筛选，否则会筛出一个静默的空结果。
@@ -229,6 +220,7 @@ class SourceDTO(BaseModel):
     builtin: bool = False
     version: int = 1
     verified: bool = False
+    engine: str = "html_list"
     entrypoints: list[str] = Field(default_factory=list)
     supports_doc_types: bool = False
     keyword_server_side: bool = True
@@ -269,14 +261,42 @@ class SourceTrialRequest(BaseModel):
 
     仅对已启用（active）来源可用——任务走「来源展示名 → 进程内注册表」解析，
     未装载/未启用会 409。触发后可在抓取页看进度与确认。
+
+    `goal` 只对无头浏览器来源（engine=browser_driven）有意义：那次试抓的浏览目标
+    （关键词参数对它无意义，发现循环按目标挑条目）。
     """
 
     keywords: list[str] = Field(default_factory=list)
     max_policies: int = Field(3, ge=1, le=5)
+    goal: str | None = Field(None, max_length=500)
 
     @field_validator("keywords")
     @classmethod
     def _clean_keywords(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()]
 
+    @field_validator("goal")
+    @classmethod
+    def _clean_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class SourceBrowserCreateRequest(BaseModel):
+    """「保存为无头浏览器来源」：把一个地址（通常是导入失败的 JS 渲染站）落成
+    engine=browser_driven 的 active 来源。轻量校验在服务端（真浏览器打开入口页）。"""
+
+    url: str = Field(..., min_length=1, max_length=2000)
+    label: str | None = Field(None, max_length=200)
+    # 可选：从哪个导入作业点进来的——保存成功后把结果回写到该作业的进程内快照，
+    # 前端重拉作业（批量展开 / 路由回来对表）能看到「已启用无头抓取模式」。
+    job_id: str | None = Field(None, max_length=64)
+
+    @field_validator("url", "label")
+    @classmethod
+    def _clean(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 

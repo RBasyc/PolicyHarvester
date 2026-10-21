@@ -503,13 +503,17 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
 
 
 class HtmlListSource(PolicySource):
-    """由 `SourceConfig` 驱动的抓取源（`engine = html_list`）。"""
+    """由 `SourceConfig` 驱动的抓取源（`engine = html_list`，httpx 静态取数）。
+
+    JS 渲染站不走这里——无头只有 `browser_driven` 一条路径
+    （`app/sources/browser_driven.py`，导入失败条目上「启用无头抓取模式」创建）。
+    """
 
     def __init__(self, config: SourceConfig) -> None:
         self.config = config
         self.key = config.key
         self.label = config.label
-        self.fetched_by = f"html_list:{config.key}"
+        self.fetched_by = f"{config.engine}:{config.key}"
         # 配置化来源不套用 gov.cn 的文种白名单（见模块 docstring）
         self.doc_types: tuple[str, ...] = ()
         self._cache: dict[str, tuple[float, str]] = {}
@@ -629,7 +633,8 @@ class HtmlListSource(PolicySource):
         )
 
     def fulltext_available(self) -> bool:
-        # 配置化来源只需要 HTTP，不依赖 MCP 是否加载
+        # 配置化来源（静态引擎）只需要 HTTP，不依赖 MCP / 浏览器是否加载；
+        # 无头来源（browser_driven）是另一个类，可用性跟随浏览器。
         return True
 
     def filter_capabilities(self) -> dict[str, Any]:
@@ -678,11 +683,12 @@ class HtmlListSource(PolicySource):
             allowed_domains=self.config.scope.allowed_domains,
             timeout=float(timeout),
         )
+        text = result.text
         if len(self._cache) >= _CACHE_MAX:
             oldest = min(self._cache, key=lambda key: self._cache[key][0])
             self._cache.pop(oldest, None)
-        self._cache[url] = (now, result.text)
-        return result.text
+        self._cache[url] = (now, text)
+        return text
 
     def clear_cache(self) -> None:
         """清掉列表页缓存（重新勘察 / 配置变更后调用，避免拿到改版前的旧页面）。"""

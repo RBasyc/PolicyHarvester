@@ -1026,6 +1026,33 @@ def search_forms(root: Node, base_url: str) -> list[dict[str, Any]]:
 # ---------- 汇总 ----------
 
 
+def looks_like_js_shell(html: str) -> bool:
+    """静态取回的 HTML 是否疑似「JS 渲染空壳」。
+
+    空壳特征：HTML 里躺着大量 `<script>`，但解析出的**可见文本**极少——正文和列表都
+    要等前端 JS 异步填充，httpx 拿到的这份里没有任何可解析的内容。这类站点静态引擎
+    （`engine=html_list`）永远抓不到东西，应走无头浏览器来源（`engine=browser_driven`）。
+
+    这是**信号不是判决**：故意极简的页面（如整页一个 PDF 阅读器）也会命中，报告措辞
+    用「疑似」，由试运行做最终裁判。
+
+    门槛说明：script 只要求 ≥1 即可——现代前端常把 JS 打包成**单个 bundle**（如
+    Vue 的 `index-xxxx.js`），数标签 ≥3 对这种站天然失效；真正的兜底证据是
+    `<noscript>` 里那句「请启用 JavaScript」。
+    """
+    root = parse_html(html)
+    text_len = len(root.text_content().strip())
+    if text_len >= 300:
+        return False
+    if select(root, "script"):
+        return True
+    # <noscript> 兜底：站点自己声明"没有 JS 就不能正常工作"——比数 script 标签可靠
+    noscript_text = " ".join(
+        node.text_content().strip().lower() for node in select(root, "noscript")
+    )
+    return "javascript" in noscript_text
+
+
 def analyze_page(
     html: str, url: str, *, listed_as: str = "page", include_outline: bool = False
 ) -> dict[str, Any]:
@@ -1045,6 +1072,9 @@ def analyze_page(
         "listed_as": listed_as,
         "page_title": (page_title.text_content().strip() if page_title else "")[:120],
         "text_len": len(root.text_content()),
+        # 空壳信号：见 looks_like_js_shell——「疑似需要无头浏览器取数」，接入时据此走
+        # engine=browser_driven 路径；只是信号，最终以试运行为准
+        "js_render_suspected": looks_like_js_shell(html),
         "list_candidates": [c.as_dict() for c in list_candidates(root, base_url=url)],
         "regions": region_candidates(root, base_url=url),
         "detail_candidates": [c.as_dict() for c in detail_candidates(root)],
