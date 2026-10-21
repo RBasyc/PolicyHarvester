@@ -1,11 +1,12 @@
 <div align="center">
 
+<img src="static/logo/policyharvester-logo.png" alt="PolicyHarvester" width="420" />
+
 # PolicyHarvester
 
 **一个带人工确认闸门的政策提取 Agent——检索后先让你筛，再烧 token 提取。**
 
 > 大多数政策爬取工具要么乱抓一气、要么黑箱烧钱。PolicyHarvester 把「人类判断」放回流程中间：先检索候选、标出建议入库的、等你勾选确认，再逐篇做结构化提取。**不确认，不提取，不浪费 token。**
-
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](server/pyproject.toml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](server/app/main.py)
@@ -55,27 +56,27 @@ PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之�
 
 **政策助手** — ReAct 对话 Agent 入口，接入国务院政策检索工具链与「浏览网页」工具，回答流式输出
 
-![政策助手](screenshot/agent-chat.png)
+![政策助手](static/screenshot/agent-chat.png)
 
 **抓取任务页** — 选择来源，配置时间范围 / 关键词 / 机构 / 文种；「高级设置」可按任务覆盖流水线参数与提取模型
 
-![抓取任务页](screenshot/crawl-task.png)
+![抓取任务页](static/screenshot/crawl-task.png)
 
 **人工确认闸门** — 检索完先停住：标注「建议入库 / 不建议入库」，勾选确认后才开始逐篇提取
 
-![人工确认闸门](screenshot/confirmation-gate.png)
+![人工确认闸门](static/screenshot/confirmation-gate.png)
 
 **结果抽屉** — 点击结果表任意一行，右侧抽屉即时展开该篇的「事实 / 信息 / 知识」三段式提取
 
-![提取结果抽屉](screenshot/library.png)
+![提取结果抽屉](static/screenshot/library.png)
 
 **成果库** — 跨任务按 source_url 去重沉淀，支持机构 / 文种 / 年份筛选与分页
 
-![政策成果库](screenshot/sources.png)
+![政策成果库](static/screenshot/sources.png)
 
 **来源管理** — 已接入来源列表：导入网址自动勘察 → 试运行验收 → 启用后进入抓取注册表（含无头浏览器来源）
 
-![来源管理](screenshot/result-drawer.png)
+![来源管理](static/screenshot/result-drawer.png)
 
 ---
 
@@ -247,13 +248,15 @@ cd tools/China-Central-Policy-MCP && npm install && npm run build
 ## 目录结构
 
 ```
-```
 policyharvester/
 ├── start.sh / start.bat     # 一键启动 / 自检 / 停止
 ├── .env.example             # 环境变量模板
 ├── PLAN.md / TODO.md        # 实施计划 / 进度清单
 ├── CLAUDE.md                # AI 编码助手的入口（索引 + 硬性规则）
 ├── docs/                    # 项目文档 wiki（架构 / 指南 / 进度）
+├── static/                  # 静态资源（README 引用的图片）
+│   ├── logo/                #   Logo（横幅 / 方形图标）
+│   └── screenshot/          #   界面截图
 ├── database/                # PostgreSQL 建库 / 建表 / 种子数据
 ├── server/                  # 后端：FastAPI + LangGraph + psycopg3
 │   └── app/
