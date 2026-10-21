@@ -69,6 +69,9 @@ class FulltextResult:
     issuer: str | None = None
     doc_no: str | None = None
     date: date | None = None
+    # 日期来源（label/field/meta/selector）：预检只让可见标签或 meta 覆盖列表日期，
+    # 避免把相关推荐/页脚里抓到的日期当成发布日期。
+    date_source: str | None = None
     image_count: int = 0
     attachments: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)

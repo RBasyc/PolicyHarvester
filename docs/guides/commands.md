@@ -15,6 +15,7 @@ uv run python scripts/test_source_import.py    # 页面「导入网址」入口�
 uv run python scripts/test_judge.py            # 入库判别服务（laya）契约 + 提示词矩阵
 uv run python scripts/test_ingest_filter.py    # 正文预检阈值校准（真实 MCP 链接）
 uv run python scripts/test_browser.py          # 无头浏览器：离线门禁/预算/快照/解析 + 本地假站点集成（Chromium 缺失则跳过）
+uv run python scripts/test_dates.py            # 日期信号纯函数：JSON-LD / meta / <time> / 落款 / 误判防护（离线）
 ```
 
 Headless browser (optional, Phase 24):

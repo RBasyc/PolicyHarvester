@@ -63,10 +63,14 @@ _FIELD_LABELS = {
     "信息来源": "source",
     "来源": "source",
     "发布日期": "publish_date",
-    "发文日期": "publish_date",
+    # 「发文日期」指文件签发/印发日期，不是网站发布日期；发布日期只认
+    # 「发布日期 / 发布时间」。否则它会顶替 publish_date（2026-10-21 裁定）。
+    "发文日期": "signed_date",
     "发布时间": "publish_date",
     "成文日期": "signed_date",
     "印发日期": "signed_date",
+    "签发日期": "signed_date",
+    "落款日期": "signed_date",
     "主题分类": "theme",
     "主题词": "theme",
     "分类": "theme",

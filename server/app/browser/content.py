@@ -45,6 +45,7 @@ def extract(
     # agent.mcp → agent.tools → browser.tools → actions → 本模块）。若在模块顶层导入，
     # 服务按 `app.agent.tools` 先于 `app.agent.mcp` 的顺序启动时会形成半初始化循环。
     from app.sources.config import DetailConfig
+    from app.sources.date_signals import publish_date_from_label_text
     from app.sources.html_source import parse_detail_page
     from app.sources.util import parse_date
 
@@ -65,9 +66,20 @@ def extract(
 
     whole_text = _clean(inner_text)
     date_value = None
+    date_text = None
+    date_source = None
     if detail is not None and detail.date_text:
         parsed = parse_date(detail.date_text)
         date_value = parsed.isoformat() if parsed else None
+        date_text = detail.date_text
+        date_source = detail.date_source
+    # HTML 里没解析到页头（JS 渲染/结构兜底失败）时，用浏览器读到的可见文本再找一次
+    # 「日期：…来源：…」。可见标签优先于旧选择器/字段规则，理由同 parse_detail_page。
+    label_hit = publish_date_from_label_text(whole_text) if whole_text else None
+    if label_hit is not None:
+        date_value = label_hit.value.isoformat()
+        date_text = date_value
+        date_source = "label"
 
     return {
         "url": url,
@@ -78,7 +90,8 @@ def extract(
         "agency": (detail.agency if detail is not None else None) or None,
         "doc_no": (detail.doc_no if detail is not None else None) or None,
         "date": date_value,
-        "date_text": (detail.date_text if detail is not None else None) or None,
+        "date_text": date_text or None,
+        "date_source": date_source,
         "image_count": (detail.image_count if detail is not None else 0) or 0,
         "attachments": (
             [attachment.as_dict() for attachment in detail.attachments]
