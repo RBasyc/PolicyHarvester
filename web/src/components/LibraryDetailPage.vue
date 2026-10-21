@@ -41,6 +41,10 @@ const fulltextMeta = computed(() => libraryDetail.value?.fulltext_meta ?? null)
 const headAgency = computed(() => policy.value?.agency || fulltextMeta.value?.agency || '')
 const headDocNo = computed(() => policy.value?.doc_no || fulltextMeta.value?.doc_no || '')
 const headSource = computed(() => policy.value?.source_name || fulltextMeta.value?.source || '')
+/** 成文日期优先取已归一成 ISO 的 metadata，历史行再用归档全文里的原文形态兜底 */
+const signedDate = computed(
+  () => policy.value?.metadata?.signed_date || fulltextMeta.value?.signed_date || '',
+)
 
 /** 文号里可能出现的左括号符（半角/全角），文种就取它之前的那一段 */
 const DOC_NO_BRACKETS = ['〔', '[', '（', '【']
@@ -182,9 +186,9 @@ function backToLibrary() {
             <AppIcon name="file-text" :size="13" />
             公文种类：{{ fulltextMeta.doc_kind }}
           </span>
-          <span v-if="fulltextMeta?.signed_date" class="meta-item">
+          <span v-if="signedDate" class="meta-item">
             <AppIcon name="calendar" :size="13" />
-            成文日期：{{ fulltextMeta.signed_date }}
+            成文日期：{{ signedDate }}
           </span>
         </div>
 

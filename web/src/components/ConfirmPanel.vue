@@ -95,7 +95,9 @@ function selectNone(): void {
 function dateFlag(row: PolicyResultItem): 'out' | 'none' | null {
   const current = task.value
   if (!current) return null
-  if (!row.publish_date) return 'none'
+  // 没有发布日期但有成文日期时，日期列显示成文日期（标「成文」），不再报「无日期」；
+  // 成文日期不参与时间窗口判断（窗口是发布日期口径）。
+  if (!row.publish_date) return row.signed_date ? null : 'none'
   if (current.date_from && row.publish_date < current.date_from) return 'out'
   if (current.date_to && row.publish_date > current.date_to) return 'out'
   return null
@@ -133,7 +135,7 @@ async function onConfirm(): Promise<void> {
       <div class="table-head">
         <div class="col check-col"></div>
         <div class="col title-col">政策标题</div>
-        <div class="col date-col">发布日期</div>
+        <div class="col date-col">日期</div>
         <div class="col link-col">原文链接</div>
       </div>
 
@@ -164,9 +166,16 @@ async function onConfirm(): Promise<void> {
           <span v-if="row.judge_tagged" class="flag judge" title="判别服务标注：不建议入库（默认不勾选，可手动勾选）">不建议入库</span>
         </div>
         <div class="col date-col">
-          <span class="row-date">{{ row.publish_date ?? '—' }}</span>
+          <span class="row-date" :class="{ fallback: !row.publish_date && row.signed_date }">
+            {{ row.publish_date ?? row.signed_date ?? '—' }}
+          </span>
           <span
-            v-if="row.publish_date_source === 'model'"
+            v-if="!row.publish_date && row.signed_date"
+            class="flag signed"
+            title="页面没有可解析的发布日期，此处显示原文落款/成文日期；它不参与时间范围筛选"
+          >成文</span>
+          <span
+            v-else-if="row.publish_date_source === 'model'"
             class="flag model"
             title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
           >模型提取</span>
@@ -193,7 +202,7 @@ async function onConfirm(): Promise<void> {
 
     <footer class="confirm-foot">
       <p class="foot-note">
-        此处日期为检索结果给的<strong>发布日期</strong>，入库后保持不变；原文里的成文日期是另一个字段，在成果库详情页单独展示。标「模型提取」的日期由模型从页面内容补提，建议核对原文。
+        此处日期优先显示检索结果给的<strong>发布日期</strong>；没有发布日期时，灰字显示原文落款/成文日期并标「成文」，它不参与时间范围筛选。成文日期与发布日期是两个字段，互不顶替。标「模型提取」的日期由模型从页面内容补提，建议核对原文。
       </p>
       <div class="foot-actions">
         <button
@@ -397,6 +406,11 @@ async function onConfirm(): Promise<void> {
   white-space: nowrap;
 }
 
+/* 没有发布日期、显示原文成文日期：弱化一级，避免被当成发布日期 */
+.row-date.fallback {
+  color: var(--text-tertiary);
+}
+
 .flag {
   padding: 2px 7px;
   border-radius: 999px;
@@ -420,6 +434,12 @@ async function onConfirm(): Promise<void> {
 .flag.model {
   background: var(--blue-bg);
   color: var(--blue);
+}
+
+/* 成文日期兜底：中性灰标，跟「模型提取」区分开 */
+.flag.signed {
+  background: #eef1f4;
+  color: var(--text-tertiary);
 }
 
 /* 已在成果库：中性灰标 */

@@ -20,6 +20,8 @@ class PolicyResultItem(BaseModel):
     publish_date: date | None = None
     # NULL = 抓取时从页面结构解析；'model' = 结构解析没拿到、提取阶段由模型从页面内容补提
     publish_date_source: str | None = None
+    # 成文日期（标签规则/正文落款），只在没有发布日期时用于展示；不参与筛选/排序
+    signed_date: str | None = None
     source_url: str | None = None
     status: ExtractStatus
     extracted_at: datetime | None = None
@@ -34,6 +36,7 @@ class PolicyResultItem(BaseModel):
             title=row["title"],
             publish_date=row["publish_date"],
             publish_date_source=row.get("publish_date_source"),
+            signed_date=row.get("signed_date"),
             source_url=row["source_url"],
             status=row["status"],
             extracted_at=row.get("extracted_at"),
@@ -250,6 +253,8 @@ class LibraryPolicyItem(BaseModel):
     doc_type: str | None = None  # 由文号前缀推导（首个括号符之前，如 国发/粤府），推导不出为 null
     publish_date: date | None = None
     publish_date_source: str | None = None  # NULL=页面解析，'model'=模型从页面内容补提
+    # 成文日期（标签规则/正文落款）：发布日期为空时卡片上的展示兜底
+    signed_date: str | None = None
     summary: str | None = None  # 提取的摘要（信息栏）
     fact_count: int = 0
     point_count: int = 0
@@ -267,6 +272,7 @@ class LibraryPolicyItem(BaseModel):
             doc_type=row.get("doc_type"),
             publish_date=row.get("publish_date"),
             publish_date_source=row.get("publish_date_source"),
+            signed_date=row.get("signed_date"),
             summary=row.get("info_summary"),
             fact_count=int(row.get("fact_count") or 0),
             point_count=int(row.get("point_count") or 0),
