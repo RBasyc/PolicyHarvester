@@ -66,6 +66,8 @@ export interface PolicyResultItem {
   publish_date: string | null
   /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提（前端标注「模型提取」） */
   publish_date_source: string | null
+  /** 成文日期（标签规则/正文落款）：发布日期为空时展示兜底，不参与时间筛选 */
+  signed_date: string | null
   source_url: string | null
   /** 来源目录：gongwen 公文 / bumenfile 部门文件 / gongbao 公报 / otherfile 政策解读 */
   catalog: string | null
@@ -149,6 +151,8 @@ export interface LibraryPolicyItem {
   publish_date: string | null
   /** 发布日期来源：null=页面结构解析；'model'=模型从页面内容补提 */
   publish_date_source: string | null
+  /** 成文日期（标签规则/正文落款）：发布日期为空时卡片展示兜底，不参与筛选 */
+  signed_date: string | null
   summary: string | null
   fact_count: number
   point_count: number

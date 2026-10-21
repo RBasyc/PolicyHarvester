@@ -119,6 +119,7 @@ class BrowserAnySource(PolicySource):
             issuer=data.get("agency"),
             doc_no=data.get("doc_no"),
             date=parse_date(data.get("date")),
+            date_source=str(data.get("date_source") or "") or None,
             image_count=int(data.get("image_count") or 0),
             attachments=list(data.get("attachments") or []),
             metadata=dict(data.get("metadata") or {}),

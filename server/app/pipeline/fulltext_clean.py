@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 from app.schemas.policy import FulltextMeta
+from app.sources.date_signals import signature_date
 
 # 元信息标签（允许标签内带空白，如「标 题：」「来 源：」），值取同行剩余文本
 _META_LABELS = {
@@ -99,6 +100,12 @@ def split_fulltext(text: str) -> tuple[FulltextMeta, str]:
     # 安全兜底：清洗疑似误伤（页面结构与预期差异大）时原样返回
     if len(body) < len(raw) * _MIN_KEEP_RATIO:
         body = raw
+    # 元信息表里没有「成文日期：」标签时，从正文末尾的落款补一次。
+    # 只在读时/归档时解析，不写回用户原文，也不参与 publish_date。
+    if not meta.signed_date:
+        signed_hit = signature_date(body)
+        if signed_hit is not None:
+            meta.signed_date = signed_hit.text
     return meta, body
 
 

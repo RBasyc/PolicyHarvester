@@ -32,9 +32,14 @@ from app.config import get_settings
 from app.sources import net
 from app.sources.base import FulltextResult, PolicyItem, PolicySource
 from app.sources.config import DetailConfig, EntrypointConfig, PaginationConfig, SourceConfig
+from app.sources.date_signals import (
+    publish_date_from_label,
+    publish_date_from_meta,
+    signature_date,
+)
 from app.sources.field_rules import extract_fields
 from app.sources.htmlparse import Node, parse_html, select, select_one
-from app.sources.util import parse_date
+from app.sources.util import find_dates, parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,12 @@ _ATTACHMENT_HEURISTIC = ", ".join(f'a[href$=".{ext}"]' for ext in _ATTACHMENT_EX
 
 # 元信息常写成「发布日期：2026-10-13」「来源：浙江省政府办公厅」——去掉短标签前缀再判
 _META_LABEL_RE = re.compile(r"^\s*[一-龥A-Za-z]{2,8}\s*[:：]\s*")
+
+# 列表条目文本兜底只认发布日期；明确标成成文/印发/发文/签发/落款日期，或
+# 施行/生效/截止/有效期的日期，不能顶替它。
+_NON_PUBLISH_DATE_LABEL_RE = re.compile(
+    r"(成文|印发|发文|签发|落款)日期|施行|生效|截止|有效期"
+)
 
 _CACHE_MAX = 64  # 列表页缓存条目上限（简单的容量+TTL 双限，规避无界增长）
 
@@ -55,6 +66,28 @@ _RESERVED_FIELD_NAMES = {"title", "agency", "doc_no", "date", "publish_date"}
 def _strip_label(text: str) -> str:
     """去掉元信息里的中文标签前缀（「发布日期：2026-10-13」→「2026-10-13」）。"""
     return _META_LABEL_RE.sub("", (text or "").strip()).strip()
+
+
+def _date_from_item_text(container: Node, title: str) -> str | None:
+    """列表条目没有独立日期节点时，从条目文本里兜底找日期。
+
+    日期和标题常写在同一段（`<a>标题</a> 2026-09-01`），或者日期在 `<span>` 之外的
+    直接文本里。先去掉标题本身再找，避免把标题里的「2026年9月1日发布会」当成
+    发布日期；同一段有多个日期时取最后一个（列表条目通常「标题 ... 日期」）。
+    明确标成「成文日期/印发日期/发文日期…」或「施行/生效/截止/有效期」的日期
+    不是发布日期，跳过。
+    """
+    text = " ".join(container.text_content().split())
+    normalized_title = " ".join((title or "").split())
+    if normalized_title:
+        text = text.replace(normalized_title, " ", 1)
+    # 从后往前找；明确标成「成文/印发/发文/施行…」的日期不是发布日期，跳过。
+    for parsed, start, end in reversed(find_dates(text)):
+        around = text[max(0, start - 8) : start] + text[end : end + 8]
+        if _NON_PUBLISH_DATE_LABEL_RE.search(around):
+            continue
+        return parsed.isoformat()
+    return None
 
 
 def _usable_href(node: Node) -> str | None:
@@ -287,6 +320,11 @@ def parse_list_page(
                 if key not in _RESERVED_FIELD_NAMES
             }
 
+        # 没有 `date_selector` / 字段规则时，最后再从条目文本里找一次。
+        # 只补空值，不覆盖已解析出的日期（显式规则永远优先）。
+        if not item_date:
+            item_date = _date_from_item_text(container, title)
+
         if not title:
             continue
 
@@ -336,6 +374,9 @@ class DetailResult:
     agency: str | None = None
     doc_no: str | None = None
     date_text: str | None = None
+    # 日期来源：label=可见发布标签；field=字段规则；meta=JSON-LD/meta/time；
+    # selector=旧 date_selectors。供预检判断详情页日期能否覆盖列表日期。
+    date_source: str | None = None
     container_selector: str | None = None
     image_count: int = 0
     attachments: list[Attachment] = field(default_factory=list)
@@ -449,6 +490,8 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         for key, value in field_values.items()
         if key not in _RESERVED_FIELD_NAMES
     }
+    # 可见发布标签先取：`drop_selectors` 可能从正文容器里摘掉页头/元信息块。
+    label_hit = publish_date_from_label(root)
 
     # 附件清单**先扫**，再摘掉 drop_selectors：附件区（`div.attach` 之类）通常要
     # 从正文里剔除，但「有哪些附件」正是接入要拿到的信息——先摘后扫会把附件一起抹掉。
@@ -489,13 +532,58 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         or _strip_label(_text_of(root, detail.doc_no_selectors) or "")
         or None
     )
-    # `normalize=date` 的规则已产出 ISO；旧选择器的文本还可能带标签，保持原口径
-    result.date_text = (
-        field_values.get("date")
-        or field_values.get("publish_date")
-        or _strip_label(_text_of(root, detail.date_selectors) or "")
-        or None
-    )
+    # 日期优先级：可见发布标签（页头「日期：…来源：…」/「发布日期：…」）>
+    # 字段规则 > 页面元数据 > 旧 date_selectors。字段规则和旧选择器可能命中
+    # 相关推荐/页脚/正文里的日期；可见标签和 meta 是页面自己声明的发布日期。
+    field_date = field_values.get("date") or field_values.get("publish_date")
+    selector_date = None
+    if not field_date:
+        selector_date = _strip_label(_text_of(root, detail.date_selectors) or "") or None
+    parsed_field = parse_date(field_date) if field_date else None
+    parsed_selector = parse_date(selector_date) if selector_date else None
+    meta_hit = None
+    if label_hit is None and parsed_field is None:
+        meta_hit = publish_date_from_meta(html)
+
+    if label_hit is not None:
+        result.date_text = label_hit.value.isoformat()
+        result.date_source = "label"
+        other_text = field_date or selector_date
+        other_date = parsed_field if parsed_field is not None else parsed_selector
+        if other_date is not None and other_date != label_hit.value:
+            logger.info(
+                "详情页日期冲突（%s）：结构解析=%s，可见发布日期=%s；采用可见日期",
+                url,
+                other_text,
+                result.date_text,
+            )
+    elif parsed_field is not None:
+        result.date_text = field_date
+        result.date_source = "field"
+    elif meta_hit is not None:
+        result.date_text = meta_hit.value.isoformat()
+        result.date_source = "meta"
+    elif selector_date:
+        result.date_text = selector_date
+        result.date_source = "selector"
+    elif field_date:
+        result.date_text = field_date
+        result.date_source = "field"
+    else:
+        result.date_text = None
+        result.date_source = None
+
+    # 成文日期（落款）：字段规则已经配了 `signed_date` 就用它；否则从正文末尾找
+    # 「机关名 + 日期」/独占一行的日期。它只进 metadata，绝不覆盖 publish_date。
+    signed = result.extra.get("signed_date")
+    normalized_signed = parse_date(signed) if signed else None
+    if normalized_signed is not None:
+        result.extra["signed_date"] = normalized_signed.isoformat()
+    else:
+        # 字段规则没配 signed_date，或值不完整（如只有年月）时，再从正文落款补一次。
+        signed_hit = signature_date(result.body)
+        if signed_hit is not None:
+            result.extra["signed_date"] = signed_hit.value.isoformat()
     return result
 
 
@@ -626,6 +714,7 @@ class HtmlListSource(PolicySource):
             issuer=detail.agency,
             doc_no=detail.doc_no,
             date=publish_date,
+            date_source=detail.date_source,
             image_count=detail.image_count,
             attachments=[a.as_dict() for a in detail.attachments],
             metadata=detail.extra,

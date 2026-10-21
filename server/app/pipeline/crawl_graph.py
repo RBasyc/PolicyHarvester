@@ -45,6 +45,7 @@ from app.pipeline.extract import extract_policy, extract_publish_date
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
+from app.sources.util import parse_date
 from app.tracing import isolated_context, trace_config
 
 logger = logging.getLogger(__name__)
@@ -587,29 +588,61 @@ async def _preflight_bodies(
                 if not url:
                     raise ValueError("缺少原文链接")
                 result = await source.fetch_fulltext(url, timeout=mcp_timeout)
-                _, clean = split_fulltext(result.body)
+                meta, clean = split_fulltext(result.body)
                 cjk, enders = body_metrics(clean)
                 imgs = result.image_count
                 # 配置化来源的列表轮不给日期（`entrypoints[].date_selector` 为空，日期只在
                 # 详情页）：预检既然已经取回了详情页，就把发布日期顺手写回条目——否则
                 # 确认面板/结果表要等提取阶段跑完才看得到日期。只在该来源声明「全文日期 =
                 # 发布日期」时写（gov.cn 报的是成文日期，不能顶替）；列表轮已有日期时保留原值。
-                if source.fulltext_date_is_publish and not it.get("date"):
-                    if result.date:
+                if source.fulltext_date_is_publish and result.date:
+                    # 列表日期可能来自错误的相关推荐/页脚；详情页的可见发布标签或
+                    # 页面发布元数据是更明确的信号，冲突时以详情页为准。
+                    list_date = parse_date(it.get("date"))
+                    detail_explicit = result.date_source in ("label", "meta")
+                    if list_date is None or detail_explicit:
+                        if list_date is not None and list_date != result.date:
+                            logger.info(
+                                "正文预检日期覆盖：列表=%s 详情=%s（%s，来源=%s）",
+                                list_date,
+                                result.date,
+                                it.get("url"),
+                                result.date_source,
+                            )
                         it["date"] = result.date.isoformat()
-                    else:
-                        # 结构解析也没拿到：模型从整页文本兜底。放在预检阶段是为了让
-                        # 用户在**确认前**就能看到日期，而不是等提取跑完。
-                        parsed = await extract_publish_date(
-                            title=str(it.get("title") or result.title or ""),
-                            text=result.page_text or result.body,
-                            url=url,
-                            max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
-                            model_id=(overrides or {}).get("pipeline_model"),
-                        )
-                        if parsed:
-                            it["date"] = parsed.isoformat()
-                            it["date_source"] = "model"
+                        # 详情页结构解析/可见标签都是确定性值；确保不会被标记成模型提取。
+                        it["date_source"] = None
+
+                # 成文日期只作展示/元信息，绝不回填 publish_date（见
+                # `PolicySource.fulltext_date_is_publish` 与 docs/architecture/data-pipeline.md）。
+                # 详情页字段规则 / 正文落款任一命中即可；写回条目后由 `_to_policy_row`
+                # 合并进 metadata，确认面板才能在不提取的情况下显示「成文」日期。
+                if result.metadata:
+                    it["metadata"] = {
+                        **(it.get("metadata") or {}),
+                        **result.metadata,
+                    }
+                signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
+                signed = parse_date(signed_text) if signed_text else None
+                if signed is None and meta.signed_date:
+                    # 字段规则只给了年月/原文碎片时，用归档全文解析出的落款再兜一次。
+                    signed = parse_date(meta.signed_date)
+                if signed is not None:
+                    it["signed_date"] = signed.isoformat()
+
+                # 结构解析仍没拿到发布日期时，用模型从整页文本兜底。放在预检阶段是为了让
+                # 用户在**确认前**就能看到日期，而不是等提取跑完。
+                if source.fulltext_date_is_publish and not it.get("date"):
+                    parsed = await extract_publish_date(
+                        title=str(it.get("title") or result.title or ""),
+                        text=result.page_text or result.body,
+                        url=url,
+                        max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
+                        model_id=(overrides or {}).get("pipeline_model"),
+                    )
+                    if parsed:
+                        it["date"] = parsed.isoformat()
+                        it["date_source"] = "model"
             except Exception as exc:  # noqa: BLE001 - 单篇预检故障不能拖垮检索
                 logger.warning(
                     "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
@@ -640,6 +673,20 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
     normalized = adapter.normalize_item(item)
     if normalized is None:
         return None
+    # 列表条目字段规则取到的自定义元信息 + 预检详情页补到的元信息。gov.cn 的
+    # `normalize_item` 不读 metadata，所以这里必须把 item 上的那份也合并进来。
+    metadata = {**normalized.extra, **(item.get("metadata") or {})}
+    signed = item.get("signed_date") or metadata.get("signed_date")
+    # 统一存 ISO（`metadata.signed_date` 由展示层直接渲染；后端查询也按它取）。
+    # 列表 `item_fields` 里手写的 `signed_date` 可能没配 `normalize=date`，这里再兜一次；
+    # 预检统一键无效时，回落到详情页合并进 metadata 的那一份。
+    parsed_signed = parse_date(signed) if signed else None
+    if parsed_signed is None and metadata.get("signed_date"):
+        parsed_signed = parse_date(metadata.get("signed_date"))
+    if parsed_signed is not None:
+        metadata["signed_date"] = parsed_signed.isoformat()
+    elif signed:
+        metadata["signed_date"] = signed
     return {
         "title": normalized.title,
         "source_url": normalized.url,
@@ -654,8 +701,8 @@ def _to_policy_row(item: dict[str, Any], source: str | None) -> PolicyRow | None
         # 检索循环内判别写回的标注（见 _search_policies）；未判别（服务停用）时为 None
         "judge_tagged": normalized.judge_tagged,
         "judge_prob": normalized.judge_prob,
-        # 列表条目字段规则取到的自定义元信息（索引号/成文日期…），JSONB 落库
-        "metadata": normalized.extra,
+        # 列表条目字段规则 + 预检详情页取到的自定义元信息（索引号/成文日期…），JSONB 落库
+        "metadata": metadata,
     }
 
 
@@ -835,6 +882,17 @@ async def _fetch_fulltext(
     meta, clean_body = split_fulltext(result.body)
     body = clean_body or result.body
 
+    # 成文日期（字段规则或正文落款）只进 metadata，供详情页/日期列展示；
+    # 统一成 ISO，避免把「2026年9月1日」这种原样字符串带进 JSONB。
+    metadata = dict(result.metadata or {})
+    signed_text = metadata.get("signed_date") or meta.signed_date
+    signed = parse_date(signed_text) if signed_text else None
+    if signed is None and meta.signed_date:
+        # 字段规则只给了年月/原文碎片时，用归档全文解析出的落款再兜一次。
+        signed = parse_date(meta.signed_date)
+    if signed is not None:
+        metadata["signed_date"] = signed.isoformat()
+
     # `publish_date` 只放**发布日期**，所以这里要按来源判断全文接口报的日期算不算数
     # （见 `PolicySource.fulltext_date_is_publish`）。gov.cn 报的是成文日期——拿它覆盖会把
     # 跨年文件分错年份（年份筛选/直方图都按 `EXTRACT(YEAR FROM publish_date)`），也会和抓取时
@@ -847,7 +905,7 @@ async def _fetch_fulltext(
         doc_no=(result.doc_no or "").strip() or (meta.doc_no or ""),
         publish_date=result.date if source.fulltext_date_is_publish else None,
         fulltext=body.strip(),
-        metadata=result.metadata,
+        metadata=metadata,
     )
     return {
         "body": body,

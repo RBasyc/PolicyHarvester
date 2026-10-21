@@ -386,6 +386,8 @@ SELECT
           AND p2.task_id <> p.task_id
     ) AS in_library,
     -- 追加在列尾：CREATE OR REPLACE VIEW 只允许在末尾加列
-    p.publish_date_source
+    p.publish_date_source,
+    -- 成文日期（标签规则/正文落款），仅在没有发布日期时用于展示；不参与筛选/排序
+    p.metadata->>'signed_date' AS signed_date
 FROM policy_document p
 LEFT JOIN extraction e ON e.policy_id = p.id;

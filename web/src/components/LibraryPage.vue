@@ -232,10 +232,15 @@ async function onConfirmClear() {
           <span v-if="item.agency" class="card-tag">{{ item.agency }}</span>
           <span v-if="item.doc_type" class="card-tag">{{ item.doc_type }}</span>
           <span class="card-tag-spacer"></span>
-          <span class="card-date" :class="{ none: !item.publish_date }">
-            {{ item.publish_date ?? '无日期' }}
+          <span class="card-date" :class="{ none: !item.publish_date && !item.signed_date }">
+            {{ item.publish_date ?? item.signed_date ?? '无日期' }}
             <span
-              v-if="item.publish_date_source === 'model'"
+              v-if="!item.publish_date && item.signed_date"
+              class="card-date-signed"
+              title="页面没有可解析的发布日期，此处显示原文落款/成文日期；它不参与时间筛选"
+            >成文</span>
+            <span
+              v-else-if="item.publish_date_source === 'model'"
               class="card-date-model"
               title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
             >模型提取</span>
@@ -590,6 +595,17 @@ async function onConfirmClear() {
 .card-date.none {
   color: var(--text-tertiary);
   opacity: 0.75;
+}
+
+.card-date-signed {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #eef1f4;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: nowrap;
 }
 
 .card-date-model {

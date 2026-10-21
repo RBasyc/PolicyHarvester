@@ -66,7 +66,7 @@ async function onRetry(policyId: number) {
     <div class="table-wrap">
       <div class="table-head">
         <div class="col title-col">政策标题</div>
-        <div class="col date-col">发布日期</div>
+        <div class="col date-col">日期</div>
         <div class="col link-col">原文链接</div>
         <div class="col status-col">提取状态</div>
         <div class="col expand-col"></div>
@@ -105,11 +105,19 @@ async function onRetry(policyId: number) {
             <span class="row-title">{{ row.title }}</span>
           </div>
           <div class="col date-col">
-            <span class="row-date" :class="{ none: !row.publish_date }">
-              {{ row.publish_date ?? '无日期' }}
+            <span
+              class="row-date"
+              :class="{ none: !row.publish_date && !row.signed_date, fallback: !row.publish_date && row.signed_date }"
+            >
+              {{ row.publish_date ?? row.signed_date ?? '无日期' }}
             </span>
             <span
-              v-if="row.publish_date_source === 'model'"
+              v-if="!row.publish_date && row.signed_date"
+              class="date-signed"
+              title="页面没有可解析的发布日期，此处显示原文落款/成文日期；它不参与时间范围筛选"
+            >成文</span>
+            <span
+              v-else-if="row.publish_date_source === 'model'"
               class="date-model"
               title="页面结构未解析到发布日期，该日期由模型从页面内容提取，建议核对原文"
             >模型提取</span>
@@ -294,6 +302,21 @@ async function onRetry(policyId: number) {
 
 .row-date.none {
   color: var(--text-tertiary);
+}
+
+/* 没有发布日期、显示原文成文日期：弱化一级 */
+.row-date.fallback {
+  color: var(--text-tertiary);
+}
+
+.date-signed {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #eef1f4;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
 }
 
 .date-model {

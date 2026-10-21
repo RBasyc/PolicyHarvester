@@ -73,6 +73,49 @@ def _build(year: int, month: int, day: int) -> date | None:
         return None
 
 
+def find_dates(text: str) -> list[tuple[date, int, int]]:
+    """按出现顺序返回文本里的**全部完整日期**：`(date, start, end)`。
+
+    与 `parse_date` 的区别是「不只取第一个」：列表条目里常同时出现标题日期、
+    发布时间、正文里的施行日期，调用方需要自己决定取哪一个（例如取最后一个）。
+    `start` / `end` 是原文本偏移，便于判断这个日期是不是独占一行。
+    """
+    raw = str(text or "")
+    if not raw:
+        return []
+
+    hits: list[tuple[date, int, int]] = []
+    for match in _NUMERIC_DATE_RE.finditer(raw):
+        year, month, day = (int(group) for group in match.groups())
+        parsed = _build(year, month, day)
+        if parsed is not None:
+            hits.append((parsed, match.start(), match.end()))
+    for match in _ARABIC_YEAR_RE.finditer(raw):
+        year, month, day = (int(group) for group in match.groups())
+        parsed = _build(year, month, day)
+        if parsed is not None:
+            hits.append((parsed, match.start(), match.end()))
+    for match in _CN_YEAR_RE.finditer(raw):
+        year = _cn_year(match.group(1))
+        month = _cn_number(match.group(2))
+        day = _cn_number(match.group(3))
+        if year is None or month is None or day is None:
+            continue
+        parsed = _build(year, month, day)
+        if parsed is not None:
+            hits.append((parsed, match.start(), match.end()))
+
+    # 三种写法理论上互不重叠；仍按偏移排序并去重，防止同一段文本被两条正则各抓一次。
+    hits.sort(key=lambda hit: (hit[1], hit[2]))
+    result: list[tuple[date, int, int]] = []
+    last_end = -1
+    for parsed, start, end in hits:
+        if start >= last_end:
+            result.append((parsed, start, end))
+            last_end = end
+    return result
+
+
 def parse_date(value: Any) -> date | None:
     """把常见的政务日期写法转成 `date`；解析不了返回 None（调用方按「无日期」处理）。
 

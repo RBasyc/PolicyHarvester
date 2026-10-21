@@ -77,8 +77,9 @@ async def fetch_task_policies(task_id: int) -> list[Row]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT id, task_id, title, publish_date, publish_date_source, source_url,
-                       catalog, status, extracted_at, judge_tagged, judge_prob, in_library
+                SELECT id, task_id, title, publish_date, publish_date_source, signed_date,
+                       source_url, catalog, status, extracted_at, judge_tagged, judge_prob,
+                       in_library
                 FROM v_policy_results
                 WHERE task_id = %s
                 ORDER BY publish_date DESC NULLS LAST, id
@@ -640,6 +641,7 @@ _LIBRARY_LATEST_CTE = r"""
 WITH latest AS (
     SELECT DISTINCT ON (p.source_url)
         p.id, p.title, p.agency, p.doc_no, p.publish_date, p.publish_date_source,
+        p.metadata->>'signed_date' AS signed_date,
         p.source_url, p.source_name, p.created_at,
         e.extracted_at, e.info_summary,
         (SELECT COUNT(*) FROM fact_item fi WHERE fi.extraction_id = e.id) AS fact_count,
