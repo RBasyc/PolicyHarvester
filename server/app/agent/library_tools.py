@@ -1,13 +1,19 @@
 """政策库检索工具（对话 Agent 的「先查库、再回答」入口）。
 
-一个工具，三个动作：
+两个工具，一里一外：
 
-    sources   列出系统里**已启用**的来源与它们的覆盖范围（层级 / 机构 / 栏目 / 检索能力）
-    search    在这些来源上做**只读**检索（不落库、不判别、不提取，不花模型费）
-    fulltext  取某篇正文（gov.cn 走 MCP 全文工具，地方来源走来源适配器）
+- `search_policy_library`——查**库外**：系统里已启用的来源（内置 gov.cn + 接入过的
+  地方/部门来源）现在有什么政策。三个动作：`sources`（列出系统里的来源与覆盖范围，
+  含已登记但当前不可用的）、`search`（只读检索，不落库）、`fulltext`（取正文）。
+- `search_library`——查**库内**：我们**已经抓进来并提取过**的成果（成果库）。
+  两个动作：`list`（按关键词/机构/文种/年份查）、`detail`（读某篇的元信息 +
+  提取结果三栏 + 归档正文）。
 
-**为什么需要它**：Agent 原本能用的检索只有 MCP 的 `get_latest_policies` /
-`get_policy_facets`——**只覆盖国务院政策文件库（国家层面）**。于是用户问
+分成两个工具而不是一个，是因为两者回答的是不同问题：「外面有什么」与
+「我们已经有了什么」。混在一起，模型会在库里明明有货时再去网上重抓一遍。
+
+**为什么需要 `search_policy_library`**：Agent 原本能用的检索只有 MCP 的
+`get_latest_policies` / `get_policy_facets`——**只覆盖国务院政策文件库（国家层面）**。于是用户问
 「浙江省关于科技的政策法规库」时，Agent 直接去查国家库、查不到就回答
 「浙江本省的不在这个库里」——它**从没问过系统里有没有浙江的来源**。
 接入工作流加进来的一手地方来源就在进程内注册表里，只是没有一条只读的路给模型用。
@@ -128,5 +134,72 @@ async def search_policy_library(
         return _error(f"政策库检索失败：{exc}")
 
 
+@tool
+async def search_library(
+    action: str = "list",
+    keyword: str | None = None,
+    agency: str | None = None,
+    doc_type: str | None = None,
+    year: int | None = None,
+    policy_id: str | None = None,
+    limit: int = 10,
+) -> str:
+    """查**成果库**：我们已经抓进来并提取过的政策（库里有什么）。
+
+    与 `search_policy_library` 的分工：那个查**库外**（各来源现在的政策），
+    这个查**库内**（我们已有的成果）。用户问「我们库里有哪些…」「那篇文件提取出了
+    什么」「之前抓过的那份文件」时用这个——**别再去网上重抓一遍**。
+
+    两个动作：
+
+    - `list`   按关键词 / 机构 / 文种 / 年份查库（口径与页面「成果库」列表完全一致：
+      只收录**提取成功**的篇目，按原文链接去重，按发布日期倒序）。返回每篇的标题、
+      发文机关、文号、发布日期、来源站点、原文链接、摘要与事实/要点条数。
+    - `detail` 读某篇的详情：元信息 + **提取结果三栏**（事实 / 信息 / 知识）+ 归档正文。
+
+    Args:
+        action: `list` / `detail` 之一。
+        keyword: 关键词（标题/摘要包含匹配）。`list` 用。
+        agency: 发文机关（精确匹配）。`list` 用。
+        doc_type: 文种（如 国发 / 浙政发）。`list` 用。
+        year: 年份。`list` 用。
+        policy_id: 篇目 id（`list` 的返回里有；字符串数字也行）。`detail` 用。
+        limit: 最多返回几条（1–50，默认 10）。`list` 用。
+
+    Returns:
+        JSON 文本。`list` 返回 `total` / `items[]`；`detail` 返回 `policy` /
+        `extraction`（事实 facts、信息 info、知识 knowledge）/ `fulltext`（归档正文，
+        过长截断并说明）。失败时 `ok=false` + 中文原因。
+    """
+    action = (action or "").strip().lower()
+    if action not in ("list", "detail"):
+        return _error(f"action 需要是 list / detail 之一，收到：{action or '（空）'}")
+
+    try:
+        from app.services import library_query as svc
+    except Exception as exc:  # noqa: BLE001 - 依赖装不全时也要给模型一句人话
+        return _error(f"成果库服务不可用：{exc}")
+
+    try:
+        if action == "detail":
+            if policy_id is None:
+                return _error("detail 需要 policy_id（list 的返回里有）")
+            return _dump(await svc.get_library_detail(policy_id))
+        capped = max(1, min(int(limit or 10), 50))
+        return _dump(
+            await svc.list_library(
+                keyword=keyword,
+                agency=agency,
+                doc_type=doc_type,
+                year=year,
+                limit=capped,
+            )
+        )
+    except svc.LibraryQueryError as exc:
+        return _error(str(exc))
+    except Exception as exc:  # noqa: BLE001 - 兜底：工具绝不抛异常
+        return _error(f"成果库查询失败：{exc}")
+
+
 # 注册表：`app/agent/tools.py` 把它并进 TOOLS
-LIBRARY_TOOLS = [search_policy_library]
+LIBRARY_TOOLS = [search_policy_library, search_library]

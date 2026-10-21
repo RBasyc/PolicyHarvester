@@ -35,7 +35,7 @@ from app.agent.tool_utils import parse_iso_date as _parse_date
 # 一次返回给模型的候选条数上限（模型要的是「够不够挑」，全量在 *_count 字段里）
 _CANDIDATE_LIMIT = 25
 
-_ACTIONS = ("start", "inspect", "confirm")
+_ACTIONS = ("start", "inspect", "confirm", "cancel")
 
 
 def _note_for_start(result: dict[str, Any]) -> str:
@@ -59,12 +59,15 @@ def _note_for_start(result: dict[str, Any]) -> str:
     return "任务已结束，用 action=inspect 查看确切状态。"
 
 
-async def _task_view(svc: Any, task_id: int) -> dict[str, Any]:
-    """任务的可提交形态：状态 / 阶段 / 计数 / 候选（供 start 与 inspect 复用）。
+async def _task_view(svc: Any, task_id: int | None) -> dict[str, Any]:
+    """任务的可提交形态：状态 / 阶段 / 计数 / 候选 / 日志（供 start 与 inspect 复用）。
 
     **`inspect_ingestion` 是协程**：忘了 await 拿到的就是一个协程对象，
     下一个 `.update(...)` 会以 `'coroutine' object has no attribute 'update'` 炸掉
     （2026-10-16 实机三次复现的正是这一处），因此这里和两个调用点都必须是 async。
+
+    `task_id` 传 None = 最近一次任务（服务层兜底）：跨会话问「刚才那个任务」
+    时模型手上往往没有 id。
     """
     return await svc.inspect_ingestion(task_id, candidate_limit=_CANDIDATE_LIMIT)
 
@@ -96,13 +99,16 @@ async def ingest_policies(
     - `start`   发起一次抓取（给来源 / 关键词 / 时间范围 / 篇数上限）→ 建任务并跑检索段。
                 本工具会**等检索段结束**（最多约两分钟）再把候选篇目给你；检索段一定停在
                 「等用户确认」，不会自动入库。
-    - `inspect` 看一个任务：状态 / 阶段 / 计数 + 候选篇目（含「不建议入库」标注与「已在库」标记）。
-                任务还在跑、或想复查进度时用它。
+    - `inspect` 看一个任务：状态 / 阶段 / 计数 + 候选篇目（含「不建议入库」标注与「已在库」标记）
+                + **任务日志**（检索 0 结果或大量篇目被剔除时，原因在日志里）。
+                `task_id` 留空 = **最近一次任务**（跨会话问「刚才那个任务怎么样了」时用）。
     - `confirm` 确认入库 → 开始提取。**必须 user_approved=true**，且只能在用户明确说了要哪几篇
                 （或「全部」）之后。提取按篇计费、入库后进成果库，这道确认不能由你代劳。
+    - `cancel`  终止一个还在跑的任务（与页面「终止」同一段实现）。用户说「算了别抓了」
+                时用它——不要新建一个任务来"代替"取消。
 
     Args:
-        action: `start` / `inspect` / `confirm` 之一。
+        action: `start` / `inspect` / `confirm` / `cancel` 之一。
         source: 来源名——展示名（`国务院政策文件库（gov.cn）`）、key（`gov_cn`）或其中一段
             （`政策文件库`）；留空 = 默认源。**名字对不上直接报错**并给出可用清单，不会替你换源。
         keywords: 检索关键词（可多个）；留空 = 该来源的最新文件。
@@ -113,7 +119,8 @@ async def ingest_policies(
             浏览器来源」创建）必填可选、入口网址以**来源配置为准**（browse_url 传了也忽略）；
             遗留的「任意网站」来源才用 browse_url 传入口。其它（静态/渲染）来源传 browse_url 会被拒绝。
         max_policies: 本任务最多处理多少篇（1–50，留空 = 服务端默认）。**提取按篇计费**，别贪多。
-        task_id: `inspect` / `confirm` 用（`start` 的返回里有）。
+        task_id: `inspect` / `confirm` / `cancel` 用（`start` 的返回里有）；
+            `inspect` 与 `cancel` 留空 = 最近一次任务。
         policy_ids: `confirm` 用——要入库的篇目 id（来自候选列表）；留空 = 按判别结果全部建议入库的
             篇目（被判别为「不建议入库」与已在成果库的会剔除）。
         include_rejected: `confirm` 时连「不建议入库」的一起入库（默认 false）。
@@ -122,7 +129,8 @@ async def ingest_policies(
 
     Returns:
         JSON 文本。`ok=true` 时含 `task_id`、`status`、`stage`、`counts`、候选 `candidates`
-        （含 `suggested` / `in_library`）与 `next`（下一步该做什么）；失败时 `ok=false` + 中文原因。
+        （含 `suggested` / `in_library`）、任务日志 `logs` 与 `next`（下一步该做什么）；
+        失败时 `ok=false` + 中文原因。
     """
     action = (action or "").strip().lower()
     if action not in _ACTIONS:
@@ -141,6 +149,8 @@ async def ingest_policies(
             )
         if action == "inspect":
             return await _inspect(svc, task_id)
+        if action == "cancel":
+            return await _cancel(svc, task_id)
         return await _confirm(svc, task_id, policy_ids, include_rejected, user_approved)
     except svc.IngestionError as exc:
         return _error(str(exc))
@@ -200,9 +210,8 @@ async def _start(
 
 
 async def _inspect(svc: Any, task_id: int | None) -> str:
-    if task_id is None:
-        return _error("inspect 需要 task_id（start 的返回里有）")
-    view = await _task_view(svc, int(task_id))
+    """看任务；`task_id` 留空 = 最近一次任务（服务层兜底）。"""
+    view = await _task_view(svc, int(task_id) if task_id is not None else None)
     status = view.get("status")
     if status == "awaiting_confirmation":
         next_step = "检索完成，等用户确认篇目；用户点头后调 action=confirm。"
@@ -218,6 +227,19 @@ async def _inspect(svc: Any, task_id: int | None) -> str:
         next_step = "任务已结束；成果在「政策库」页可查。"
     view.update({"ok": True, "action": "inspect", "next": next_step})
     return _dump(view)
+
+
+async def _cancel(svc: Any, task_id: int | None) -> str:
+    """终止任务；`task_id` 留空 = 最近一次任务（服务层兜底）。"""
+    result = await svc.cancel_ingestion(int(task_id) if task_id is not None else None)
+    result.update(
+        {
+            "ok": True,
+            "action": "cancel",
+            "next": "任务已终止（抓取页同步显示已终止）。已入库的篇目不受影响。",
+        }
+    )
+    return _dump(result)
 
 
 async def _confirm(

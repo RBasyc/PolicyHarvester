@@ -44,10 +44,8 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # SSE 轮询节奏：数据库快照 + 增量日志
 _STREAM_POLL_SECONDS = 0.6
 _STREAM_HEARTBEAT_SECONDS = 15.0
+# 任务终态（SSE 判定用；取消动作的终态判定在 services/ingestion.py 里）
 _TERMINAL_STATUSES = ("completed", "failed")
-
-# 手动终止后写进 `stage` 的文案（进度面板直接展示这一段）
-_CANCELLED_STAGE = "任务已手动终止"
 
 
 def _sse(payload: dict) -> str:
@@ -133,19 +131,19 @@ async def confirm_task(task_id: int, payload: TaskConfirm) -> TaskDTO:
 async def cancel_task(task_id: int) -> TaskDTO:
     """终止运行中的任务。
 
-    先取消后台 asyncio 流水线并等它退出，再把任务落 `failed` 终态 ——
-    顺序不能反：`run_pipeline` 的取消分支写的是「服务重启…」，由这里覆盖成终止文案。
+    实现不在本文件，而在 `app/services/ingestion.py::cancel_ingestion`——对话侧的
+    `ingest_policies(action="cancel")` 走同一段代码（取消后台 asyncio 流水线并等它退出，
+    再把任务落 `failed` 终态）。顺序不能反：`run_pipeline` 的取消分支写的是
+    「服务重启…」，由服务层覆盖成终止文案。
+
     已是终态的任务返回 `409`（前端据此提示「任务已结束」）。
     """
-    task = await _get_task_or_404(task_id)
-    if task["status"] in _TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=409, detail=f"任务已结束（{task['status']}），无需终止"
-        )
-
-    await cancel_pipeline(task_id)
-    await repo.finish_task(task_id, "failed", _CANCELLED_STAGE)
-    await repo.add_task_log(task_id, _CANCELLED_STAGE, tone="info")
+    try:
+        await ingestion.cancel_ingestion(task_id)
+    except ingestion.IngestionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ingestion.IngestionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return TaskDTO.from_row(await _get_task_or_404(task_id))
 
 

@@ -17,6 +17,12 @@
 5. 未知来源 → 报错并列出可用来源（不静默换成默认源）
 6. **解析失败不许静默丢条目**：`normalize_item` 抛错的来源要报出来，不能读成「没检索到」
 7. 工具层：坏 action / 缺关键词 / 坏日期 → `{"ok": false, "error": ...}`，绝不抛异常
+8. `search_library`（查库内）：坏 action / 缺 policy_id → 同样不抛异常
+9. `ingest_policies` 的 `cancel` / `inspect` 动作：无 task_id 时走「最近一次任务」，
+   数据库不可用时也只返回中文错误（工具绝不抛异常）
+
+加 `--db` 参数会打开连接池，追加真正读库的用例（成果库列表 / 详情 / 最近一次任务 /
+取消任务），跑完关池。
 """
 
 import asyncio
@@ -28,8 +34,12 @@ from pathlib import Path
 # 直接从 scripts/ 运行时把 server/ 根目录加入 sys.path，以便导入 app 包
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.agent.library_tools import search_policy_library
-from app.services import library_search
+import argparse
+
+from app.agent.ingestion_tools import ingest_policies
+from app.agent.library_tools import search_library, search_policy_library
+from app.services import library_query, library_search
+from app.services import ingestion as ingestion_service
 from app.sources import registry
 from app.sources.base import FulltextResult, PolicyItem, PolicySource
 
@@ -46,6 +56,10 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     if not ok:
         _FAILED += 1
     print(f"  [{mark}] {label}{('：' + detail) if detail else ''}")
+
+
+def skip(label: str, reason: str) -> None:
+    print(f"  [SKIP] {label}：{reason}")
 
 
 class _FakeConfig:
@@ -172,6 +186,12 @@ class BrokenSource(FakeZhejiangSource):
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description="政策库只读检索与成果库查询测试")
+    parser.add_argument("--db", action="store_true",
+                        help="打开数据库连接池，追加读库用例（成果库 / 任务）；需 server-db-1 与已建表")
+    args = parser.parse_args()
+    args_db = bool(args.db)
+
     registry.register(FakeZhejiangSource())
     registry.register(FakeGovSource())
     registry.register(ThinSource())
@@ -286,8 +306,108 @@ async def main() -> int:
     check("工具取正文返回 ok=true", payload.get("ok") is True and bool(payload.get("body")))
     check("工具取正文给发布日期", payload.get("publish_date") == "2026-09-12")
 
+    print("\n=== 8. search_library（查库内）：坏输入不抛异常 ===")
+    for args, expect in (
+        ({"action": "bogus"}, "action 需要是"),
+        ({"action": "detail"}, "需要 policy_id"),
+        ({"action": "detail", "policy_id": "abc"}, "policy_id"),
+    ):
+        raw = await search_library.ainvoke(args)
+        payload = json.loads(raw)
+        ok = payload.get("ok") is False and expect in str(payload.get("error"))
+        check(f"{args} → ok=false + 中文原因", ok, str(payload.get("error"))[:50])
+
+    print("\n=== 9. ingest_policies 的 cancel / inspect：坏输入不抛异常 ===")
+    # 离线（无库）：只断言「返回 ok=false + 中文原因」，具体文案在 --db 用例里断言
+    for args in (
+        {"action": "cancel", "task_id": 999999},
+        {"action": "inspect", "task_id": 999999},
+        {"action": "inspect"},
+    ):
+        raw = await ingest_policies.ainvoke(args)
+        payload = json.loads(raw)
+        message = str(payload.get("error") or "")
+        ok = payload.get("ok") is False and bool(message) and message != "None"
+        check(f"{args} → ok=false + 中文原因（不抛异常）", ok, message[:60])
+
+    if args_db:
+        await db_cases()
+
     print(f"\n{'FAIL: ' + str(_FAILED) + ' 项未通过' if _FAILED else '全部通过'}")
     return 1 if _FAILED else 0
+
+
+async def db_cases() -> None:
+    """需要数据库的用例（`--db`）：成果库列表 / 详情 / 最近一次任务 / 取消任务。"""
+    from app.db import repositories as repo
+    from app.db.pool import close_pool, open_pool
+
+    await open_pool()  # 连不上只告警不抛；下面的判定会如实说「测不了」
+    try:
+        print("\n=== 10. 成果库（--db）===")
+        listed = await library_query.list_library(limit=5)
+        check("成果库列表可查", listed.get("ok") is True and isinstance(listed.get("total"), int),
+              f'total={listed.get("total")}')
+        items = listed.get("items") or []
+        if not items:
+            skip("成果库详情可读", "库里没有篇目（先在页面上抓一次）")
+        else:
+            first = items[0]
+            check("条目含 id/标题/链接", bool(first.get("id")) and bool(first.get("title")) and
+                  bool(first.get("source_url")))
+            detail = await library_query.get_library_detail(first["id"])
+            check("详情可读（policy + extraction）",
+                  detail.get("ok") is True and "policy" in detail and "extraction" in detail)
+            missing = False
+            try:
+                await library_query.get_library_detail(999999999)
+            except library_query.LibraryQueryError as exc:
+                missing = "库里没有这篇" in str(exc)
+            check("不存在的篇目报错（中文）", missing)
+
+        print("\n=== 11. 任务：最近一次 / 日志 / 取消（--db）===")
+        try:
+            view = await ingestion_service.inspect_ingestion()
+            check("inspect 省略 task_id → 最近一次任务", view.get("task_id") is not None,
+                  str(view.get("task_id")))
+            check("inspect 带任务日志", "logs" in view and "logs_truncated" in view)
+        except ingestion_service.IngestionNotFound as exc:
+            skip("inspect 省略 task_id → 最近一次任务", str(exc))
+
+        missing = False
+        try:
+            await ingestion_service.inspect_ingestion(999999999)
+        except ingestion_service.IngestionNotFound as exc:
+            missing = "任务不存在" in str(exc)
+        check("inspect 不存在的任务 → 中文报错", missing)
+
+        # 造一个 pending 任务 → 终止 → 落 failed → 删掉（不留脏数据）
+        task_id = await repo.create_task(
+            source="国务院政策文件库（gov.cn）",
+            date_from=None,
+            date_to=None,
+            keywords=["演示用任务"],
+        )
+        try:
+            result = await ingestion_service.cancel_ingestion(task_id)
+            check("cancel 终止任务并落 failed", result.get("status") == "failed", str(result))
+            again = False
+            try:
+                await ingestion_service.cancel_ingestion(task_id)
+            except ingestion_service.IngestionConflict as exc:
+                again = "已结束" in str(exc)
+            check("cancel 终态任务 → 冲突（中文）", again)
+        finally:
+            await repo.delete_task(task_id)
+
+        missing = False
+        try:
+            await ingestion_service.cancel_ingestion(999999999)
+        except ingestion_service.IngestionNotFound as exc:
+            missing = "任务不存在" in str(exc)
+        check("cancel 不存在的任务 → 中文报错", missing)
+    finally:
+        await close_pool()
 
 
 if __name__ == "__main__":

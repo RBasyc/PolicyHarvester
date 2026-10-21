@@ -295,13 +295,28 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def inspect_ingestion(task_id: int, *, candidate_limit: int = 40) -> dict[str, Any]:
+async def inspect_ingestion(
+    task_id: int | None = None,
+    *,
+    candidate_limit: int = 40,
+    log_limit: int = 20,
+) -> dict[str, Any]:
     """看一个任务：状态 / 阶段 / 计数 + 候选篇目（含判别与「已在库」标注）。
 
     候选列表就是**确认闸门要人过的那一眼**：调用方把它念给用户，用户挑篇目，
     再由 `confirm_ingestion` 落地。`candidate_limit` 只影响返回条数，不影响任何写操作；
     全量口径在 `counts` 与 `*_count` 字段里。
+
+    `task_id` 留空 = **最近一次任务**（`repo.fetch_current_task`）：跨会话问
+    「刚才那个任务怎么样了」时，模型手上往往没有 id。带 `logs` 是因为检索 0 结果
+    或大量篇目被判「不建议」时，光看状态与计数猜不出原因——日志里写着。
     """
+    if task_id is None:
+        current = await repo.fetch_current_task()
+        if current is None:
+            raise IngestionNotFound("当前没有任何抓取任务")
+        task_id = int(current["id"])
+
     task = await repo.fetch_task(task_id)
     if task is None:
         raise IngestionNotFound(f"任务不存在：{task_id}")
@@ -311,6 +326,8 @@ async def inspect_ingestion(task_id: int, *, candidate_limit: int = 40) -> dict[
     # 默认确认口径：建议入库 **且** 不在成果库（已在库的是重复抓取，除非点名要）
     default_keep = [row for row in suggested if not row.get("in_library")]
 
+    log_rows = await repo.fetch_task_logs(task_id)
+    capped_logs = max(0, int(log_limit))
     return {
         "task_id": task_id,
         "source": task["source"],
@@ -331,6 +348,15 @@ async def inspect_ingestion(task_id: int, *, candidate_limit: int = 40) -> dict[
         "default_keep_count": len(default_keep),
         "candidates": [_candidate_row(row) for row in rows[:candidate_limit]],
         "candidates_truncated": len(rows) > candidate_limit,
+        "logs": [
+            {
+                "tone": row.get("tone"),
+                "message": row.get("message"),
+                "created_at": str(row.get("created_at")),
+            }
+            for row in log_rows[-capped_logs:] if capped_logs
+        ],
+        "logs_truncated": len(log_rows) > capped_logs,
     }
 
 
@@ -359,6 +385,47 @@ async def wait_for_settled(
                 "stage": task.get("stage"),
             }
         await asyncio.sleep(_POLL_SECONDS)
+
+
+# ---------- 终止 ----------
+
+
+# 手动终止后写进 `stage` 的文案（进度面板直接展示这一段）
+CANCELLED_STAGE = "任务已手动终止"
+# 任务终态：这两个状态下的任务不需要（也不能）再终止
+_TERMINAL_STATUSES = ("completed", "failed")
+
+
+async def cancel_ingestion(task_id: int | None = None) -> dict[str, Any]:
+    """终止运行中的任务：取消后台流水线 → 落 `failed` 终态 → 记一条日志。
+
+    **与页面同一段实现**：`POST /api/tasks/{id}/cancel` 现在转调这里（路由只留
+    HTTP 语义）。顺序不能反——`run_pipeline` 的取消分支写的是「服务重启…」，
+    由这里的 `finish_task` 覆盖成终止文案。
+
+    `task_id` 留空 = 最近一次任务（与 `inspect_ingestion` 同口径）。
+    """
+    if task_id is None:
+        current = await repo.fetch_current_task()
+        if current is None:
+            raise IngestionNotFound("当前没有任何抓取任务")
+        task_id = int(current["id"])
+
+    task = await repo.fetch_task(task_id)
+    if task is None:
+        raise IngestionNotFound(f"任务不存在：{task_id}")
+    if task["status"] in _TERMINAL_STATUSES:
+        raise IngestionConflict(
+            f"任务已结束（{task['status']}），无需终止", status=task["status"]
+        )
+
+    # 局部导入：crawl_graph 会拖上 pipeline 与 sources，顶层导入会成环
+    from app.pipeline.crawl_graph import cancel_pipeline
+
+    await cancel_pipeline(task_id)
+    await repo.finish_task(task_id, "failed", CANCELLED_STAGE)
+    await repo.add_task_log(task_id, CANCELLED_STAGE, tone="info")
+    return {"task_id": task_id, "status": "failed", "stage": CANCELLED_STAGE}
 
 
 # ---------- 确认 ----------

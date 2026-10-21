@@ -16,7 +16,7 @@ uv run python scripts/test_judge.py            # 入库判别服务（laya）契
 uv run python scripts/test_ingest_filter.py    # 正文预检阈值校准（真实 MCP 链接）
 uv run python scripts/test_browser.py          # 无头浏览器：离线门禁/预算/快照/解析 + 本地假站点集成（Chromium 缺失则跳过）
 uv run python scripts/test_dates.py            # 日期信号纯函数：JSON-LD / meta / <time> / 落款 / 误判防护（离线）
-uv run python scripts/test_library_search.py    # 政策库只读检索（列来源 / 只读检索 / 取正文 / 工具层坏输入；离线）
+uv run python scripts/test_library_search.py [--db]  # 政策库只读检索 + 成果库查询（离线；--db 追加读库用例）
 ```
 
 Headless browser (optional, Phase 24):
