@@ -44,6 +44,7 @@
 | 24 | 无头浏览器抓取（流水线「任意网站」+ 对话「浏览网页」双入口） | 🟨 进行中（代码完成，**未构建未运行**；待实机验收） | — |
 | 25 | 渲染取数引擎 + 验收失败归因（JS 渲染空壳） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 26 | 无头浏览器来源落库（保存为无头来源 + 取值方式开关） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 27 | 来源页体验修复与改版（向导完成后重置 + 卡片列表 + 来源详情页） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1102,3 +1103,20 @@ cd web && pnpm dev
 - [x] **调度/筛选收口**：`ScheduleCreate` 改解析后拒绝（browser_driven 标记）；`filters.py` 对 browser_driven 返回 supports 全 False + 浏览器口径说明；`ingest_policies` 工具说明改写；`_STATIC_ONLY_HINT` 与空壳归因文案统一指向「保存为无头浏览器来源」
 - [x] **文档镜像**：skill `references/config-schema.md`（engine 三值 + browse 字段）/ `tool-map.md`、`docs/architecture/source-onboarding.md`、计划落档 `docs/plans/`、`docs/progress/log.md`
 - [ ] **实机验收待用户执行**（详见计划文档验证节）：重跑 JS 站导入 → 一键保存 → 抓取页选中填目标跑通全流程；取值方式切换后重新试运行；旧任意网站任务详情兼容；定时任务选无头来源被拒；`flk.npc.gov.cn`（robots 封禁）保存被拒
+
+## Phase 27 — 来源页体验修复与改版（向导重置 + 卡片列表 + 来源详情页）
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-21，待实机验收） ｜ **目标**：修复单条导入报告页「启用后页面不更新」；按 design.pen「来源管理 · 入口卡片（优化版）」「来源详情 · 试运行结果（优化版）」改版来源列表与验收报告；静态链路拿不到内容的导入失败，条目右侧给「启用无头抓取模式」按钮（人工确认，按失败类型过滤：404/robots/5xx 不给）。计划全文：[docs/plans/2026-10-21-sources-page-refresh.md](docs/plans/2026-10-21-sources-page-refresh.md)
+
+- [x] **问题 1 修复**：`enableSourceById` 返回成功与否；向导报告页「启用该来源」与「保存为无头浏览器来源」成功后 `resetWizard()` 回到表单页（保留已填地址，方便接着导下一条）；启用失败停在报告页。**同一缺口批量路径同步修**：批量展开行「启用 / 保存无头来源」成功后按钮换成行内结果提示（`handledJobs` 按 job_id 记录，重展开不丢），启停/删除/保存成功后同步刷摘要行（`refreshRecentRuns`）
+- [x] **JS 空壳按钮的 discover 阶段覆盖核对**：后端确认「内容发现未通过」的失败作业带 `status=error` + `stage_reports.discover.summary.js_shell_pages`，DTO 全量下发——单条报告页与批量展开行同一判定 `isJsShellFailure` 均命中；作业被服务端清理（约 30 分钟）后展开行改显「完整报告见接入记录」而不是卡在「读取作业详情…」
+- [x] **SourceReport 重构**：验收结论卡（结论 + 命中候选/正文样本/判据通过/软判据警告统计 + 运行时间/指纹）→ 验收判据卡（2 列 grid **行内等高**，修掉设计稿高度不齐的毛病；图例 通过/警告/未过；软判据 pill + 建议）→ 正文实测卡（指标 chip、容器、兜底提示、原文外链）→ 底部双卡（未测试 1fr / 覆盖范围限制 2fr）；琥珀色 token 入 `style.css`
+- [x] **来源列表卡片化**：名称行（tag：已启用绿/已停用灰/已验收蓝/待验收琥珀）+ 元信息行（代码 chip · 入口 · 取值方式 · 版本）+ 摘要行（最近 dry_run 结论/统计/时间，`recentDryRuns` ← `GET /sources/runs/recent?kind=dry_run`）；操作列只留启用 toggle（未验收触发强制启用确认）/ 删除 / 进入详情 chevron
+- [x] **新增来源详情页** `/sources/:id(\d+)`：页头（返回 / 名称 / tag / 元信息 / 试运行 · 健康检查 · 停用·启用（未验收强制确认）/ 删除）+ 最近一次试运行报告 + 健康检查结果行内面板；`api.getSource()` 补 `GET /sources/{id}`（`SourceDetail` 类型早已存在）
+- [x] **共用动作下沉 store**：`disableSourceById` / `deleteSourceById` 与 `enableSourceById` 并列在 `store/sourceImports.ts`，列表与详情页同一套提示与刷新；`AppIcon` 补 7 个图标
+- [x] **失败给「启用无头抓取模式」按钮（2026-10-21 用户两次裁定）**：不自动存、也不对什么失败都给——服务端按失败阶段下发 `headless_eligible`：**只给**「静态管线拿不到内容」的失败（内容发现为空/JS 渲染空壳、候选逐个试抓失败、配置不可执行、试运行找不到正文）；**不给**勘察失败的 404/5xx/robots/DNS（站点本身拒绝或不可达）与未知异常。前端在失败条目**右侧**给「启用无头抓取」按钮（单条向导报告页、批量队列行、批量展开行三处），点了才真保存：服务端无头浏览器轻量校验（渲染后有可见内容）通过即落成 browser_driven 来源（已验收 · 已启用），结果经 `job_id` 回写进程内快照（`browser_source`），重拉作业可见；discover 的 js-shell 长文案与两条「静态引擎永远抓不到」长提示保持删短
+- [x] **取值方式切换功能删除（2026-10-21 用户裁定）**：`POST /{id}/engine` 端点、`switch_source_engine` service、`SourceEngineSwitchRequest` schema、前端 `switchSourceEngine` 与卡片上的「静态取数 ⇄」开关按钮、`.engine-toggle` 样式全部下线；卡片元信息行只读展示取值方式
+- [x] **`html_list_rendered` 渲染取数引擎整体删除（2026-10-21 用户裁定，避免无头双路径冗余）**：`SourceEngine` 收敛为 `html_list` / `browser_driven` 两值；`HtmlListSource` 删 `_fetch_rendered` 与 engine 分支（`fulltext_available` 恒 True）、`validate_source_config` 删 rendered 拦截（browser_driven 的浏览器校验保留）、`config_from_row` 不再接受旧值；所有指引文案（勘察 js_shell_hint / 试运行 suggestion / analyze docstring / 工具 docstring）统一指向 browser_driven 路径；测试改指纹断言与删 rendered 校验用例；无头全链路只剩一条：导入失败条目「启用无头抓取模式」→ browser_driven 来源
+- [x] **全路径废代码清扫（2026-10-21）**：删两条无人调用的死链——① 进程内作业列表：`GET /sources/import`（list）端点 + `SourceJobDTO` + `source_import.list_jobs` + 前端 `api.listImportJobs` + `SourceJob` 类型 + store `jobList`/`jobsLoading`/`refreshJobList`（来源页改版后列表 UI 已不存在，refs 只写不读）；② 孤儿端点 `GET /sources/{id}/runs` + 前端 `api.sourceRuns` + `SourceRunsResponse`（详情页走 `getSource` 内嵌 runs，无人调用）；③ `AppIcon` 删 3 个 unused 图标（chart-column / heart-pulse / rotate-ccw）；核对 store 全部导出、`manage_source` 各 action（经 `manage_ingestion_job` 工具全可达）、组件引用均无死项；镜像同步 README 端点清单 / tool-map 路由表 / source-onboarding 内存边界段
+- [x] **文档镜像**：`docs/architecture/overview.md`（路由 + 来源页结构）、`docs/progress/log.md`、计划落档 `docs/plans/`
+- [ ] **实机验收待用户执行**：单条导入 → 启用 → 页面回表单且列表已更新；静态链路导入失败 → 条目右侧出现「启用无头抓取模式」按钮，点击后列表出现已启用无头来源（404/robots/5xx 失败无此按钮）；列表卡片摘要行与 toggle 启停、强制启用确认；chevron 进详情看到结论卡/判据等高网格/实测/双卡，页头试运行与健康检查可用

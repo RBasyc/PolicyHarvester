@@ -7,10 +7,12 @@
  * 状态全部在 `store/sourceImports.ts`（模块级）：切 tab / 组件重挂载都不丢；
  * 路由离开再回来由 `syncImportsOnMount` 重订阅对表。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import AppIcon from '../AppIcon.vue'
 import SourceReport from '../SourceReport.vue'
 import type { ImportJobStatus, SourceBatchChild } from '../../api/types'
+import { api } from '../../api/client'
+import { loadSources, notify, notifySuccess } from '../../store'
 import {
   batch,
   cancelBatchJob,
@@ -21,7 +23,9 @@ import {
   enableRegistered,
   enableSourceById,
   expandBatchJob,
+  handledJobs,
   LOG_LEVEL_TONE,
+  refreshRecentRuns,
   registeredId,
   registeredStatus,
   reportPassed,
@@ -104,13 +108,72 @@ const expandedRegistered = computed(() => {
 })
 const expandedPassed = computed(() => batch.expandedJob?.report?.status === 'passed')
 
+/** 批量展开行「启用该来源」：成功后行内换成「已启用」提示（作业是终态，状态不写回作业本身）。 */
 async function enableExpanded() {
-  if (expandedRegistered.value == null) return
+  if (expandedRegistered.value == null || !batch.expandedJob) return
   const label =
     typeof batch.expandedJob?.registered?.label === 'string'
       ? batch.expandedJob.registered.label
       : '该来源'
-  await enableSourceById(expandedRegistered.value, label)
+  const ok = await enableSourceById(expandedRegistered.value, label)
+  if (ok && batch.expandedJob) handledJobs[batch.expandedJob.job_id] = 'enabled'
+}
+
+// ---------- 启用无头抓取模式（2026-10-21 用户裁定） ----------
+// 静态管线拿不到内容（找不到列表/正文、JS 渲染空壳、配置不可执行）的失败条目，
+// 右侧给一个人工确认按钮；点了才真保存（服务端轻量校验：无头浏览器渲染后有可见内容
+// 即通过 → 已验收 · 已启用）。404 / robots / 5xx 这类「站点本身拒绝或不可达」的失败
+// 服务端不下发 headless_eligible，不会出现按钮。
+
+const savingHeadlessUrl = ref<string | null>(null)
+/** 行内已确认启用的作业（批量队列行用：快照不再推送，本地记一份把按钮换成结果） */
+const headlessSavedJobs = reactive<Record<string, true>>({})
+
+/** 单条向导报告页：失败且 eligible、还没启用过 → 显示按钮。 */
+const wizardHeadlessEligible = computed(
+  () => !!wizard.job?.headless_eligible && !wizard.job?.browser_source,
+)
+/** 批量展开行：同上。 */
+const expandedHeadlessEligible = computed(
+  () => !!batch.expandedJob?.headless_eligible && !batch.expandedJob?.browser_source,
+)
+
+/** 启用无头抓取模式：调服务端轻量校验并落成 browser_driven 来源（已验收 · 已启用）。 */
+async function enableHeadless(url: string, jobId?: string | null): Promise<boolean> {
+  if (!url || savingHeadlessUrl.value) return false
+  savingHeadlessUrl.value = url
+  try {
+    const result = await api.saveBrowserSource({ url, job_id: jobId ?? null })
+    notifySuccess(
+      `已启用无头抓取模式：来源「${result.label}」已验收 · 已启用——到抓取页选中它、填浏览目标即可抓取`,
+    )
+    await loadSources()
+    void refreshRecentRuns()
+    if (jobId) {
+      headlessSavedJobs[jobId] = true
+      // 展开行对象在内存里同步一份：按钮立即换成结果，收起再展开由服务端快照兜底
+      if (batch.expandedJob?.job_id === jobId) {
+        batch.expandedJob.browser_source = {
+          source_id: result.source_id,
+          key: result.key,
+          label: result.label,
+          created: result.created,
+        }
+      }
+    }
+    return true
+  } catch (error) {
+    notify(`启用无头抓取模式失败：${error instanceof Error ? error.message : String(error)}`)
+    return false
+  } finally {
+    savingHeadlessUrl.value = null
+  }
+}
+
+/** 单条向导报告页上的启用：成功后把向导重置回表单页，方便接着导入下一条。 */
+async function enableHeadlessFromWizard(url: string, jobId: string | null) {
+  const ok = await enableHeadless(url, jobId)
+  if (ok) resetWizard()
 }
 </script>
 
@@ -253,6 +316,7 @@ async function enableExpanded() {
             :report="wizard.job?.report ?? null"
             :error-kind="wizard.job?.error_kind ?? null"
             :error="wizard.job?.error ?? null"
+            :finished-at="wizard.job?.finished_at"
           />
 
           <!-- 候选清单：命名区域已全部自动接入（「当前使用」可以有多条），不需要再选；
@@ -318,6 +382,15 @@ async function enableExpanded() {
             <span>{{ wizard.streamError }}</span>
           </p>
 
+          <!-- 已启用过无头抓取模式（对表回来时）：只显示一行结果，不再给按钮 -->
+          <p v-if="wizard.job?.browser_source" class="auto-saved">
+            <AppIcon name="circle-check" :size="13" />
+            <span>
+              已启用无头抓取模式：来源「{{ wizard.job.browser_source.label || '未命名来源' }}」
+              已验收 · 已启用——可在抓取页直接选用
+            </span>
+          </p>
+
           <div class="foot">
             <p class="foot-hint">
               <template v-if="registeredStatus">
@@ -329,6 +402,17 @@ async function enableExpanded() {
             </p>
             <button class="ghost" type="button" @click="emit('switchTab', 'list')">回到列表</button>
             <button class="ghost" type="button" @click="resetWizard">重新接入</button>
+            <!-- 静态管线拿不到内容的失败（服务端 headless_eligible）：人工确认后启用无头抓取 -->
+            <button
+              v-if="wizardHeadlessEligible"
+              class="primary"
+              type="button"
+              :disabled="savingHeadlessUrl === (wizard.job?.url ?? '')"
+              title="真用无头浏览器打开入口页轻量校验，通过后即成为已验收、已启用的来源；浏览目标在抓取配置里填"
+              @click="enableHeadlessFromWizard(wizard.job?.url ?? '', wizard.job?.job_id ?? null)"
+            >
+              {{ savingHeadlessUrl === (wizard.job?.url ?? '') ? '校验中…' : '启用无头抓取模式' }}
+            </button>
             <button
               v-if="canRerunCandidate"
               class="ghost"
@@ -450,6 +534,10 @@ async function enableExpanded() {
                     {{ clock(batch.lastLogs[child.job_id].created_at) }}
                     {{ batch.lastLogs[child.job_id].message }}
                   </p>
+                  <!-- 已启用无头抓取模式的结果（本地确认过或服务端快照带回） -->
+                  <p v-if="child.browser_source || headlessSavedJobs[child.job_id]" class="queue-saved">
+                    已启用无头抓取模式（已验收 · 已启用）——可在抓取页选用
+                  </p>
                 </div>
                 <div class="queue-actions">
                   <button
@@ -459,6 +547,22 @@ async function enableExpanded() {
                     @click="cancelBatchJob(child.job_id)"
                   >
                     取消
+                  </button>
+                  <!-- 静态管线拿不到内容的失败行：右侧人工确认启用无头抓取（404/robots/5xx 无此按钮） -->
+                  <button
+                    v-if="
+                      child.status === 'error' &&
+                      child.headless_eligible &&
+                      !child.browser_source &&
+                      !headlessSavedJobs[child.job_id]
+                    "
+                    class="mini-btn headless"
+                    type="button"
+                    :disabled="savingHeadlessUrl === child.url"
+                    title="真用无头浏览器打开入口页轻量校验，通过后即成为已验收、已启用的来源"
+                    @click="enableHeadless(child.url, child.job_id)"
+                  >
+                    {{ savingHeadlessUrl === child.url ? '校验中…' : '启用无头抓取' }}
                   </button>
                   <button
                     class="mini-btn"
@@ -488,21 +592,56 @@ async function enableExpanded() {
                     :report="expandedReport"
                     :error-kind="batch.expandedJob.error_kind ?? null"
                     :error="batch.expandedJob.error ?? null"
+                    :finished-at="batch.expandedJob.finished_at"
                   />
 
-                  <div v-if="expandedRegistered != null" class="foot">
-                    <p class="foot-hint">验收通过的来源已登记为草案，启用后才进入抓取来源</p>
+                  <!-- 已启用过无头抓取模式：只显示一行结果；否则 eligible 的失败给右侧确认按钮 -->
+                  <p v-if="batch.expandedJob.browser_source" class="auto-saved">
+                    <AppIcon name="circle-check" :size="13" />
+                    <span>
+                      已启用无头抓取模式：来源「{{ batch.expandedJob.browser_source.label || '未命名来源' }}」
+                      已验收 · 已启用——可在抓取页直接选用
+                    </span>
+                  </p>
+                  <div v-if="expandedHeadlessEligible" class="foot">
+                    <p class="foot-hint">
+                      静态取数抓不到这个站的内容：启用无头抓取模式后，真用无头浏览器渲染入口页并轻量校验
+                    </p>
                     <button
-                      v-if="expandedPassed"
                       class="primary"
                       type="button"
-                      @click="enableExpanded"
+                      :disabled="savingHeadlessUrl === (batch.expandedJob?.url ?? '')"
+                      title="轻量校验通过即成为已验收、已启用的来源；浏览目标在抓取配置里填"
+                      @click="enableHeadless(batch.expandedJob?.url ?? '', batch.expandedJob?.job_id ?? null)"
                     >
-                      启用该来源
+                      {{ savingHeadlessUrl === (batch.expandedJob?.url ?? '') ? '校验中…' : '启用无头抓取模式' }}
                     </button>
                   </div>
+
+                  <div v-if="expandedRegistered != null" class="foot">
+                    <p v-if="handledJobs[batch.expandedJob.job_id] === 'enabled'" class="foot-hint">
+                      该来源已启用——可在抓取配置里选它作为来源
+                    </p>
+                    <template v-else>
+                      <p class="foot-hint">验收通过的来源已登记为草案，启用后才进入抓取来源</p>
+                      <button
+                        v-if="expandedPassed"
+                        class="primary"
+                        type="button"
+                        @click="enableExpanded"
+                      >
+                        启用该来源
+                      </button>
+                    </template>
+                  </div>
                 </template>
-                <p v-else class="empty">读取作业详情…</p>
+                <p v-else class="empty">
+                  {{
+                    child.gone
+                      ? '进度快照已被服务端清理（进程内保留约 30 分钟）——完整报告见「接入记录」页'
+                      : '读取作业详情…'
+                  }}
+                </p>
               </div>
             </li>
           </ul>
@@ -1066,6 +1205,30 @@ async function enableExpanded() {
   white-space: nowrap;
 }
 
+/* 兜底自动保存结果：一行绿提示，与错误行同款版式但用成功色 */
+.auto-saved {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px 12px;
+  background: var(--green-bg, #f3faf5);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--green, #1f7a3d);
+  line-height: 1.6;
+}
+
+.auto-saved svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.queue-saved {
+  font-size: 11px;
+  color: var(--green, #1f7a3d);
+  line-height: 1.6;
+}
+
 .queue-actions {
   flex-shrink: 0;
   display: flex;
@@ -1102,6 +1265,17 @@ async function enableExpanded() {
 .mini-btn.on {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* 「启用无头抓取」：失败行的主行动作，用主色描边与「详情」区分开 */
+.mini-btn.headless {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.mini-btn.headless:hover:not(:disabled) {
+  background: var(--accent-soft);
 }
 
 @media (max-width: 640px) {

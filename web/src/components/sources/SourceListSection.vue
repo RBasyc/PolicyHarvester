@@ -1,32 +1,54 @@
 <script setup lang="ts">
 /**
- * 来源列表（Phase 16 自 SourceModal 平移 + 增量）：启用/强制启用/停用/删除、
- * 行内展开验收报告（接入记录）、试运行（真实小批量抓取）、健康检查（逐入口真抓第 1 页）。
+ * 来源列表（卡片版，对齐 design.pen「来源管理 · 入口卡片（优化版）」）：
+ *   名称行（来源名 + 状态/验收 tag）→ 元信息行（代码 chip · 入口 · 取值方式 · 版本）
+ *   → 摘要行（最近一次试运行的结论与时间）；
+ *   右侧操作只留三个：启用开关（未验收的触发强制启用二次确认）、删除、进入详情。
  *
- * 试运行/健康检查是页面化新增的入口：把 Agent 工具同门的
- * manage_source("run_trial"/"health") 暴露成了 HTTP 路由。
+ * 试运行 / 健康检查 / 验收报告的行内展开已全部移到来源详情页（/sources/:id），
+ * 列表不再展开——复核入口统一，卡片保持干净。
+ * 摘要行数据：`sourceImports.recentDryRuns`（GET /sources/runs/recent?kind=dry_run 按 key 映射）。
  */
-import { computed, nextTick, reactive, ref } from 'vue'
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from '../AppIcon.vue'
-import SourceReport from '../SourceReport.vue'
-import { api } from '../../api/client'
-import type { SourceDTO, SourceOnboardingRun } from '../../api/types'
-import { loadSources, notify, notifySuccess, sources, sourcesLoading, syncTask } from '../../store'
+import type { SourceDTO, SourceRecentRun } from '../../api/types'
+import { sources, sourcesLoading } from '../../store'
 import {
   busySourceId,
+  deleteSourceById,
+  disableSourceById,
   enableSourceById,
+  recentDryRuns,
   STATUS_LABEL,
 } from '../../store/sourceImports'
 
-const STATUS_TONE: Record<string, string> = {
-  draft: 'wait',
-  validated: 'wait',
-  active: 'ok',
-  disabled: 'off',
-}
+const router = useRouter()
+const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
 
-function text(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+// ---------- 摘要行（最近一次试运行） ----------
+
+type SummaryTone = 'ok' | 'fail' | 'block' | 'none'
+
+function summaryOf(item: SourceDTO): { tone: SummaryTone; text: string } {
+  if (item.builtin) return { tone: 'none', text: '内置来源 · 随服务发布' }
+  const run: SourceRecentRun | undefined = recentDryRuns.value[item.key]
+  if (!run) {
+    return { tone: 'none', text: '尚未试运行——试运行验收通过并启用后才会进入抓取注册表' }
+  }
+  const report = run.report
+  const when = String(run.finished_at ?? run.started_at ?? '').slice(0, 10)
+  const datePart = when ? ` · 试运行于 ${when}` : ''
+  if (!report) return { tone: 'none', text: `试运行没有产出报告${datePart}` }
+  const samples = Array.isArray(report.details) ? report.details.length : 0
+  const base =
+    report.items_found != null
+      ? `命中 ${report.items_found} 条候选 / 取回 ${samples} 篇样本${datePart}`
+      : `取回 ${samples} 篇样本${datePart}`
+  if (report.status === 'passed') return { tone: 'ok', text: `验收通过 · ${base}` }
+  if (report.status === 'blocked') return { tone: 'block', text: `受阻 · 未绕过访问控制 · ${base}` }
+  if (report.status === 'failed') return { tone: 'fail', text: `验收未通过 · ${base}` }
+  return { tone: 'none', text: base }
 }
 
 // ---------- 行内二次确认（删除 / 强制启用，同一时刻最多一行） ----------
@@ -41,158 +63,48 @@ function isConfirming(id: number | null | undefined, action: ConfirmAction): boo
   return current.id === id && current.action === action
 }
 
-// ---------- 历史接入记录（行内展开验收报告） ----------
+// ---------- 启用开关 / 删除 / 进入详情 ----------
 
-const archiveId = ref<number | null>(null)
-const archiveRuns = ref<SourceOnboardingRun[]>([])
-const archiveLoading = ref(false)
-let archiveEl: HTMLElement | null = null
-
-/** 函数式 ref（元素在 v-for 里，拿不到稳定模板 ref）：只认真实 DOM 节点。 */
-function setArchiveEl(el: unknown) {
-  archiveEl = el instanceof HTMLElement ? el : null
-}
-
-const archiveDryRun = computed(
-  () => archiveRuns.value.find((run) => run.kind === 'dry_run') ?? null,
-)
-
-async function toggleArchive(source: SourceDTO) {
-  if (source.id == null) return
-  if (archiveId.value === source.id) {
-    archiveId.value = null
-    archiveRuns.value = []
-    return
-  }
-  archiveId.value = source.id
-  archiveRuns.value = []
-  archiveLoading.value = true
-  const requestedId = source.id
-  try {
-    const response = await api.sourceRuns(source.id)
-    // 等待期间用户可能已收起或改展开另一行：结果只落在还展开着的那一行的头上
-    if (archiveId.value !== requestedId) return
-    archiveRuns.value = response.items
-  } catch (error) {
-    if (archiveId.value !== requestedId) return
-    notify(`接入记录加载失败：${text(error)}`)
-    archiveId.value = null
-    return
-  } finally {
-    if (archiveId.value === requestedId) archiveLoading.value = false
-  }
-  // 报告渲染后把展开的面板滚进可视区：内容很高时行会被顶上去，看着像「点了没反应」
-  await nextTick()
-  archiveEl?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-}
-
-// ---------- 启用 / 停用 / 删除 ----------
-
-async function enableItem(source: SourceDTO, force = false) {
-  if (source.id == null) return
+/** 开关点击：已启用 → 停用；未启用已验收 → 启用；未验收 → 先弹强制启用确认。 */
+async function toggleSource(item: SourceDTO) {
+  if (item.id == null) return
   confirming.value = null
-  await enableSourceById(source.id, source.label, force)
-}
-
-async function disableSource(source: SourceDTO) {
-  if (source.id == null || busySourceId.value != null) return
-  busySourceId.value = source.id
-  try {
-    await api.disableSource(source.id)
-    notifySuccess(`已停用「${source.label}」——已抓的任务与成果不受影响`)
-    if (archiveId.value === source.id) archiveId.value = null
-    await loadSources()
-  } catch (error) {
-    notify(`停用失败：${text(error)}`)
-  } finally {
-    busySourceId.value = null
+  if (item.status === 'active') {
+    await disableSourceById(item.id, item.label)
+  } else if (item.verified) {
+    await enableSourceById(item.id, item.label)
+  } else {
+    confirming.value = { id: item.id, action: 'force' }
   }
 }
 
-async function removeSource(source: SourceDTO) {
-  if (source.id == null || busySourceId.value != null) return
-  busySourceId.value = source.id
-  try {
-    await api.deleteSource(source.id)
-    notifySuccess(`已删除来源「${source.label}」`)
-    if (archiveId.value === source.id) {
-      archiveId.value = null
-      archiveRuns.value = []
-    }
-    await loadSources()
-  } catch (error) {
-    notify(`删除失败：${text(error)}`)
-  } finally {
-    busySourceId.value = null
-    confirming.value = null
-  }
+async function confirmForce(item: SourceDTO) {
+  if (item.id == null) return
+  confirming.value = null
+  await enableSourceById(item.id, item.label, true)
 }
 
-// ---------- 试运行 / 健康检查（Phase 16 新入口） ----------
-
-const trialBusyId = ref<number | null>(null)
-
-async function trialSource(source: SourceDTO) {
-  if (source.id == null || trialBusyId.value != null) return
-  trialBusyId.value = source.id
-  try {
-    const result = await api.trialSource(source.id, {})
-    // 试抓是在**这张页面**发起的，任务却属于抓取页：store 的「当前任务」只在首屏读一次，
-    // 不同步的话抓取页会一直显示「尚未抓取」，而这条任务其实正在跑（或正停在等确认）。
-    // 同步失败只影响显示（任务本身已建好），所以单独兜住，别把「已发起」报成「失败」。
-    try {
-      await syncTask()
-    } catch {
-      /* 忽略：抓取页刷新一次即可对齐 */
-    }
-    notifySuccess(result.status || '试运行任务已发起，进度见抓取页')
-  } catch (error) {
-    notify(`试运行失败：${text(error)}`)
-  } finally {
-    trialBusyId.value = null
-  }
+async function confirmDelete(item: SourceDTO) {
+  if (item.id == null) return
+  confirming.value = null
+  await deleteSourceById(item.id, item.label)
 }
 
-const healthState = reactive({
-  openId: null as number | null,
-  loading: false,
-  result: null as {
-    loaded?: boolean
-    entrypoints?: {
-      name: string
-      url: string
-      reachable: boolean
-      http_status?: number
-      bytes?: number
-      items?: number
-      error?: string
-    }[]
-  } | null,
-})
-
-async function toggleHealth(source: SourceDTO) {
-  if (source.id == null) return
-  if (healthState.openId === source.id) {
-    healthState.openId = null
-    healthState.result = null
-    return
-  }
-  healthState.openId = source.id
-  healthState.result = null
-  healthState.loading = true
-  try {
-    const result = await api.healthSource(source.id)
-    if (healthState.openId !== source.id) return
-    healthState.result = result
-  } catch (error) {
-    notify(`健康检查失败：${text(error)}`)
-    healthState.openId = null
-  } finally {
-    healthState.loading = false
-  }
+function openDetail(item: SourceDTO) {
+  if (item.id != null) router.push(`/sources/${item.id}`)
 }
 
-const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
+// ---------- 取值方式（engine）中文标签（仅展示；无头只有 browser_driven 一条路径，
+// html_list_rendered 渲染取数已按 2026-10-21 裁定整体删除） ----------
+
+const ENGINE_LABEL: Record<string, string> = {
+  html_list: '静态取数',
+  browser_driven: '无头浏览器',
+}
+
+function engineLabel(item: SourceDTO): string {
+  return ENGINE_LABEL[item.engine] ?? item.engine
+}
 </script>
 
 <template>
@@ -212,15 +124,20 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
     <p v-if="sourcesLoading && !sources.length" class="empty">加载中…</p>
     <ul v-else class="source-list">
       <li v-for="item in sources" :key="item.key" class="source">
-        <div class="source-main">
+        <div class="source-info">
+          <!-- 名称行 -->
           <div class="source-title-row">
             <p class="source-name" :title="item.label">{{ item.label }}</p>
-            <span class="tag" :class="STATUS_TONE[item.status]">
+            <span class="tag" :class="item.status === 'active' ? 'on' : item.status === 'disabled' ? 'off' : 'neutral'">
               {{ STATUS_LABEL[item.status] }}
             </span>
-            <span v-if="item.builtin" class="tag wait">内置</span>
-            <span v-if="!item.builtin && item.verified" class="tag ok">已验收</span>
+            <span v-if="item.builtin" class="tag neutral">内置</span>
+            <span v-if="!item.builtin" class="tag" :class="item.verified ? 'verified' : 'pending'">
+              {{ item.verified ? '已验收' : '待验收' }}
+            </span>
+            <span v-if="item.engine === 'browser_driven'" class="tag neutral">无头浏览器</span>
           </div>
+          <!-- 元信息行 -->
           <p class="source-meta">
             <code class="key">{{ item.key }}</code>
             <span class="dot">·</span>
@@ -228,172 +145,92 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
               入口 {{ item.entrypoints.join('、') }}
               <span class="dot">·</span>
             </template>
-            取值方式 <code class="key">{{ item.builtin ? 'mcp:gov_cn' : 'html_list' }}</code>
+            取值方式
+            <code class="key">{{ item.builtin ? 'mcp:gov_cn' : engineLabel(item) }}</code>
             <span class="dot">·</span>
             v{{ item.version }}
           </p>
+          <!-- 摘要行 -->
+          <p class="source-summary" :class="summaryOf(item).tone">
+            <AppIcon
+              :name="summaryOf(item).tone === 'ok'
+                ? 'circle-check'
+                : summaryOf(item).tone === 'fail'
+                  ? 'circle-x'
+                  : summaryOf(item).tone === 'block'
+                    ? 'triangle-alert'
+                    : 'clock'"
+              :size="13"
+              class="summary-icon"
+            />
+            <span>{{ summaryOf(item).text }}</span>
+          </p>
           <p v-if="item.notes" class="source-notes">{{ item.notes }}</p>
-        </div>
 
-        <div class="source-actions">
-          <button
-            v-if="item.id != null"
-            class="icon-btn"
-            type="button"
-            :class="{ on: archiveId === item.id }"
-            :disabled="busySourceId === item.id"
-            :title="archiveId === item.id ? '收起验收报告' : '展开验收报告'"
-            @click="toggleArchive(item)"
-          >
-            <AppIcon :name="archiveId === item.id ? 'chevron-up' : 'chevron-down'" :size="14" />
-          </button>
-
-          <!-- 试运行：真实小批量抓取（仅已启用来源；走完整流水线，停在人工确认） -->
-          <button
-            v-if="item.id != null && item.status === 'active'"
-            class="mini-btn"
-            type="button"
-            :disabled="trialBusyId === item.id"
-            title="发起一次真实的小批量抓取（走完整流水线，停在人工确认；进度见抓取页）"
-            @click="trialSource(item)"
-          >
-            {{ trialBusyId === item.id ? '发起中…' : '试运行' }}
-          </button>
-
-          <!-- 健康检查：逐入口真抓第 1 页 -->
-          <button
-            v-if="item.id != null"
-            class="mini-btn"
-            type="button"
-            :class="{ on: healthState.openId === item.id }"
-            :disabled="busySourceId === item.id"
-            title="逐入口真抓第 1 页，检查可达性与条目解析"
-            @click="toggleHealth(item)"
-          >
-            健康检查
-          </button>
-
-          <!-- 启用 / 强制启用：没过验收的来源只能走「强制启用」，且要二次确认（可取消） -->
-          <template v-if="item.id != null && item.status !== 'active'">
-            <button
-              v-if="item.verified"
-              class="mini-btn primary"
-              type="button"
-              :disabled="busySourceId === item.id"
-              title="纳入抓取来源（有通过验收）"
-              @click="enableItem(item)"
-            >
-              启用
-            </button>
-            <template v-else-if="isConfirming(item.id, 'force')">
-              <button
-                class="mini-btn danger"
-                type="button"
-                :disabled="busySourceId === item.id"
-                title="未经试运行验收就投产，风险自负"
-                @click="enableItem(item, true)"
-              >
+          <!-- 二次确认（强制启用 / 删除）：落在卡片内部、操作列下方 -->
+          <div v-if="item.id != null && confirming?.id === item.id" class="confirm-row">
+            <template v-if="isConfirming(item.id, 'force')">
+              <span class="confirm-text">未通过验收，确认强制启用？风险自负</span>
+              <button class="mini-btn danger" type="button" :disabled="busySourceId === item.id" @click="confirmForce(item)">
                 确认强制启用
               </button>
               <button class="mini-btn" type="button" @click="confirming = null">取消</button>
             </template>
-            <button
-              v-else
-              class="mini-btn"
-              type="button"
-              :disabled="busySourceId === item.id"
-              title="这份配置没有通过验收：确认后可强制启用，或先展开验收报告重跑接入"
-              @click="confirming = { id: item.id, action: 'force' }"
-            >
-              强制启用
-            </button>
-          </template>
-
-          <button
-            v-if="item.id != null && item.status === 'active'"
-            class="mini-btn"
-            type="button"
-            :disabled="busySourceId === item.id"
-            title="从抓取来源注册表摘掉；已抓的任务与成果不受影响"
-            @click="disableSource(item)"
-          >
-            停用
-          </button>
-
-          <template v-if="item.id != null">
-            <template v-if="isConfirming(item.id, 'delete')">
-              <button
-                class="mini-btn danger"
-                type="button"
-                :disabled="busySourceId === item.id"
-                @click="removeSource(item)"
-              >
+            <template v-else>
+              <span class="confirm-text">删除后不可恢复（已抓的任务与成果不受影响）</span>
+              <button class="mini-btn danger" type="button" :disabled="busySourceId === item.id" @click="confirmDelete(item)">
                 确认删除
               </button>
               <button class="mini-btn" type="button" @click="confirming = null">取消</button>
             </template>
-            <button
-              v-else
-              class="icon-btn danger"
-              type="button"
-              :disabled="busySourceId === item.id"
-              title="删除来源"
-              @click="confirming = { id: item.id, action: 'delete' }"
-            >
-              <AppIcon name="trash-2" :size="14" />
-            </button>
-          </template>
-        </div>
-
-        <!-- 健康检查结果（行内展开） -->
-        <div v-if="healthState.openId === item.id" class="inline-panel">
-          <p class="inline-title">健康检查 · 逐入口真抓第 1 页</p>
-          <p v-if="healthState.loading" class="empty">正在检查…</p>
-          <template v-else-if="healthState.result?.entrypoints">
-            <p class="inline-hint">
-              进程内注册表：{{ healthState.result.loaded ? '已装载' : '未装载（未启用或已重启）' }}
-            </p>
-            <ul class="health-list">
-              <li v-for="ep in healthState.result.entrypoints" :key="ep.name" class="health-row">
-                <span class="tag" :class="ep.reachable ? 'ok' : 'off'">
-                  {{ ep.reachable ? '可达' : '不可达' }}
-                </span>
-                <span class="health-name">{{ ep.name }}</span>
-                <span v-if="ep.reachable" class="health-meta">
-                  HTTP {{ ep.http_status }} · {{ ep.bytes }} 字节 · 解析出 {{ ep.items }} 条
-                </span>
-                <span v-else class="health-meta bad">{{ ep.error }}</span>
-              </li>
-            </ul>
-          </template>
-        </div>
-
-        <!-- 历史接入记录（最近一次试运行的完整报告） -->
-        <div v-if="archiveId === item.id" :ref="setArchiveEl" class="archive">
-          <div class="archive-head">
-            <p class="archive-title">
-              <template v-if="archiveDryRun">
-                最近一次试运行 · {{ archiveDryRun.finished_at ?? archiveDryRun.started_at }}
-              </template>
-              <template v-else>验收报告</template>
-            </p>
-            <button class="archive-collapse" type="button" @click="toggleArchive(item)">
-              <AppIcon name="chevron-up" :size="13" />
-              <span>收起</span>
-            </button>
           </div>
-          <p v-if="archiveLoading" class="empty">读取接入记录…</p>
-          <SourceReport v-else-if="archiveDryRun" :report="archiveDryRun.report" />
-          <p v-else class="empty">
-            还没有试运行记录——这份来源是直接注册进来的，没有可复核的验收报告。
-          </p>
+        </div>
+
+        <div class="source-actions">
+          <span v-if="item.id != null" class="switch-label">启用</span>
+          <button
+            v-if="item.id != null"
+            class="switch"
+            :class="{ on: item.status === 'active' }"
+            type="button"
+            role="switch"
+            :aria-checked="item.status === 'active'"
+            :disabled="busySourceId === item.id"
+            :title="item.status === 'active'
+              ? '停用：从抓取来源注册表摘掉（已抓的不受影响）'
+              : item.verified
+                ? '启用：纳入抓取来源'
+                : '未通过验收：点这里确认后强制启用，或进详情重跑接入'"
+            @click="toggleSource(item)"
+          >
+            <span class="knob" />
+          </button>
+          <button
+            v-if="item.id != null"
+            class="icon-btn danger"
+            type="button"
+            :disabled="busySourceId === item.id"
+            title="删除来源"
+            @click="confirming = { id: item.id, action: 'delete' }"
+          >
+            <AppIcon name="trash-2" :size="14" />
+          </button>
+          <button
+            v-if="item.id != null"
+            class="icon-btn go"
+            type="button"
+            title="进入详情：试运行 / 健康检查 / 验收报告"
+            @click="openDetail(item)"
+          >
+            <AppIcon name="chevron-right" :size="16" />
+          </button>
         </div>
       </li>
     </ul>
 
     <p class="panel-hint">
       只有「已启用」的来源才会出现在抓取配置的来源下拉里；内置来源随服务发布，不能修改。
-      「试运行」会发起一次真实抓取任务（可在抓取页看进度）；「健康检查」只读第 1 页，不产生任务。
+      点卡片右侧的箭头进入详情，可试运行（真实抓取，进度在抓取页）、健康检查（只读第 1 页）与复核验收报告。
     </p>
   </section>
 </template>
@@ -471,10 +308,12 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   padding: 8px 0;
 }
 
+/* ---------- 卡片 ---------- */
+
 .source-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -482,20 +321,20 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
 
 .source {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 16px;
+  padding: 16px 20px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
+  background: var(--card);
 }
 
-.source-main {
-  flex: 1 1 260px;
+.source-info {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .source-title-row {
@@ -503,13 +342,15 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .source-name {
   min-width: 0;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--text-primary);
+  line-height: normal;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -517,28 +358,32 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
 
 .tag {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: #f1f2f4;
-  color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 500;
   line-height: normal;
 }
 
-.tag.ok {
+.tag.on {
   background: var(--green-bg);
   color: var(--green);
 }
 
-.tag.off {
-  background: var(--red-bg);
-  color: var(--accent);
-}
-
-.tag.wait {
+.tag.off,
+.tag.neutral {
   background: #f1f2f4;
   color: var(--text-secondary);
+}
+
+.tag.verified {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
+.tag.pending {
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .source-meta {
@@ -558,6 +403,35 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--text-secondary);
+  padding: 2px 8px;
+  background: #f1f2f4;
+  border-radius: 6px;
+}
+
+.source-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: normal;
+  color: var(--text-secondary);
+}
+
+.summary-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.source-summary.ok .summary-icon {
+  color: var(--green);
+}
+
+.source-summary.fail {
+  color: var(--accent);
+}
+
+.source-summary.block {
+  color: var(--amber);
 }
 
 .source-notes {
@@ -566,21 +440,83 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   line-height: 1.6;
 }
 
-.source-actions {
-  flex-shrink: 0;
+/* ---------- 二次确认行 ---------- */
+
+.confirm-row {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--amber-bg);
+  border: 1px solid #f0e0c8;
+  border-radius: 8px;
+}
+
+.confirm-text {
+  flex: 1 1 auto;
+  min-width: 200px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ---------- 操作列 ---------- */
+
+.source-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.switch-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: normal;
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  border: none;
+  border-radius: 999px;
+  background: #d7dade;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.switch.on {
+  background: var(--green);
+}
+
+.switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.knob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px #00000026;
+  transition: transform 0.15s ease;
+}
+
+.switch.on .knob {
+  transform: translateX(18px);
 }
 
 .icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -598,13 +534,17 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   cursor: default;
 }
 
-.icon-btn.on {
-  border-color: var(--accent);
+.icon-btn.danger {
   color: var(--accent);
 }
 
-.icon-btn.danger {
-  color: var(--accent);
+.icon-btn.go {
+  border-color: transparent;
+  color: var(--text-tertiary);
+}
+
+.icon-btn.go:hover {
+  color: var(--text-primary);
 }
 
 .mini-btn {
@@ -630,132 +570,20 @@ const emit = defineEmits<{ switchTab: [tab: 'import'] }>()
   cursor: default;
 }
 
-.mini-btn.primary {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .mini-btn.danger {
   background: var(--red-bg);
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.mini-btn.on {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* ---------- 行内展开面板（健康检查 / 接入记录） ---------- */
-
-.inline-panel {
-  flex: 1 1 100%;
-  margin-top: 4px;
-  padding: 12px 14px;
-  background: #f7f8f9;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.inline-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.inline-hint {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  line-height: 1.6;
-}
-
-.health-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.health-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  flex-wrap: wrap;
-}
-
-.health-name {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.health-meta {
-  color: var(--text-tertiary);
-}
-
-.health-meta.bad {
-  color: var(--accent);
-}
-
-
-/* ---------- 历史接入记录 ---------- */
-
-.archive {
-  flex: 1 1 100%;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--divider);
-}
-
-.archive-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.archive-title {
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.archive-collapse {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 8px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  line-height: normal;
-}
-
-.archive-collapse:hover {
-  border-color: var(--text-tertiary);
-  color: var(--text-primary);
-}
-
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .source {
     flex-direction: column;
     align-items: stretch;
   }
 
   .source-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 }
 </style>
