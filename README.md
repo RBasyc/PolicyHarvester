@@ -6,7 +6,7 @@
   <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-# PolicyHarvester
+# 
 
 **A policy-extraction agent with a human confirmation gate — filter first, then spend tokens.**
 
