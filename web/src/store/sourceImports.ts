@@ -17,7 +17,7 @@ import type {
   SourceImportCandidate,
   SourceImportJob,
   SourceImportLog,
-  SourceJob,
+  SourceRecentRun,
   SourceStatus,
 } from '../api/types'
 import { loadSources, notify, notifySuccess } from '../store'
@@ -49,9 +49,9 @@ const TERMINAL = ['done', 'error', 'cancelled']
 
 export const busySourceId = ref<number | null>(null)
 
-/** 启用/强制启用一个来源：与来源列表同一套提示与刷新。 */
-export async function enableSourceById(sourceId: number, label: string, force = false) {
-  if (busySourceId.value != null) return
+/** 启用/强制启用一个来源：与来源列表同一套提示与刷新。返回是否成功（调用方决定是否清向导）。 */
+export async function enableSourceById(sourceId: number, label: string, force = false): Promise<boolean> {
+  if (busySourceId.value != null) return false
   busySourceId.value = sourceId
   try {
     await api.enableSource(sourceId, { force })
@@ -61,8 +61,11 @@ export async function enableSourceById(sourceId: number, label: string, force = 
         : `已启用「${label}」，可在抓取配置里选它作为来源`,
     )
     await loadSources()
+    void refreshRecentRuns()
+    return true
   } catch (error) {
     notify(`启用失败：${text(error)}`)
+    return false
   } finally {
     busySourceId.value = null
   }
@@ -157,7 +160,6 @@ function subscribeWizard(jobId: string) {
       wizard.selectedCandidateIndex = final.candidates.find((c) => c.selected)?.index ?? null
       // 草案来源已落库：列表要跟着更新（含 builtin 的 verified 状态）
       void loadSources()
-      void refreshJobList()
     },
     onError: (message) => {
       wizard.streamError = message
@@ -245,10 +247,48 @@ export async function cancelWizardImport() {
   }
 }
 
+/** 报告页「启用该来源」：启用成功后把向导重置回表单页，方便接着导入下一条。 */
 export async function enableRegistered() {
   const id = registeredId.value
   if (id == null) return
-  await enableSourceById(id, registeredLabel.value)
+  const ok = await enableSourceById(id, registeredLabel.value)
+  if (ok) resetWizard()
+}
+
+/** 停用一个来源（列表卡片开关与详情页共用）。返回是否成功。 */
+export async function disableSourceById(sourceId: number, label: string): Promise<boolean> {
+  if (busySourceId.value != null) return false
+  busySourceId.value = sourceId
+  try {
+    await api.disableSource(sourceId)
+    notifySuccess(`已停用「${label}」——已抓的任务与成果不受影响`)
+    await loadSources()
+    void refreshRecentRuns()
+    return true
+  } catch (error) {
+    notify(`停用失败：${text(error)}`)
+    return false
+  } finally {
+    busySourceId.value = null
+  }
+}
+
+/** 删除一个来源（列表与详情页共用；调用方负责二次确认与事后导航）。返回是否成功。 */
+export async function deleteSourceById(sourceId: number, label: string): Promise<boolean> {
+  if (busySourceId.value != null) return false
+  busySourceId.value = sourceId
+  try {
+    await api.deleteSource(sourceId)
+    notifySuccess(`已删除来源「${label}」`)
+    await loadSources()
+    void refreshRecentRuns()
+    return true
+  } catch (error) {
+    notify(`删除失败：${text(error)}`)
+    return false
+  } finally {
+    busySourceId.value = null
+  }
 }
 
 export function resetWizard() {
@@ -280,18 +320,27 @@ export const batch = reactive({
 
 let batchStopStream: (() => void) | null = null
 
-/** 进程内作业列表（GET /sources/import）：来源页顶部「在跑作业」与自愈对表都用它。 */
-export const jobList = ref<SourceJob[]>([])
-export const jobsLoading = ref(false)
+/**
+ * 批量展开行里已完成的善后动作（目前只有「启用」；失败兜底改由服务端自动保存
+ * 无头浏览器来源，不再有需要前端手动记的行内动作），按 job_id 记录：
+ * 行内据此把按钮换成结果提示。作业快照（expandedJob）重拉不会丢它——
+ * 服务端作业是终态，注册状态本来就不写回作业本身。
+ */
+export const handledJobs = reactive<Record<string, 'enabled'>>({})
 
-export async function refreshJobList(): Promise<void> {
-  jobsLoading.value = true
+/** 每来源最近一次试运行（dry_run）：列表卡片的摘要行用，按 source_key 映射。 */
+export const recentDryRuns = ref<Record<string, SourceRecentRun>>({})
+
+export async function refreshRecentRuns(): Promise<void> {
   try {
-    jobList.value = await api.listImportJobs(50)
+    const response = await api.sourceRunsRecent({ kind: 'dry_run', limit: 50 })
+    const map: Record<string, SourceRecentRun> = {}
+    for (const item of response.items) {
+      if (item.source_key) map[item.source_key] = item
+    }
+    recentDryRuns.value = map
   } catch {
-    /* 列表只是辅助视图，失败静默（导入本身有各自的流） */
-  } finally {
-    jobsLoading.value = false
+    /* 摘要行只是辅助视图，失败静默 */
   }
 }
 
@@ -338,6 +387,8 @@ export async function startBatchImport() {
     batch.batchId = created.batch_id
     batch.snapshot = null
     batch.lastLogs = {}
+    // 新一轮队列开始：上一轮的行内善后提示清掉（新作业 id 不同，本不会误伤，整装重来不留旧痕迹）
+    for (const key of Object.keys(handledJobs)) delete handledJobs[key]
     subscribeBatch(created.batch_id)
     const rejected = created.rejected.length
     notifySuccess(
@@ -345,7 +396,6 @@ export async function startBatchImport() {
         ? `批量导入已排队：${created.accepted.length} 个入队，${rejected} 个被拒绝（见列表）`
         : `批量导入已排队：${created.accepted.length} 个地址`,
     )
-    void refreshJobList()
   } catch (error) {
     batch.formError = text(error)
   } finally {
@@ -367,7 +417,6 @@ function subscribeBatch(batchId: string) {
       batchStopStream = null
       // 成功的草案已落库：来源列表要跟着更新
       void loadSources()
-      void refreshJobList()
     },
     onError: (message) => {
       batch.streamError = message
@@ -449,7 +498,7 @@ export function resetBatch() {
  * 在跑的作业重订阅流；已完成/取消的作业补最终快照进报告态。
  */
 export async function syncImportsOnMount(): Promise<void> {
-  void refreshJobList()
+  void refreshRecentRuns()
   // —— 单条向导 ——
   if (wizard.step === 'running' && wizard.job && !wizardStopStream) {
     const jobId = wizard.job.job_id

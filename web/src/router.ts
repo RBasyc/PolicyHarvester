@@ -7,6 +7,7 @@ import {
 import AgentPage from './views/AgentPage.vue'
 import CrawlPage from './views/CrawlPage.vue'
 import SourcesPage from './views/SourcesPage.vue'
+import SourceDetailPage from './views/SourceDetailPage.vue'
 import LibraryPage from './components/LibraryPage.vue'
 import LibraryDetailPage from './components/LibraryDetailPage.vue'
 
@@ -33,6 +34,12 @@ const routes: RouteRecordRaw[] = [
     props: (route) => ({ policyId: Number(route.params.id) }),
   },
   { path: '/sources', name: 'sources', component: SourcesPage },
+  {
+    path: '/sources/:id(\\d+)',
+    name: 'source-detail',
+    component: SourceDetailPage,
+    props: (route) => ({ sourceId: Number(route.params.id) }),
+  },
   { path: '/:pathMatch(.*)*', redirect: '/agent' },
 ]
 
