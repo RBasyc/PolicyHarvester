@@ -8,9 +8,9 @@
 from collections.abc import Callable
 from contextvars import ContextVar
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 
 from app.agent.state import AgentState
@@ -34,34 +34,32 @@ def _build_llm(
     thinking: bool | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
-) -> ChatAnthropic:
-    """构建 Anthropic（兼容网关/端点）聊天模型；参数缺省时用 .env 的 MODEL_NAME / MAX_TOKENS。
+) -> ChatOpenAI:
+    """构建 OpenAI（兼容网关/端点）聊天模型；参数缺省时用 .env 的 MODEL_NAME / MAX_TOKENS。
+
+    一切支持 `/v1/chat/completions` 的网关都走这一条路径：DeepSeek、Moonshot（Kimi）、
+    官方 OpenAI、本地 vLLM…… 认证统一一把 `api_key`（OpenAI SDK 以 Bearer 头发出，
+    不再有 x-api-key / Authorization 双头冲突的问题）。
 
     提取流水线会按「高级设置」选的模型传入覆盖值（见 app/pipeline/extract.py）：
-    - `base_url` / `api_key`：注册表里自带端点的模型（如 DeepSeek 的 Anthropic 兼容地址）
-      用它们做 x-api-key 认证；缺省时沿用 ANTHROPIC_* 网关配置；
-    - `thinking=False`：显式关思考（`{"type": "disabled"}`）。None/True = 不发该参数、
-      交给服务端默认——chat agent 走的就是这条，行为不受提取模型注册表影响。
+    - `base_url` / `api_key`：注册表里自带端点的模型用它们；缺省时沿用 .env 的
+      OPENAI_BASE_URL / OPENAI_API_KEY；
+    - `thinking=True`：传 `reasoning_effort="high"` 显式开思考；False/None = 不传该参数、
+      交给服务端默认——OpenAI 协议没有通用的「关思考」参数。
     """
     settings = get_settings()
     kwargs: dict = {
         "model": model or settings.model_name,
-        "base_url": base_url or settings.anthropic_base_url,
+        "base_url": base_url or settings.openai_base_url,
         "max_tokens": max_tokens or settings.max_tokens,
     }
+    api_key = api_key or settings.openai_api_key
     if api_key:
-        # 注册表项自带的 key（如 DeepSeek）：标准 x-api-key 认证，不走网关 Bearer
         kwargs["api_key"] = api_key
-    elif settings.anthropic_auth_token:
-        # ChatAnthropic 不支持 auth_token 参数，Bearer 认证通过 default_headers 传递
-        kwargs["default_headers"] = {
-            "Authorization": f"Bearer {settings.anthropic_auth_token}"
-        }
-    elif settings.anthropic_api_key:
-        kwargs["api_key"] = settings.anthropic_api_key
-    if thinking is False:
-        kwargs["thinking"] = {"type": "disabled"}
-    return ChatAnthropic(**kwargs)
+    # 留空则完全不传，让 openai SDK 兜底读 OPENAI_API_KEY 环境变量
+    if thinking is True:
+        kwargs["reasoning_effort"] = "high"
+    return ChatOpenAI(**kwargs)
 
 
 def _tools_for_current_run() -> list[BaseTool]:

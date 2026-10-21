@@ -184,28 +184,23 @@ check_env_file() {
     cp "$ROOT/.env.example" "$ROOT/.env"
     warn "未找到 .env，已从 .env.example 生成一份模板：$ROOT/.env"
     err "但它还没有任何 API 认证信息，服务起来也调不通大模型。"
-    printf '\n%s\n' "${BOLD}请编辑 .env，二选一填写后重新运行 ./start.sh：${RESET}"
-    printf '%s\n' "  ANTHROPIC_API_KEY=sk-ant-...                          # 官方 API Key"
-    printf '%s\n' "  ANTHROPIC_AUTH_TOKEN=...  +  ANTHROPIC_BASE_URL=...  # Kimi 等 Anthropic 兼容网关"
-    printf '\n%s\n\n' "${DIM}注意：两者不要同时配置，否则网关会以 invalid x-api-key 拒绝。${RESET}"
+    printf '\n%s\n' "${BOLD}请编辑 .env，填写模型网关后重新运行 ./start.sh：${RESET}"
+    printf '%s\n' "  OPENAI_API_KEY=sk-...                        # 网关 API Key"
+    printf '%s\n' "  OPENAI_BASE_URL=https://api.deepseek.com     # OpenAI 兼容端点（DeepSeek / Kimi / OpenAI…）"
+    printf '\n%s\n\n' "${DIM}协议统一为 OpenAI 兼容：任何 /v1/chat/completions 网关都能接。${RESET}"
     return 1
   fi
   ok ".env 已存在"
 
-  if ! has_value ANTHROPIC_API_KEY && ! has_value ANTHROPIC_AUTH_TOKEN; then
-    err ".env 里没有可用的认证信息（ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN）"
-    printf '%s\n' "   请编辑 $ROOT/.env 填写后重新运行；占位符（sk-ant-xxxx）不会被当作用心填过。"
+  if ! has_value OPENAI_API_KEY; then
+    err ".env 里没有 OPENAI_API_KEY（OpenAI 兼容网关认证，如 DeepSeek / Kimi / OpenAI）"
+    printf '%s\n' "   请编辑 $ROOT/.env 填写后重新运行；占位符（sk-xxxx）不会被当作用心填过。"
     return 1
   fi
-  if has_value ANTHROPIC_API_KEY && has_value ANTHROPIC_AUTH_TOKEN; then
-    warn "ANTHROPIC_API_KEY 与 ANTHROPIC_AUTH_TOKEN 同时存在：走网关时 anthropic SDK 会同时发出"
-    warn "  x-api-key 和 Authorization 两个头，网关可能以 invalid x-api-key 拒绝。建议只留一个。"
+  if ! has_value OPENAI_BASE_URL; then
+    warn "没有配 OPENAI_BASE_URL：会回落 OpenAI 官方地址；接 DeepSeek/Kimi 等网关请务必配置。"
   fi
   ok "已检测到 LLM 认证配置"
-
-  if has_value ANTHROPIC_AUTH_TOKEN && ! has_value ANTHROPIC_BASE_URL; then
-    warn "使用了 ANTHROPIC_AUTH_TOKEN 但没配 ANTHROPIC_BASE_URL：会回落官方地址，多半会 401。"
-  fi
   return 0
 }
 
