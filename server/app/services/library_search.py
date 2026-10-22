@@ -321,8 +321,16 @@ async def _search_one(
     date_to: date | None,
     limit: int,
     in_library: set[str],
+    budget: list[int],
 ) -> dict[str, Any]:
-    """在单个来源上检索（不落库、不判别、不提取）。"""
+    """在单个来源上检索（不落库、不判别、不提取）。
+
+    **预算与翻页口径与流水线同源**（Phase 33 G1）：
+    - 每关键词条数取 `pipeline_per_keyword_limit`（与流水线同一个设置）；
+    - 总调用数共享 `pipeline_max_search_calls` 预算（`budget` 是一个跨来源的计数器）；
+    - 翻页：某组合这一页取不到**新**链接就停（与流水线「整轮零收获即停」同款，
+      挡住「站点忽略页码、把第一页反复吐回来」的死循环）。
+    """
     source = info.source
     if source is None:
         return {
@@ -345,7 +353,11 @@ async def _search_one(
             "error": "该来源不支持按关键词检索（无头浏览器来源按浏览目标采集），改用浏览或抓取工具",
         }
 
-    timeout = get_settings().pipeline_mcp_timeout
+    settings = get_settings()
+    timeout = settings.pipeline_mcp_timeout
+    # 每关键词条数：调用方要的条数与流水线每关键词上限，取小的那个
+    per_keyword = max(1, min(int(limit or 10), int(settings.pipeline_per_keyword_limit or limit or 10)))
+    cap = min(limit, _MAX_ITEMS_PER_SOURCE)
     try:
         combos = source.search_plan(keywords, [], [])
     except Exception as exc:  # noqa: BLE001
@@ -363,55 +375,72 @@ async def _search_one(
     seen: set[str] = set()
     errors: list[str] = []
     for keyword, agency, doc_type in list(combos)[:_MAX_COMBOS]:
-        try:
-            raw_items = await source.search(
-                keyword=keyword,
-                agency=agency,
-                doc_type=doc_type,
-                page=1,
-                limit=limit,
-                date_from=date_from,
-                date_to=date_to,
-                timeout=timeout,
-            )
-        except SourceError as exc:
-            errors.append(str(exc))
-            continue
-        except Exception as exc:  # noqa: BLE001 - 单个来源失败不该拖垮其它来源
-            errors.append(f"检索异常：{exc}")
-            continue
-        for raw in raw_items or []:
+        if budget[0] <= 0:
+            errors.append("检索预算已用尽（后续来源/组合没查）")
+            break
+        page = 1
+        while True:
+            if budget[0] <= 0:
+                errors.append("检索预算已用尽（后续页/来源没查）")
+                break
             try:
-                keep = source.validate_item(
-                    raw,
+                raw_items = await source.search(
                     keyword=keyword,
+                    agency=agency,
+                    doc_type=doc_type,
+                    page=page,
+                    limit=per_keyword,
                     date_from=date_from,
                     date_to=date_to,
-                    facet_active=False,
+                    timeout=timeout,
                 )
-            except Exception as exc:  # noqa: BLE001
-                # 校验异常就放行（与流水线 fail-open 同向），但要留痕——否则「校验坏掉」
-                # 会被当成「一条都不合条件」
-                errors.append(f"条目校验异常（已放行）：{exc}")
-                keep = True
-            if not keep:
-                continue
-            try:
-                item = source.normalize_item(raw)
-            except Exception as exc:  # noqa: BLE001
-                # **不能静默丢**：解析失败会被下游看成「没检索到」，那是谎报
-                errors.append(f"条目解析失败：{exc}")
-                item = None
-            if item is None or not item.url:
-                continue
-            if item.url in seen:
-                continue
-            seen.add(item.url)
-            items.append(_item_view(item, info, in_library))
-            if len(items) >= min(limit, _MAX_ITEMS_PER_SOURCE):
+            except SourceError as exc:
+                errors.append(str(exc))
                 break
-        if len(items) >= min(limit, _MAX_ITEMS_PER_SOURCE):
-            break
+            except Exception as exc:  # noqa: BLE001 - 单个来源失败不该拖垮其它来源
+                errors.append(f"检索异常：{exc}")
+                break
+            budget[0] -= 1
+            if not raw_items:
+                break  # 该组合翻到底
+            added = 0
+            for raw in raw_items:
+                try:
+                    keep = source.validate_item(
+                        raw,
+                        keyword=keyword,
+                        date_from=date_from,
+                        date_to=date_to,
+                        facet_active=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # 校验异常就放行（与流水线 fail-open 同向），但要留痕——否则「校验坏掉」
+                    # 会被当成「一条都不合条件」
+                    errors.append(f"条目校验异常（已放行）：{exc}")
+                    keep = True
+                if not keep:
+                    continue
+                try:
+                    item = source.normalize_item(raw)
+                except Exception as exc:  # noqa: BLE001
+                    # **不能静默丢**：解析失败会被下游看成「没检索到」，那是谎报
+                    errors.append(f"条目解析失败：{exc}")
+                    item = None
+                if item is None or not item.url:
+                    continue
+                if item.url in seen:
+                    continue
+                seen.add(item.url)
+                items.append(_item_view(item, info, in_library))
+                added += 1
+                if len(items) >= cap:
+                    break
+            if len(items) >= cap:
+                break
+            if added == 0:
+                # 这一页没有新链接 = 翻页没生效（站点忽略了页码参数），别在这儿死循环
+                break
+            page += 1
 
     return {
         "key": info.key,
@@ -445,6 +474,8 @@ async def search_sources(
         in_library = set()
 
     results: list[dict[str, Any]] = []
+    # 总调用预算跨来源共享（与流水线的 `pipeline_max_search_calls` 同一个设置）
+    budget = [int(get_settings().pipeline_max_search_calls or 12)]
     for info in selected:
         results.append(
             await _search_one(
@@ -454,6 +485,7 @@ async def search_sources(
                 date_to=date_to,
                 limit=limit,
                 in_library=in_library,
+                budget=budget,
             )
         )
 
@@ -505,6 +537,14 @@ async def search_sources(
             "命中结果只来自已启用且覆盖该范围的来源；没被覆盖的范围不在本次结果里，"
             "回答时要讲清楚覆盖边界。"
         )
+    # 两条**恒定**的口径说明（Phase 33 G2 / G3）：不管有没有命中都要说清，
+    # 否则模型会把「没判别」「没解析到」读成「没有」「不存在」。
+    payload["caveats"] = [
+        "只读检索**不做相关性判别**（入库时才会跑 laya 判别与正文预检）——"
+        "结果是候选，不是定论；用户要入库时用 ingest_policies。",
+        "条目里的机构 / 文号来自**列表页解析**，没解析到就是空（不是「没有发文机关」）；"
+        "要准确值用 action=fulltext 读详情页。",
+    ]
     return payload
 
 

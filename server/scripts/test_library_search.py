@@ -185,6 +185,58 @@ class BrokenSource(FakeZhejiangSource):
         raise ValueError("正文容器选择器未命中")
 
 
+class _DemoConfig(_FakeConfig):
+    """演示源用的配置：**不挂**「浙江省人民政府」这个机构名——
+    否则它会命中「浙江」线索词，混进按地域检索的用例里。"""
+
+    organization = "示例单位"
+    scope = type("Scope", (), {"allowed_domains": ["example.gov.cn"]})()
+
+
+class PagingSource(FakeZhejiangSource):
+    """分页站：第 1、2 页各有各的条目，第 3 页空 —— 用来验证翻页（Phase 33 G1）。"""
+
+    key = "paging_demo"
+    label = "分页演示源（演示）"
+    calls: list[int] = []
+
+    def __init__(self) -> None:
+        self.config = _DemoConfig()
+
+    async def search(self, *, keyword, agency, doc_type, page, limit, date_from, date_to, timeout):
+        PagingSource.calls.append(page)
+        if page > 2:
+            return []
+        return [
+            {
+                "title": f"第 {page} 页的科技文件",
+                "url": f"https://example.gov.cn/p/{page}.html",
+                "date": "2026-09-01",
+            }
+        ]
+
+
+class RepeatSource(FakeZhejiangSource):
+    """站点忽略页码参数、每页都回同一页：翻页必须停，不能死循环。"""
+
+    key = "repeat_demo"
+    label = "重复页演示源（演示）"
+    calls: list[int] = []
+
+    def __init__(self) -> None:
+        self.config = _DemoConfig()
+
+    async def search(self, *, keyword, agency, doc_type, page, limit, date_from, date_to, timeout):
+        RepeatSource.calls.append(page)
+        return [
+            {
+                "title": "永远只有这一篇",
+                "url": "https://example.gov.cn/only.html",
+                "date": "2026-09-01",
+            }
+        ]
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="政策库只读检索与成果库查询测试")
     parser.add_argument("--db", action="store_true",
@@ -196,6 +248,8 @@ async def main() -> int:
     registry.register(FakeGovSource())
     registry.register(ThinSource())
     registry.register(BrokenSource())
+    registry.register(PagingSource())
+    registry.register(RepeatSource())
     # 注意：**不要**把内置 gov.cn 从注册表摘掉——`app/schemas/task.py` 在 import 时要读
     # 它的文种白名单（`get_default().doc_types`），摘掉会让首次导入 schemas 直接炸。
     # gov.cn 不匹配「浙江」线索词，天然不会参与下面的检索。
@@ -218,12 +272,25 @@ async def main() -> int:
     check("条目带原文链接", str(first.get("url") or "").startswith("https://www.zj.gov.cn/"))
     check("带 in_library 标注", "in_library" in first)
     check("总条数", found["total"] == 4, f'{found["total"]}（两个可检索的浙江来源各 2 条 + 解析失败源 0 条）')
+    # G2 / G3：恒定口径说明（候选 ≠ 定论；空字段 = 没解析到）
+    check("G2 口径：未经相关性判别", any("判别" in item for item in found.get("caveats") or []))
+    check("G3 口径：字段空 = 没解析到", any("没解析到" in item for item in found.get("caveats") or []))
 
     print("\n=== 3. 线索词没命中（scope=广东）===")
     miss = await library_search.search_sources(keywords=["科技"], scope="广东")
     check("没有来源可检索", miss["total"] == 0 and miss["results"] == [])
     check("如实说明覆盖边界", "没有已启用的来源命中" in (miss.get("note") or ""))
     check("摊开可用清单", bool(miss.get("available")))
+
+    print("\n=== 3b. 翻页与预算（与流水线同一套设置，Phase 33 G1）===")
+    PagingSource.calls.clear()
+    paged = await library_search.search_sources(keywords=["科技"], source="paging_demo")
+    check("翻页取到两页的条目", paged["results"][0]["count"] == 2, str(paged["results"][0]["count"]))
+    check("翻到空页才停（页码序列 1,2,3）", PagingSource.calls == [1, 2, 3], str(PagingSource.calls))
+    RepeatSource.calls.clear()
+    repeated = await library_search.search_sources(keywords=["科技"], source="repeat_demo")
+    check("站点忽略页码时不死循环", RepeatSource.calls == [1, 2], str(RepeatSource.calls))
+    check("重复页只留一条", repeated["results"][0]["count"] == 1, str(repeated["results"][0]["count"]))
 
     print("\n=== 4. 取正文：口径与流水线对齐（A1–A4）===")
     body = await library_search.fetch_source_fulltext("https://www.zj.gov.cn/art/科技-1.html")
