@@ -156,7 +156,8 @@
 
 - **现状**：`GET /api/facets`（`app/api/routes/filters.py:95`）按来源给发布机构/文种可选值
   ——gov.cn 走 MCP `get_policy_facets`，配置化来源走 `_configured_facets`，无头来源返回
-  「不支持」。agent 侧只有 gov.cn 的 MCP 版 `get_policy_facets`。
+  「不支持」（**批次 3 已把这三条分支下沉到 `app/services/facets.py`**，`GET /api/filters/facets`
+  与工具 `search_policy_library(action="facets")` 共用）。agent 侧只有 gov.cn 的 MCP 版 `get_policy_facets`。
 - **影响**：agent 问「浙江那个源有哪些机构可选值」答不出；`search_policy_library` 只能
   给出 `filters` 原始字典，不是可选值清单。
 - **建议**：把 `/api/facets` 的分支逻辑下沉到 `app/services/`，两侧共用；agent 工具

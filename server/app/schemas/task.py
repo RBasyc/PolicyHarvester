@@ -277,7 +277,7 @@ class FacetList(BaseModel):
     `source` 是**数据来源**（`live` = gov.cn 实时统计 / `fallback` = 静态兜底名单），
     与请求参数里的 `source`（抓取源 label）不是一回事。
 
-    配置化来源走另一条口径（见 `filters.get_facets`）：`agencies` = 该来源的入口名
+    配置化来源走另一条口径（见 `services/facets.get_facets`）：`agencies` = 该来源的入口名
     （它同时是「发布机构」的匹配值），`doc_types` 为空，`supports.doc_types=False`。
     """
 
