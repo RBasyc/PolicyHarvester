@@ -169,13 +169,16 @@ async def main() -> int:
     settings = get_settings()
 
     print("=== 1. JUDGE_* 配置 ===")
-    print(f"  enabled     = {settings.judge_enabled}")
-    print(f"  url         = {settings.judge_url}")
-    print(f"  timeout     = {settings.judge_timeout_seconds}s")
-    print(f"  concurrency = {settings.judge_concurrency}")
-    print(f"  criteria    = {settings.judge_keep_choice} / {settings.judge_drop_choice}")
+    print(f"  tagging(master) = {settings.judge_enabled}")
+    print(f"  laya            = {settings.judge_laya_enabled}")
+    print(f"  url             = {settings.judge_url}")
+    print(f"  timeout         = {settings.judge_timeout_seconds}s")
+    print(f"  concurrency     = {settings.judge_concurrency}")
+    print(f"  criteria        = {settings.judge_keep_choice} / {settings.judge_drop_choice}")
+    if not settings.judge_laya_enabled:
+        print("WARN: JUDGE_LAYA_ENABLED=false，judge_rows 会直接返回空批（不发请求）")
     if not settings.judge_enabled:
-        print("WARN: JUDGE_ENABLED=false，judge_rows 会直接返回空批（不发请求）")
+        print("NOTE: 判别总开关 JUDGE_ENABLED=false——生产流水线不打标签；本脚本仍直调 judge_rows 做校准")
 
     print(f"\n=== 2. 双轴变体矩阵（{len(VARIANTS)} 提示词 × {len(COMPOSITIONS)} 组成 × {len(SAMPLES)} 样例） ===")
     scores: list[tuple[str, int, int]] = []

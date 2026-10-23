@@ -1,5 +1,6 @@
-# 环境变量：位于仓库根目录（.env.example 为模板），不入库
+# 环境变量：位于仓库根目录（.env.example / .env.features.example 为模板），不入库
 .env
+.env.features
 
 # Claude Code 会话状态（worktrees 等本地工具目录，不入库）。
 # 例外：.claude/skills/ 是可交付的 Skill 定义（website-source-onboarding），必须入库——

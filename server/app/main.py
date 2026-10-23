@@ -1,6 +1,8 @@
 """FastAPI 应用入口。"""
 
 import logging
+import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -20,7 +22,21 @@ from app.scheduler import shutdown_scheduler, start_scheduler
 from app.sources.registry import load_configured_from_db
 from app.tracing import flush_tracing
 
+# 应用日志配置：uvicorn 只配它自己的 logger，`app.*` 的记录一路传播到根 logger——而根
+# 的默认级别是 WARNING，不显式配置的话本代码里所有 logger.info 都到不了控制台（第一次
+# 部署就是这么发现「无头浏览器已预热」这类启动 info 消失的）。`LOG_LEVEL` 是静态配置
+# （.env），改完需重启；生产嫌吵可设 WARNING。
+logging.basicConfig(
+    level=getattr(
+        logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO
+    ),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
+
+# 预热等 fire-and-forget 后台任务的挂起句柄：持引用防 GC，完成即清理（不阻断 lifespan）。
+_background_tasks: set[asyncio.Task] = set()
 
 # 上个进程被强杀（Ctrl-C 两次 / 崩溃）时，残留的 pending/running 任务没有对应的
 # asyncio 流水线了；启动时统一落成 failed，否则页面上会永远停在「运行中」且无法重新开始。
@@ -53,18 +69,43 @@ async def lifespan(app: FastAPI):
     get_graph()
     # 定时入库调度器：任务定义落库，这里重新武装循环（补排缺失 next_run_at 的启用任务）
     await start_scheduler()
-    # 无头浏览器：只报告可用性，**不预热 Chromium**（`available()` 只查开关 + playwright 包，
-    # 首次真正浏览时由 worker 线程懒启动；未安装时服务照常启动）。
+    # 无头浏览器：`available()` 只查开关 + playwright 包，不装内核。BROWSER_ENABLED 且
+    # 无头模式下**后台预热** Chromium：内核是否装好从「用户第一次浏览时」提前到部署
+    # 日志里，首次无头抓取也不再付 1–3 秒冷启动（进生产，第一个用户的体验不该是刷新
+    # 等待）。预热失败只告警不阻断启动，功能入口仍会给出带安装指引的
+    # BrowserUnavailable 文案；headless=False（本地调试、要看窗口）不预热，免得
+    # 服务一启动就弹浏览器。
     try:
         from app.browser import runtime as browser_runtime
 
-        if browser_runtime.available():
-            logger.info("无头浏览器可用；首次浏览时启动 Chromium")
+        if browser_runtime.available() and get_settings().browser_headless:
+
+            async def _prewarm_browser() -> None:
+                try:
+                    await browser_runtime.run_in_worker(browser_runtime.ensure_browser())
+                    logger.info("无头浏览器已预热（Chromium 常驻进程内）")
+                except browser_runtime.BrowserUnavailable as exc:
+                    logger.warning(
+                        "无头浏览器预热失败（服务照常启动；首次浏览仍会报带安装指引的错误）：%s", exc
+                    )
+                except Exception:  # noqa: BLE001 - 预热失败不应拖垮任何其他功能
+                    logger.warning("无头浏览器预热出错", exc_info=True)
+
+            task: asyncio.Task[None] = asyncio.create_task(_prewarm_browser(), name="browser-prewarm")
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+            logger.info("无头浏览器后台预热中（Chromium 启动约 1–3 秒，完成前请求会排队）")
+        elif browser_runtime.available():
+            logger.info("无头浏览器可用（headless 已关，首次浏览时启动 Chromium）")
         else:
             logger.info("无头浏览器不可用：%s", browser_runtime.unavailable_reason())
     except Exception:  # noqa: BLE001 - 可用性检查失败不应阻断启动
         logger.warning("浏览器可用性检查失败", exc_info=True)
     yield
+    # 若后台任务（如 Chromium 预热）还没完成就停服，先取消——避免它与下面的
+    # browser_manager.shutdown() 赛跑：关停刚关掉 Chromium，预热又把一个新的拉起来。
+    for task in list(_background_tasks):
+        task.cancel()
     # 关停顺序：先停调度循环，再取消在跑的抓取流水线（它们可能正持有浏览器会话），
     # 然后关浏览器 worker 线程与 Chromium，最后关连接池
     # （否则流水线 / 调度器会用到已关闭的池）

@@ -160,7 +160,7 @@ async def main() -> int:
         print(f"  WARN: {fetch_errors} 篇抓取失败（按 cjk=0 处理，任何阈值都会剔除）")
 
     print("\n=== 4. laya 判别（仅标题） ===")
-    laya_available = settings.judge_enabled and bool(settings.judge_url)
+    laya_available = settings.judge_laya_enabled and bool(settings.judge_url)
     if laya_available:
         batch = await judge_rows(
             [{"source_url": it["url"], "title": it.get("title")} for it in items]
@@ -223,7 +223,8 @@ async def main() -> int:
     full = [s for s in ranked if s[0] == n_bad and s[1] == 0]
     if full:
         print(f"\n  推荐组合：「{full[0][5]}」——写进 .env 的 PIPELINE_MIN_BODY_CHARS / "
-              "PIPELINE_MIN_SENT_ENDERS（laya 开关即 JUDGE_ENABLED）。")
+              "PIPELINE_MIN_SENT_ENDERS（laya 服务开关 = JUDGE_LAYA_ENABLED；"
+              "打标总开关 = JUDGE_ENABLED）。")
     else:
         print("\n  没有满分组合——看上面各组合的误伤清单权衡，或放宽坏例/好例样本后重跑。")
 
