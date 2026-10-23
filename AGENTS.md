@@ -53,10 +53,11 @@ Many need network access, the `server-db-1` container, or a running MCP; `--db-s
 
 ## Configuration quirks
 
-- `.env` lives at the **repo root**, not in `server/`; `app/config.py` resolves it from `__file__`, so cwd does not matter.
-- LLM speaks the OpenAI-compatible protocol: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`. Pipeline models live in the hot-read `PIPELINE_MODELS` JSON registry (no restart).
+- Config lives at the **repo root** in two files, not in `server/`: `.env` (static config: LLM, database, pipeline and security parameters) and `.env.features` (feature switches: judge, browser, MCP, Langfuse). `app/config.py` resolves both from `__file__`, so cwd does not matter. Missing files are fine; on duplicate keys `.env.features` wins over `.env`, and a real shell environment variable wins over both. Start from `.env.example` / `.env.features.example`.
+- LLM speaks the OpenAI-compatible protocol: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`. Pipeline models live in the hot-read `PIPELINE_MODELS` JSON registry (no restart); every other setting needs a restart.
+- `JUDGE_ENABLED` (in `.env.features`) is the **master switch** for all admission-judge tagging: `false` disables laya title judging and the body preflight tags. `JUDGE_LAYA_ENABLED` only controls the laya service call. Body preflight still fetches full text to backfill date/agency/doc number.
 - DB default `postgresql://kos:kos@localhost:5433/agent_demo`, docker container `server-db-1`.
-- Headless browser is an optional extra: `uv sync --extra browser` + `uv run playwright install chromium` + `BROWSER_ENABLED=true`; without it the browser source and the chat 「浏览网页」 toggle hide themselves.
+- Headless browser is an optional extra: `uv sync --extra browser` + `uv run playwright install chromium` + `BROWSER_ENABLED=true` in `.env.features`; without it the browser source hides and the chat model gets no `browser_*` tools. There is no chat-side toggle — engine available = tools available.
 
 ## Frontend quirks
 

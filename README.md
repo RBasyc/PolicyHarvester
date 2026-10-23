@@ -50,7 +50,7 @@ That is the real difference from a generic "policy RAG" or a crawler demo — **
 | **Scheduled ingestion** | Runs on a minute / hourly / daily / weekly schedule, skipping the confirmation gate and ingesting directly |
 | **Observable cost**     | Page budget, body length, concurrency and retrieval budget can be overridden per task                |
 | **Website onboarding**  | Paste a URL → reconnaissance → generated config → dry-run acceptance → registered and enabled      |
-| **Headless-browser sources** | JS-rendered sites become browser-based sources automatically; the chat-side "browse the web" tool shares the same engine (optional) |
+| **Browser sources**     | JS-rendered sites become browser-based sources automatically; chat shares the same tools when available |
 | **Native site search**  | When a site exposes its own search, keywords / dates are pushed to the site's search page instead of filtering after the fact |
 | **Declared filter layers** | Machine-readable statement of where keyword / date filtering actually happens, so the UI can show the recall boundary honestly |
 
@@ -58,7 +58,7 @@ That is the real difference from a generic "policy RAG" or a crawler demo — **
 
 ## What it looks like
 
-**Policy assistant** — the ReAct chat agent entry point, wired to the State Council policy search toolchain and a "browse the web" tool, with streaming answers
+**Policy assistant** — the ReAct chat agent entry point, wired to the State Council policy search toolchain and the browser `browser_*` tools, with streaming answers
 
 ![Policy assistant](static/screenshot/agent-chat.png)
 
@@ -91,7 +91,8 @@ That is the real difference from a generic "policy RAG" or a crawler demo — **
 ```bash
 git clone https://github.com/RBasyc/policyharvester
 cd policyharvester
-cp .env.example .env   # fill in your LLM credentials
+cp .env.example .env                      # fill in your LLM credentials
+cp .env.features.example .env.features    # optional: feature switches
 ./start.sh
 ```
 
@@ -138,14 +139,14 @@ FastAPI (:8000)
 
 The two tracks are **fully independent**:
 
-- **A · Chat agent** (`app/agent/`) — a classic ReAct loop whose tools come from local `@tool` definitions plus MCP tools launched over stdio at startup; when MCP is unavailable it degrades to local tools only. With the headless browser assembled, the model can call `browser_*` tools to "browse the web" under Guard constraints (click / scroll / extract body text).
+- **A · Chat agent** (`app/agent/`) — a classic ReAct loop whose tools come from local `@tool` definitions plus MCP tools launched over stdio at startup; when MCP is unavailable it degrades to local tools only. When the headless browser engine is available, the model can call `browser_*` tools to browse the web under Guard constraints (click / scroll / extract body text) — no per-chat toggle.
 - **B · Crawl pipeline** (`app/pipeline/`) — a **deterministic two-phase graph** with a human confirmation gate in the middle: phase one retrieves candidates, writes them to the database and stops (`awaiting_confirmation`); once the user has ticked / removed the selection, phase two extracts each document. Candidates can come from gov.cn (via MCP) or from any onboarded **config-driven website source** (`app/sources/`: column list pages or the site's own search page; JS-rendered sites go through the headless-browser engine).
 
 ---
 
 ## Configuration
 
-All configuration lives in `.env` at the repository root; see `.env.example` for the annotated reference.
+Configuration lives in two files at the repository root: `.env` for static settings (LLM gateway, database, pipeline and security parameters) and `.env.features` for feature switches (judge, headless browser, MCP, observability). See `.env.example` and `.env.features.example` for the annotated references. Both files are optional; on duplicate keys `.env.features` wins, and a real shell environment variable wins over both. Settings are read at startup — restart the server after editing either file (`PIPELINE_MODELS` is the only hot-read item).
 
 | Group        | Key items                                               | Notes                                                                                        |
 | ------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -153,8 +154,9 @@ All configuration lives in `.env` at the repository root; see `.env.example` for
 | Models       | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS`          | `PIPELINE_MODELS` feeds the "Advanced settings" dropdown and is hot-read                        |
 | Database     | `DATABASE_URL`                                           | Default `postgresql://kos:kos@localhost:5433/agent_demo`                                       |
 | Pipeline     | `PIPELINE_*`                                             | Max documents, items per page, retrieval budget, extraction concurrency, body truncation, preflight thresholds |
-| Admission judge | `JUDGE_*`                                            | Judge service address and prompt; **fails open when unreachable** and never blocks a crawl      |
-| Browser      | `BROWSER_ENABLED` + `BROWSER_*`                          | Master switch plus action / page / time budgets; browsing tools and rendered sources disappear when off |
+| Admission judge | `JUDGE_*`                                            | Judge service address and prompt; **fails open when unreachable** and never blocks a crawl. `JUDGE_ENABLED` in `.env.features` is the master switch for all "not recommended" tags (laya + body preflight) |
+| Browser      | `BROWSER_ENABLED` (`.env.features`) + `BROWSER_*` (`.env`) | Master switch plus action / page / time budgets; browsing tools and rendered sources disappear when off |
+| Feature switches | `.env.features`                                     | `JUDGE_ENABLED` / `JUDGE_LAYA_ENABLED` / `BROWSER_ENABLED` / `BROWSER_HEADLESS` / `MCP_POLICY_ENABLED` / `LANGFUSE_ENABLED`; restart required |
 
 The page's "Advanced settings" panel can override some of these — and the extraction model — per task.
 
@@ -167,7 +169,7 @@ Full field lists and progress semantics are in `server/README.md`; the interacti
 **Chat (ReAct agent)**
 
 - `POST /api/chat` — non-streaming; the same `thread_id` shares memory (`InMemorySaver`, lost on restart)
-- `POST /api/chat/stream` — SSE: `{"type":"token"|"tool"|"done"|"error", ...}` (tool calls emit start/done step events)
+- `POST /api/chat/stream` — SSE: `{"type":"token"|"tool"|"usage"|"done"|"error", ...}` (tool calls emit start/done step events; `usage` carries per-model-call token / cache stats)
 
 **Crawl tasks**
 
@@ -254,7 +256,8 @@ Chat memory uses `InMemorySaver`, so it is lost on restart — switch to `Postgr
 ```
 policyharvester/
 ├── start.sh / start.bat     # one-shot start / self-check / stop
-├── .env.example             # environment variable template
+├── .env.example             # static configuration template
+├── .env.features.example    # feature-switch template
 ├── PLAN.md / TODO.md        # implementation plan / progress checklist
 ├── CLAUDE.md                # entry point for AI coding assistants (index + hard rules)
 ├── AGENTS.md                # repo-level hard rules and architecture quick reference

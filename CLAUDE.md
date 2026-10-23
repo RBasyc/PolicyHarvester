@@ -27,7 +27,7 @@ uv sync && python main.py            # deps + dev server (port 8000, /docs for S
 pnpm install && pnpm dev             # vite dev server
 ```
 
-Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboarding.py [--db|--db-scratch|--live]`, `test_source_import.py`, `test_judge.py`, `test_ingest_filter.py`, `test_browser.py`. Headless browsing is optional: `uv sync --extra browser` + `uv run playwright install chromium` + root `.env` `BROWSER_ENABLED=true`, then restart. Config is the **repo-root** `.env` (copy [.env.example](.env.example)); the LLM speaks the **OpenAI-compatible protocol** (`OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`; any `/v1/chat/completions` gateway works — DeepSeek, Kimi/Moonshot, OpenAI, local vLLM). Full list: [docs/guides/commands.md](docs/guides/commands.md).
+Smoke tests (`server/scripts/`): `test_mcp.py`, `test_db.py`, `test_source_onboarding.py [--db|--db-scratch|--live]`, `test_source_import.py`, `test_judge.py`, `test_ingest_filter.py`, `test_browser.py`, `test_feature_switches.py`. Headless browsing is optional: `uv sync --extra browser` + `uv run playwright install chromium` + `BROWSER_ENABLED=true` in the root `.env.features`, then restart. Config is split across two **repo-root** files (copy [.env.example](.env.example) → `.env` for static config, [.env.features.example](.env.features.example) → `.env.features` for feature switches; `.env.features` wins on duplicate keys); the LLM speaks the **OpenAI-compatible protocol** (`OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`; any `/v1/chat/completions` gateway works — DeepSeek, Kimi/Moonshot, OpenAI, local vLLM). Full list: [docs/guides/commands.md](docs/guides/commands.md).
 
 ## Documentation map
 
