@@ -453,49 +453,33 @@ def date_texts_by_selector(html: str, selectors: list[str]) -> dict[str, str | N
     return out
 
 
-def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult:
-    """详情页 HTML → `DetailResult`（正文 + 元信息 + 附件）。
-
-    元信息**取不到就是 None**，绝不猜：三阶段验收里「元数据命中率」必须反映真实情况
-    （地方站的字段名千差万别，猜错比缺失更糟）。
-    """
-    result = DetailResult(url=url)
-    root = parse_html(html)
-
+def _select_detail_container(root: Node, detail: DetailConfig, result: DetailResult) -> Node | None:
+    """挑正文容器：配置选择器优先，全落空时用结构启发式兜底（正文**未经确认**，
+    必须留痕——验收报告里要看得见）。全落空时返回 None（调用方直接判该页解析失败）。"""
     container, matched_selector = _pick_container(root, detail.container_selectors)
-    if container is None:
-        # 兜底：配置的选择器一个都没命中时，用结构打分挑一块，而不是直接判失败。
-        # 但必须留痕——这段正文是**未经确认**的，验收报告里要看得见。
-        container, matched_selector = _fallback_container(root)
-        if container is not None:
-            result.warnings.append(
-                "配置的正文容器候选全部落空（选择器：%s），已用结构启发式兜底选中「%s」；"
-                "该段正文未经确认，建议人工核对后写进 container_selectors"
-                % ("、".join(detail.container_selectors) or "（未配置）", matched_selector)
-            )
-        else:
-            result.warnings.append(
-                "正文容器候选全部落空（选择器：%s），启发式兜底也没找到达标正文——该页正文解析失败"
-                % ("、".join(detail.container_selectors) or "（未配置）")
-            )
-            return result
+    if container is not None:
+        result.container_selector = matched_selector
+        return container
+    container, matched_selector = _fallback_container(root)
+    if container is not None:
+        result.warnings.append(
+            "配置的正文容器候选全部落空（选择器：%s），已用结构启发式兜底选中「%s」；"
+            "该段正文未经确认，建议人工核对后写进 container_selectors"
+            % ("、".join(detail.container_selectors) or "（未配置）", matched_selector)
+        )
+    else:
+        result.warnings.append(
+            "正文容器候选全部落空（选择器：%s），启发式兜底也没找到达标正文——该页正文解析失败"
+            % ("、".join(detail.container_selectors) or "（未配置）")
+        )
+        return None
     result.container_selector = matched_selector
+    return container
 
-    # 语义化字段规则优先（新口径）。在**整页**上执行而不是正文容器内：政务站的
-    # 元信息块（索引号 / 发文字号 / 成文日期）常常在正文容器之外。
-    # 取不到的保留字段再回落到旧选择器链，保证老配置行为不变。
-    field_values = extract_fields(root, detail.fields) if detail.fields else {}
-    result.extra = {
-        key: value
-        for key, value in field_values.items()
-        if key not in _RESERVED_FIELD_NAMES
-    }
-    # 可见发布标签先取：`drop_selectors` 可能从正文容器里摘掉页头/元信息块。
-    label_hit = publish_date_from_label(root)
 
-    # 附件清单**先扫**，再摘掉 drop_selectors：附件区（`div.attach` 之类）通常要
-    # 从正文里剔除，但「有哪些附件」正是接入要拿到的信息——先摘后扫会把附件一起抹掉。
-    selector = detail.attachment_selector or _ATTACHMENT_HEURISTIC
+def _scan_detail_attachments(root: Node, url: str, selector: str) -> list[Attachment]:
+    """附件清单扫描：去 `javascript:`/`mailto:`/`#` 之类的假链，URL 绝对化后按出现顺序去重。"""
+    attachments: list[Attachment] = []
     seen: set[str] = set()
     for node in select(root, selector):
         href = (node.get("href") or "").strip()
@@ -507,15 +491,18 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         seen.add(absolute)
         name = " ".join(node.text_content().split()) or absolute.rsplit("/", 1)[-1]
         ext = absolute.rsplit(".", 1)[-1].lower() if "." in absolute else ""
-        result.attachments.append(Attachment(url=absolute, name=name[:200], ext=ext))
+        attachments.append(Attachment(url=absolute, name=name[:200], ext=ext))
+    return attachments
 
-    for selector in detail.drop_selectors:
-        for node in select(container, selector):
-            node.detach()
 
-    result.image_count = sum(1 for node in container.iter_elements() if node.tag == "img")
-    result.body = container.text_content()
-
+def _fill_detail_basics(
+    result: DetailResult,
+    root: Node,
+    container: Node,
+    detail: DetailConfig,
+    field_values: dict[str, str],
+) -> None:
+    """标题 / 发文机关 / 文号：语义化字段规则优先，取不到再回落旧选择器链。"""
     result.title = field_values.get("title") or _text_of(root, detail.title_selectors) or _text_of(
         container, ["h1", "h2"]
     )
@@ -532,9 +519,21 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         or _strip_label(_text_of(root, detail.doc_no_selectors) or "")
         or None
     )
-    # 日期优先级：可见发布标签（页头「日期：…来源：…」/「发布日期：…」）>
-    # 字段规则 > 页面元数据 > 旧 date_selectors。字段规则和旧选择器可能命中
-    # 相关推荐/页脚/正文里的日期；可见标签和 meta 是页面自己声明的发布日期。
+
+
+def _resolve_publish_date(
+    root: Node,
+    html: str,
+    detail: DetailConfig,
+    field_values: dict[str, str],
+    label_hit: Any,
+    result: DetailResult,
+) -> None:
+    """发布日期四级优先级：可见发布标签 > 字段规则 > 页面元数据 > 旧 date_selectors。
+
+    字段规则和旧选择器可能命中相关推荐/页脚/正文里的日期；可见标签和 meta 是页面
+    自己声明的发布日期。`label_hit` 必须在容器摘除 `drop_selectors` **之前**取好传入。
+    """
     field_date = field_values.get("date") or field_values.get("publish_date")
     selector_date = None
     if not field_date:
@@ -553,7 +552,7 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         if other_date is not None and other_date != label_hit.value:
             logger.info(
                 "详情页日期冲突（%s）：结构解析=%s，可见发布日期=%s；采用可见日期",
-                url,
+                result.url,
                 other_text,
                 result.date_text,
             )
@@ -573,8 +572,10 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         result.date_text = None
         result.date_source = None
 
-    # 成文日期（落款）：字段规则已经配了 `signed_date` 就用它；否则从正文末尾找
-    # 「机关名 + 日期」/独占一行的日期。它只进 metadata，绝不覆盖 publish_date。
+
+def _resolve_signed_date(result: DetailResult) -> None:
+    """成文日期（落款）：字段规则配了 `signed_date` 就用它；否则从正文末尾找
+    「机关名 + 日期」/独占一行的日期。它只进 metadata，绝不覆盖 publish_date。"""
     signed = result.extra.get("signed_date")
     normalized_signed = parse_date(signed) if signed else None
     if normalized_signed is not None:
@@ -584,6 +585,49 @@ def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult
         signed_hit = signature_date(result.body)
         if signed_hit is not None:
             result.extra["signed_date"] = signed_hit.value.isoformat()
+
+
+def parse_detail_page(html: str, detail: DetailConfig, url: str) -> DetailResult:
+    """详情页 HTML → `DetailResult`（正文 + 元信息 + 附件）。
+
+    元信息**取不到就是 None**，绝不猜：三阶段验收里「元数据命中率」必须反映真实情况
+    （地方站的字段名千差万别，猜错比缺失更糟）。
+    """
+    result = DetailResult(url=url)
+    root = parse_html(html)
+
+    container = _select_detail_container(root, detail, result)
+    if container is None:
+        return result
+
+    # 语义化字段规则优先（新口径）。在**整页**上执行而不是正文容器内：政务站的
+    # 元信息块（索引号 / 发文字号 / 成文日期）常常在正文容器之外。
+    # 取不到的保留字段再回落到旧选择器链，保证老配置行为不变。
+    field_values = extract_fields(root, detail.fields) if detail.fields else {}
+    result.extra = {
+        key: value
+        for key, value in field_values.items()
+        if key not in _RESERVED_FIELD_NAMES
+    }
+    # 可见发布标签先取：`drop_selectors` 可能从正文容器里摘掉页头/元信息块。
+    label_hit = publish_date_from_label(root)
+
+    # 附件清单**先扫**，再摘掉 drop_selectors：附件区（`div.attach` 之类）通常要
+    # 从正文里剔除，但「有哪些附件」正是接入要拿到的信息——先摘后扫会把附件一起抹掉。
+    result.attachments = _scan_detail_attachments(
+        root, url, detail.attachment_selector or _ATTACHMENT_HEURISTIC
+    )
+
+    for selector in detail.drop_selectors:
+        for node in select(container, selector):
+            node.detach()
+
+    result.image_count = sum(1 for node in container.iter_elements() if node.tag == "img")
+    result.body = container.text_content()
+
+    _fill_detail_basics(result, root, container, detail, field_values)
+    _resolve_publish_date(root, html, detail, field_values, label_hit, result)
+    _resolve_signed_date(result)
     return result
 
 

@@ -34,10 +34,11 @@ from urllib.parse import urlsplit
 
 from app.config import get_settings
 from app.db import repositories as repo
-from app.sources.base import PolicySource, SourceError
+from app.sources.base import FulltextResult, PolicySource, SourceError
 from app.sources.browser_any import BROWSER_SOURCE_KEY
 from app.sources.registry import all_sources
 from app.sources.util import parse_date
+from app.schemas.policy import FulltextMeta
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,8 @@ async def _search_one(
     limit: int,
     in_library: set[str],
     budget: list[int],
+    agencies: list[str] | None = None,
+    doc_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """在单个来源上检索（不落库、不判别、不提取）。
 
@@ -359,7 +362,9 @@ async def _search_one(
     per_keyword = max(1, min(int(limit or 10), int(settings.pipeline_per_keyword_limit or limit or 10)))
     cap = min(limit, _MAX_ITEMS_PER_SOURCE)
     try:
-        combos = source.search_plan(keywords, [], [])
+        # 机构 / 文种交给来源的检索入口做服务端筛选（gov.cn 的 bmfl / pcodeJiguan）；
+        # 不支持这一层的来源会在自己的 search 里忽略，不会因此报错。
+        combos = source.search_plan(keywords, agencies or [], doc_types or [])
     except Exception as exc:  # noqa: BLE001
         return {
             "key": info.key,
@@ -460,6 +465,8 @@ async def search_sources(
     date_to: date | None = None,
     source: str | None = None,
     scope: str | None = None,
+    agencies: list[str] | None = None,
+    doc_types: list[str] | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
     """在已启用的来源上做只读关键词检索（不落库、不判别、不提取）。"""
@@ -486,6 +493,8 @@ async def search_sources(
                 limit=limit,
                 in_library=in_library,
                 budget=budget,
+                agencies=agencies,
+                doc_types=doc_types,
             )
         )
 
@@ -566,6 +575,84 @@ def _source_for_url(infos: list[SourceInfo], url: str) -> SourceInfo | None:
     return None
 
 
+def _resolve_fulltext_source(infos: list[SourceInfo], url: str, source: str | None) -> SourceInfo:
+    """按 `source` 名或 URL 域名挑出正文来源；三个守卫任一不过就抛 `LibrarySearchError`。"""
+    if source:
+        info = _resolve(infos, source)
+    else:
+        info = _source_for_url(infos, url)
+        if info is None:
+            raise LibrarySearchError(
+                f"无法判断这篇属于哪个来源：{url}。请用 source 参数指定来源名"
+                "（可用清单见 action=sources）。"
+            )
+    if info.source is None:
+        raise LibrarySearchError(
+            f"来源「{info.label}」已登记但当前不可用（状态：{info.status}，未装载进来源注册表）"
+        )
+    if not info.source.fulltext_available():
+        raise LibrarySearchError(f"来源「{info.label}」的全文能力当前不可用（工具未加载）")
+    return info
+
+
+async def _fetch_fulltext_result(info: SourceInfo, url: str) -> FulltextResult:
+    """调用来源全文工具；两种异常统一包成 `LibrarySearchError`（工具报错原样透传）。"""
+    try:
+        return await info.source.fetch_fulltext(url, timeout=get_settings().pipeline_mcp_timeout)
+    except SourceError as exc:
+        raise LibrarySearchError(f"取正文失败：{exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise LibrarySearchError(f"取正文失败：{exc}") from exc
+
+
+def _fulltext_body_quality(
+    result: FulltextResult, max_chars: int
+) -> tuple[FulltextMeta, str, int, int, bool, str | None]:
+    """清洗正文并按流水线阈值判质量。返回 `(meta, clean, cjk, sent_enders, body_ok, body_note)`。
+
+    局部导入：`app.pipeline.fulltext_clean` 经 `app.schemas` 反向依赖 `app.sources`，
+    顶层导入会成环（与 `services/ingestion.py` 延迟导入 crawl_graph 同款理由）。
+    """
+    from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
+
+    meta, clean = split_fulltext(result.body or "")
+    cjk, enders = body_metrics(clean)
+    settings = get_settings()
+    min_cjk = settings.pipeline_min_body_chars
+    min_enders = settings.pipeline_min_sent_enders
+    body_ok = not (
+        (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders)
+    )
+    body_note = None
+    if not body_ok:
+        # 措辞与流水线一致（crawl_graph.py 的 judge_reason）
+        body_note = "图片版（正文为页面壳）" if result.image_count else "正文过短（薄壳/附件版）"
+    return meta, clean, cjk, enders, body_ok, body_note
+
+
+def _fulltext_field_extracts(
+    result: FulltextResult,
+    meta: FulltextMeta,
+    *,
+    publish_from_fulltext: bool,
+) -> tuple[str | None, str | None, date | None, date | None]:
+    """机构 / 文号 / 发布与成文日期。返回 `(agency, doc_no, publish_date, signed_date)`。
+
+    - 机构 / 文号按「结构解析 → 归档元信息」的顺序兜底（与流水线一致）；
+    - 发布日期只认来源声明为「发布日期」的那一路；gov.cn 的全文日期是成文日期；
+    - 成文日期：详情页字段规则 / 归档元信息 / 正文落款，任一命中即可（不顶替发布日期）。
+    """
+    from app.pipeline.fulltext_clean import strip_zero_width  # 局部导入避环，理由见 _fulltext_body_quality
+
+    strip = strip_zero_width
+    agency = strip(result.issuer or "").strip() or strip(meta.agency or "").strip() or None
+    doc_no = strip(result.doc_no or "").strip() or strip(meta.doc_no or "").strip() or None
+    publish_date = result.date if publish_from_fulltext else None
+    signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
+    signed = parse_date(signed_text) if signed_text else None
+    return agency, doc_no, publish_date, signed
+
+
 async def fetch_source_fulltext(
     url: str,
     *,
@@ -588,61 +675,15 @@ async def fetch_source_fulltext(
       在这里被标出来，而不是被模型当成政策正文念出去。
     """
     infos = await _collect_sources()
-    if source:
-        info = _resolve(infos, source)
-    else:
-        info = _source_for_url(infos, url)
-        if info is None:
-            raise LibrarySearchError(
-                f"无法判断这篇属于哪个来源：{url}。请用 source 参数指定来源名"
-                "（可用清单见 action=sources）。"
-            )
-    if info.source is None:
-        raise LibrarySearchError(
-            f"来源「{info.label}」已登记但当前不可用（状态：{info.status}，未装载进来源注册表）"
-        )
-    if not info.source.fulltext_available():
-        raise LibrarySearchError(f"来源「{info.label}」的全文能力当前不可用（工具未加载）")
+    info = _resolve_fulltext_source(infos, url, source)
+    result = await _fetch_fulltext_result(info, url)
 
-    try:
-        result = await info.source.fetch_fulltext(url, timeout=get_settings().pipeline_mcp_timeout)
-    except SourceError as exc:
-        raise LibrarySearchError(f"取正文失败：{exc}") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise LibrarySearchError(f"取正文失败：{exc}") from exc
-
-    # 局部导入：`app.pipeline.fulltext_clean` 经 `app.schemas` 反向依赖 `app.sources`，
-    # 顶层导入会成环（与 `services/ingestion.py` 延迟导入 crawl_graph 同款理由）。
-    from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
-
-    meta, clean = split_fulltext(result.body or "")
-    cjk, enders = body_metrics(clean)
-    settings = get_settings()
-    min_cjk = settings.pipeline_min_body_chars
-    min_enders = settings.pipeline_min_sent_enders
-    body_ok = not (
-        (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders)
+    meta, clean, cjk, enders, body_ok, body_note = _fulltext_body_quality(
+        result, max_chars
     )
-    body_note = None
-    if not body_ok:
-        # 措辞与流水线一致（crawl_graph.py 的 judge_reason）
-        body_note = "图片版（正文为页面壳）" if result.image_count else "正文过短（薄壳/附件版）"
-
-    agency = (
-        strip_zero_width(result.issuer or "").strip()
-        or strip_zero_width(meta.agency or "").strip()
-        or None
+    agency, doc_no, publish_date, signed = _fulltext_field_extracts(
+        result, meta, publish_from_fulltext=info.source.fulltext_date_is_publish
     )
-    doc_no = (
-        strip_zero_width(result.doc_no or "").strip()
-        or strip_zero_width(meta.doc_no or "").strip()
-        or None
-    )
-    # 发布日期：只认来源声明为「发布日期」的那一路；gov.cn 的全文日期是成文日期。
-    publish_date = result.date if info.source.fulltext_date_is_publish else None
-    # 成文日期：详情页字段规则 / 归档元信息 / 正文落款，任一命中即可（不顶替发布日期）。
-    signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
-    signed = parse_date(signed_text) if signed_text else None
 
     attachments = [
         {
