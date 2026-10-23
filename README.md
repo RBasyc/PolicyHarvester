@@ -320,11 +320,11 @@ The deep documentation is wiki-ed; the entry point is **[docs/README.md](docs/RE
 - Prohibited uses: this project must not be used for any illegal, infringing, non-compliant or unethical purpose, including but not limited to: bypassing a site's terms of service, access controls or anti-scraping mechanisms; large-scale scraping, storage or distribution of copyrighted or personal data; creating or spreading false or misleading content, or using it for opinion manipulation; anything that violates applicable law, data-compliance or privacy-protection requirements.
 - Data sources and compliance: this project talks to public government website entry points. Users are responsible for checking the target site's terms of use, robots protocol, rate limits and copyright requirements, and for keeping the request rate reasonable so the site is not overloaded.
 - Disclaimer: the project is provided "as is", without any express or implied warranty (including but not limited to merchantability, fitness for a particular purpose, or non-infringement). To the maximum extent permitted by law, the author is not liable for any direct or indirect loss arising from the use of this project.
-- Copyright and license: this project is released under the Apache-2.0 license. The license terms are the only legally binding text; the "Legal notice and usage restrictions" section above states the author's attitude and compliance guidance and does not modify the license. If there is any conflict between the license terms and that notice, the license terms prevail.
+- Copyright and license: this project is released under the MIT license. The license terms are the only legally binding text; the "Legal notice and usage restrictions" section above states the author's attitude and compliance guidance and does not modify the license. If there is any conflict between the license terms and that notice, the license terms prevail.
 - Compliance and takedown: if you believe something in this project may raise a compliance risk, or if you have a legitimate claim for removal or correction, please get in touch with the author.
 
 ---
 
 ## License
 
-[Apache-2.0](LICENSE)
+[MIT](LICENSE)
