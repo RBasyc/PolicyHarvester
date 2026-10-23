@@ -34,7 +34,7 @@ def _print_pool_help(reason: str) -> None:
     print("请依次确认：")
     print("  1) docker 容器 server-db-1 运行中：docker ps")
     print("  2) 已执行 bash database/init.sh（建库建表 + 种子数据）")
-    print("  3) server/.env 的 DATABASE_URL 指向该容器（默认 localhost:5433/agent_demo）")
+    print("  3) 仓库根 .env 的 DATABASE_URL 指向该容器（默认 localhost:5433/agent_demo）")
 
 
 async def main() -> int:

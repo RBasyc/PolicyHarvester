@@ -54,16 +54,23 @@ die() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------ 小工具 ---
-# 读取 .env 里某个键的值（取最后一个赋值；容忍引号、空白、CRLF、行内注释）
+# 配置文件：顺序必须与 server/app/config.py::_ENV_FILES 一致（后文件覆盖前文件）。
+ENV_FILES=("$ROOT/.env" "$ROOT/.env.features")
+
+# 读取配置里某个键的值（两个文件都看，后文件优先；容忍引号、空白、CRLF、行内注释）
 # 行内注释口径与 python-dotenv 一致：**未加引号**的值里，空白之后的 `#` 起注释。
-# 这一点很要紧：`.env.example` 里大量写成 `KEY=false   # 说明`，若不剥离注释，
+# 这一点很要紧：模板里大量写成 `KEY=false   # 说明`，若不剥离注释，
 # `BROWSER_ENABLED` 会被读成 `true   # 总开关`，匹配不上 true/1/yes——脚本于是一直
 # 走普通 `uv sync`（不装 playwright），而服务端（pydantic-settings）却认为开关是开的。
 env_value() {
-  [ -f "$ROOT/.env" ] || return 0
-  local raw
-  raw="$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$ROOT/.env" 2>/dev/null \
-    | tail -n 1 | cut -d= -f2- | tr -d '\r')"
+  local raw="" file value
+  for file in "${ENV_FILES[@]}"; do
+    [ -f "$file" ] || continue
+    value="$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$file" 2>/dev/null \
+      | tail -n 1 | cut -d= -f2- | tr -d '\r')"
+    [ -n "$value" ] && raw="$value"
+  done
+  [ -n "$raw" ] || return 0
   case "$raw" in
     \"*)
       raw="${raw#\"}"
@@ -178,11 +185,11 @@ check_forwards() {
 }
 
 check_env_file() {
-  step "检查 .env 配置 ..."
+  step "检查 .env / .env.features 配置 ..."
 
   if [ ! -f "$ROOT/.env" ]; then
     cp "$ROOT/.env.example" "$ROOT/.env"
-    warn "未找到 .env，已从 .env.example 生成一份模板：$ROOT/.env"
+    warn "未找到 .env，已从 .env.example 生成一份静态配置模板：$ROOT/.env"
     err "但它还没有任何 API 认证信息，服务起来也调不通大模型。"
     printf '\n%s\n' "${BOLD}请编辑 .env，填写模型网关后重新运行 ./start.sh：${RESET}"
     printf '%s\n' "  OPENAI_API_KEY=sk-...                        # 网关 API Key"
@@ -191,6 +198,29 @@ check_env_file() {
     return 1
   fi
   ok ".env 已存在"
+
+  # 功能开关文件：缺失时，若 .env 里还留着旧版开关就只提示迁移，绝不复制模板覆盖
+  # （模板里的默认值可能把用户自己设的 false 盖回去）。
+  local feature_keys="JUDGE_ENABLED|JUDGE_LAYA_ENABLED|BROWSER_ENABLED|BROWSER_HEADLESS|MCP_POLICY_ENABLED|LANGFUSE_ENABLED"
+  if [ ! -f "$ROOT/.env.features" ]; then
+    if grep -qE "^[[:space:]]*($feature_keys)[[:space:]]*=" "$ROOT/.env" 2>/dev/null; then
+      warn "检测到 .env 里仍是旧版单文件开关（功能开关已支持拆到 .env.features）"
+      warn "  现有值继续生效；迁移：把 JUDGE_*/BROWSER_*/MCP_POLICY_ENABLED/LANGFUSE_ENABLED 剪切到 .env.features"
+    else
+      cp "$ROOT/.env.features.example" "$ROOT/.env.features"
+      warn "已生成功能开关模板：$ROOT/.env.features（模板全部注释，默认值 = 内置默认）"
+    fi
+  else
+    ok ".env.features 已存在"
+    local key
+    for key in JUDGE_ENABLED JUDGE_LAYA_ENABLED BROWSER_ENABLED BROWSER_HEADLESS \
+               MCP_POLICY_ENABLED LANGFUSE_ENABLED; do
+      if grep -qE "^[[:space:]]*$key[[:space:]]*=" "$ROOT/.env" 2>/dev/null \
+         && grep -qE "^[[:space:]]*$key[[:space:]]*=" "$ROOT/.env.features" 2>/dev/null; then
+        warn "开关 $key 同时出现在两个文件；生效值来自 .env.features"
+      fi
+    done
+  fi
 
   if ! has_value OPENAI_API_KEY; then
     err ".env 里没有 OPENAI_API_KEY（OpenAI 兼容网关认证，如 DeepSeek / Kimi / OpenAI）"
@@ -258,8 +288,21 @@ check_database() {
 
 check_ingest_judge() {
   # 入库判别服务在内网，clone 下来的人多半连不上——它 fail-open，不阻断抓取。
-  [ "${JUDGE_ENABLED:-}" = "false" ] && return 0
-  local url
+  # 总开关（JUDGE_ENABLED）关闭 = laya + 正文预检都不打「不建议入库」标注。
+  local master laya url
+  master="$(env_value JUDGE_ENABLED | tr '[:upper:]' '[:lower:]')"
+  case "$master" in
+    false|0|no)
+      ok "入库判别总开关已关闭（不产生「不建议入库」标注；正文预检仅回填元数据）"
+      return 0
+      ;;
+  esac
+
+  laya="$(env_value JUDGE_LAYA_ENABLED | tr '[:upper:]' '[:lower:]')"
+  case "$laya" in
+    false|0|no) return 0 ;;
+  esac
+
   url="$(env_value JUDGE_URL)"
   case "$url" in
     *192.168.*|*10.*|*172.1[6-9].*|*172.2[0-9].*|*172.3[01].*)
@@ -296,7 +339,7 @@ with sync_playwright() as p:
     ok "Chromium 内核就绪"
   else
     warn "未找到 Chromium 内核：运行 (cd server) && uv run playwright install chromium"
-    warn "  （浏览器来源与对话「浏览网页」将不可用；其余功能不受影响）"
+    warn "  （浏览器来源与对话里的 browser_* 工具将不可用；其余功能不受影响）"
   fi
   return 0
 }

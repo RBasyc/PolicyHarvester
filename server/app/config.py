@@ -1,4 +1,4 @@
-"""配置管理：从环境变量 / .env 文件读取配置。"""
+"""配置管理：从环境变量 / `.env`（静态配置）/ `.env.features`（功能开关）读取配置。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import json
 import logging
 import os
 from functools import lru_cache
+from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values
 from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,15 +19,44 @@ logger = logging.getLogger(__name__)
 # 仓库根目录：真身在 app/prompts.py（提示词目录也要用它），这里保留私有别名，少改下面的调用点
 _REPO_ROOT = REPO_ROOT
 
-# 真实 shell 环境的快照（**必须**在 load_dotenv 之前拍）：load_dotenv 不覆盖已有变量，
-# 启动后 os.environ 里已分不清「用户在 shell 里设的」和「从 .env 灌进来的」；
-# 提取模型注册表要热读 .env（改完不重启），优先级需要还原成：真实环境变量 > 当前 .env。
+# 配置分两个文件，都在仓库根目录（与 web/、database/ 平级），与启动时的工作目录无关：
+#   .env            静态配置：模型 API / 数据库 / 服务 / 抓取与安全参数
+#   .env.features   功能开关：判别 / 无头浏览器 / MCP / 可观测性
+# 顺序 = 覆盖顺序（后一个文件优先）；两个文件都可缺失，缺失时用 Settings 默认值。
+_ENV_FILE = _REPO_ROOT / ".env"
+_FEATURES_FILE = _REPO_ROOT / ".env.features"
+_ENV_FILES: tuple[Path, ...] = (_ENV_FILE, _FEATURES_FILE)
+
+# 真实 shell 环境的快照（**必须**在加载文件之前拍）：否则 os.environ 里分不清
+# 「用户在 shell 里设的」和「从文件灌进来的」；热读时优先级要还原成：
+# 真实环境变量 > .env.features > .env。
 _REAL_ENV = dict(os.environ)
 
-# .env 统一放在仓库根目录（与 web/、database/ 平级），与启动时的工作目录无关。
-# 先把 .env 加载进 os.environ：openai SDK 会自动读取 OPENAI_API_KEY / OPENAI_BASE_URL
-# 等变量，而 pydantic-settings 只把 .env 读进 Settings 对象，不会写回环境。
-load_dotenv(_REPO_ROOT / ".env")
+
+def _env_file_values() -> dict[str, str]:
+    """合并两个 env 文件；后文件覆盖前文件，缺失文件跳过。"""
+    merged: dict[str, str] = {}
+    for path in _ENV_FILES:
+        if not path.is_file():
+            continue
+        for key, value in dotenv_values(path).items():
+            if value is not None:
+                merged[key] = value
+    return merged
+
+
+def _load_env_into_process() -> None:
+    """把合并结果写回 os.environ（openai SDK 直接读取 OPENAI_* 等变量）。
+
+    不能直接连调两次 load_dotenv：它默认 override=False，会变成「先加载者占位」，
+    与 pydantic-settings「后文件覆盖前文件」相反。真实 shell 变量始终最高。
+    """
+    for key, value in _env_file_values().items():
+        if key not in _REAL_ENV:
+            os.environ[key] = value
+
+
+_load_env_into_process()
 
 # China-Central-Policy-MCP 本地构建产物（tools/ 下克隆并自带 build/）
 _DEFAULT_POLICY_MCP_ENTRY = str(
@@ -38,7 +68,8 @@ class Settings(BaseSettings):
     """应用全局配置。"""
 
     model_config = SettingsConfigDict(
-        env_file=str(_REPO_ROOT / ".env"),
+        # 序列按顺序读取，后文件覆盖前文件（与 _env_file_values / start.sh 口径一致）
+        env_file=tuple(str(path) for path in _ENV_FILES),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -81,10 +112,15 @@ class Settings(BaseSettings):
     mcp_policy_command: str = "node"
     mcp_policy_args: list[str] = [_DEFAULT_POLICY_MCP_ENTRY]
 
-    # --- 入库判别服务（judge · Phase 13）：检索阶段对候选篇目（仅标题）做「建议/不建议入库」标注 ---
-    # 注意：这组走 Settings（进程启动时读取），改 .env 需重启服务（与 PIPELINE_MODELS 的热读不同）。
+    # --- 入库判别（judge · Phase 13）：检索阶段对候选篇目标「建议/不建议入库」 ---
+    # **总开关**：false = laya 标题判别与正文预检都不写 judge_tagged（只影响新任务；
+    # 正文预检仍抓全文回填日期/机构/文号，确认面板照样能看元数据）。
+    # 本组走 Settings（进程启动时读取），改 .env / .env.features 需重启服务。
     # 服务不可达 / 超时 → fail-open：全部按「建议入库」处理，只在服务端日志告警，绝不阻断抓取主流程。
     judge_enabled: bool = True
+    # 标题判别（laya 服务）子开关；仅在总开关为 true 时有效。false = 只保留正文预检。
+    # 单独拆出来是为了让 scripts/test_judge.py 在总开关关闭时仍能校准服务与提示词。
+    judge_laya_enabled: bool = True
     judge_url: str = "http://192.168.16.201:8084/v1/systemone"
     judge_timeout_seconds: int = 5  # 单篇判别请求超时秒数
     judge_concurrency: int = 4  # 并发判别篇数（信号量封顶）
@@ -182,14 +218,18 @@ class ModelRegistryEntry(BaseModel):
 
 
 def _live_env(name: str) -> str:
-    """热读一个配置项：真实 shell 环境变量 > **当前** .env 文件 > 启动时灌进 os.environ 的旧值。
+    """热读一个配置项：真实 shell 环境变量 > 当前 `.env.features` > 当前 `.env` > 启动时的旧值。
 
-    供 `PIPELINE_MODELS` 注册表及其 key 使用——改完 .env **无需重启**，下一次读取即生效。
-    （直接读 os.environ 不行：它混着启动时从旧 .env 灌入的值，改文件后不会跟着变。）
+    供 `PIPELINE_MODELS` 注册表及其 key 使用——改完文件 **无需重启**，下一次读取即生效。
+    （直接读 os.environ 不行：它混着启动时从旧文件灌入的值，改文件后不会跟着变。）
+    显式判断 key 是否存在（而不是 `or` 链），文件里写成空值也能盖掉启动时的旧值。
     """
-    fresh = dotenv_values(_REPO_ROOT / ".env")
-    value = _REAL_ENV.get(name) or fresh.get(name) or os.environ.get(name) or ""
-    return value.strip()
+    if name in _REAL_ENV:
+        return _REAL_ENV[name].strip()
+    fresh = _env_file_values()
+    if name in fresh:
+        return fresh[name].strip()
+    return (os.environ.get(name) or "").strip()
 
 
 def _default_registry() -> list[ModelRegistryEntry]:
