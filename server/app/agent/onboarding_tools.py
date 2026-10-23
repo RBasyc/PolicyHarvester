@@ -731,7 +731,19 @@ async def manage_ingestion_job(
                     ],
                 },
                 "revisions": report.get("revisions"),
-                "runs": report.get("runs"),
+                # 2026-10-23 起 detail 的 runs[].report 已补全（详情页要吃它渲染验收报告），
+                # 整份报告对模型是纯体积：这里只留 kind/status/时间/失败原因 + summary
+                # （summary 里有 passed/failed 名单，够模型回答「上次试运行过了没」）。
+                "runs": [
+                    {
+                        field: run.get(field)
+                        for field in (
+                            "id", "kind", "status", "started_at",
+                            "finished_at", "failure_reason", "summary",
+                        )
+                    }
+                    for run in (report.get("runs") or [])
+                ],
             }
         )
     return _dump(report)

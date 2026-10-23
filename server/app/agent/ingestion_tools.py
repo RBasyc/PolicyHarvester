@@ -89,12 +89,12 @@ async def ingest_policies(
     include_rejected: bool = False,
     user_approved: bool = False,
 ) -> str:
-    """抓取并入库政策文件：把「检索 → 确认 → 提取入库」这条链在对话里走完（三个动作）。
+    """抓取并入库政策文件：把「检索 → 确认 → 提取入库」这条链在对话里走完（四个动作）。
 
     这是**唯一**能让内容真正入库的动作：`get_policy_fulltext` 之类的检索工具只把内容读给你看，
     不会落库；`dry_run_ingestion` 是接入前对新来源的试运行，也不写正式结果表。
 
-    三个动作：
+    四个动作：
 
     - `start`   发起一次抓取（给来源 / 关键词 / 时间范围 / 篇数上限）→ 建任务并跑检索段。
                 本工具会**等检索段结束**（最多约两分钟）再把候选篇目给你；检索段一定停在
@@ -113,7 +113,8 @@ async def ingest_policies(
             （`政策文件库`）；留空 = 默认源。**名字对不上直接报错**并给出可用清单，不会替你换源。
         keywords: 检索关键词（可多个）；留空 = 该来源的最新文件。
         date_from / date_to: 时间范围（YYYY-MM-DD），留空 = 不限。
-        agencies / doc_types: gov.cn 的发布机构分类与文种筛选（有哪些值先用 `get_policy_facets` 看）。
+        agencies / doc_types: gov.cn 的发布机构分类与文种筛选（有哪些值先用
+            `search_policy_library(action="facets")` 看）。
         browse_url / browse_goal: 只有无头浏览器来源时用。`browse_goal` 是发现循环的自然语言
             目标（如「找最近三个月的储能政策」），对持久化的无头来源（来源管理里「保存为无头
             浏览器来源」创建）必填可选、入口网址以**来源配置为准**（browse_url 传了也忽略）；

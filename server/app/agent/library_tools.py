@@ -49,12 +49,14 @@ async def search_policy_library(
     source: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    agencies: list[str] | None = None,
+    doc_types: list[str] | None = None,
     limit: int = _DEFAULT_LIMIT,
     url: str | None = None,
 ) -> str:
     """检索系统里的政策库：**先看有哪些已启用的来源，再在这些来源里找**。
 
-    三个动作：
+    四个动作：
 
     - `sources`  列出系统里的来源：名称、层级（国家/省/市/县）、机构、栏目、
       域名、检索能力，以及 `loaded` / `status`（**已登记但当前不可用的来源也在列**——
@@ -70,19 +72,24 @@ async def search_policy_library(
       口径与页面筛选器**完全一致**（gov.cn 走实时统计，其它来源给栏目名）。
       不知道能筛什么时先查这个，别猜机构名。
 
-    **为什么先查来源**：`get_latest_policies` / `get_policy_facets` 这两个 MCP 工具
-    **只覆盖国务院政策文件库（国家层面）**。用户问「浙江省的政策」时，直接拿它们去答，
+    **为什么先查来源**：国务院政策文件库只是**内置来源之一**，其它省/市政府门户、
+    主管部门都要靠来源层才能找到。用户问「浙江省的政策」时，跳过来源直接按国家库回答，
     会得到「浙江本省的文件不在这个库里」这种**没问过系统里有没有浙江来源**的结论。
     系统里接入过的地方来源（省/市政府门户、主管部门）才是地方问题的正解。
 
+    **国家库的机构/文种筛选也走这里**：`agencies` / `doc_types` 会落到来源的检索入口
+    （gov.cn 即 `bmfl` / `pcodeJiguan`）；可选值先用 `action="facets"` 查，别猜。
+
     Args:
-        action: `sources` / `search` / `fulltext` 之一。
-        keywords: 检索关键词（可多个）。`search` 用。
+        action: `sources` / `search` / `fulltext` / `facets` 之一。
+        keywords: 检索关键词（可多个）。`search` / `facets` 用。
         scope: 线索词（地域 / 机构 / 层级，如「浙江」「科技部」「省级」），用来在已启用的
             来源里挑出相关的那几个。`source` 给了就以它为准。
         source: 指定来源（展示名或 key，如「浙江省人民政府门户」）。名字对不上直接报错
             并列出可用清单，不会替你换个近似来源。
         date_from / date_to: 时间范围（YYYY-MM-DD），留空 = 不限。
+        agencies: 发布机构筛选（如「工业和信息化部」）。`search` 用；来源不支持时忽略。
+        doc_types: 文种筛选（如「国发」「国办发」）。`search` 用；来源不支持时忽略。
         limit: 每个来源最多返回几条（1–20，默认 10）。
         url: `fulltext` 用：要取正文的原文链接。
 
@@ -154,6 +161,9 @@ async def search_policy_library(
         if not terms:
             return _error("search 需要至少一个关键词")
         capped = max(1, min(int(limit or _DEFAULT_LIMIT), _MAX_LIMIT))
+        # 机构/文种是「服务端筛选」：来源适配器不认识时自己忽略，不在这里丢参数
+        agency_terms = [a.strip() for a in (agencies or []) if str(a or "").strip()]
+        doc_type_terms = [d.strip() for d in (doc_types or []) if str(d or "").strip()]
         return _dump(
             await svc.search_sources(
                 keywords=terms,
@@ -161,6 +171,8 @@ async def search_policy_library(
                 date_to=end,
                 source=source,
                 scope=scope,
+                agencies=agency_terms,
+                doc_types=doc_type_terms,
                 limit=capped,
             )
         )

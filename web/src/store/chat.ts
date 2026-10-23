@@ -12,7 +12,9 @@
 
 import { computed, ref } from 'vue'
 
-import { ApiError, api, streamChat } from '../api/client'
+import { ApiError, streamChat } from '../api/client'
+import { loadSources } from '../store'
+import type { ChatUsage } from '../api/types'
 
 export type ChatRole = 'user' | 'assistant'
 /** streaming=在飞 / done=正常收尾 / stopped=用户点了停止（半截内容保留） / error=流内或网络错误 */
@@ -53,26 +55,74 @@ export const messages = ref<ChatMessage[]>([])
 /** 有在飞的流：驱动「发送 ↔ 停止」按钮态，同时充当防重入闸 */
 export const sending = ref(false)
 
-/** 无头浏览器：可用（后端装了 playwright 且 BROWSER_ENABLED=true）≠ 本次已开启。 */
-export const browserAvailable = ref(false)
-/** 「浏览网页」开关：只对**下一次发送**生效；发送中不可切换（同一请求的 run 已建好）。 */
-export const browserEnabled = ref(false)
+/**
+ * 最近一轮的用量与耗时（输入框底部那行小字）。
+ *
+ * ReAct 一轮可能调用模型多次（每次工具往返一次），后端对**每次对话模型调用**发一条
+ * `usage` 事件，这里累加；工具内部模型调用的用量不上报（后端已按节点过滤）。
+ * 首字 / 总耗时由前端计时，网关不返回 usage 时也能显示这条线。
+ */
+export interface TurnStats {
+  model: string | null
+  inputTokens: number
+  outputTokens: number
+  cachedTokens: number
+  reasoningTokens: number
+  /** 本轮对话模型调用次数（>1 说明发生了工具往返） */
+  modelCalls: number
+  /** 本轮工具调用次数（`tool` start 事件数） */
+  toolCalls: number
+  firstTokenMs: number | null
+  elapsedMs: number | null
+}
 
-/** 拉功能开关；后端不可用时保持隐藏，不弹错（对话页照常可用）。 */
-export async function loadFeatures(): Promise<void> {
-  try {
-    const flags = await api.features()
-    browserAvailable.value = flags.browser_available
-    if (!browserAvailable.value) browserEnabled.value = false
-  } catch {
-    /* 静默：开关默认隐藏 */
+/** 会话累计（「新对话」清零）；只统计对话模型自己的调用 */
+export interface SessionUsage {
+  inputTokens: number
+  outputTokens: number
+  cachedTokens: number
+}
+
+export const lastTurn = ref<TurnStats | null>(null)
+export const sessionUsage = ref<SessionUsage>({
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+})
+
+/**
+ * 会改来源清单的对话工具：工具跑完且成功时重拉来源列表——否则 agent 在对话里
+ * 接入 / 启停 / 删除来源后，抓取表单下拉与来源管理页要整页刷新才能看到变化。
+ * `manage_ingestion_job` 的 list/detail 动作也会触发一次额外拉取：多一次无害的
+ * GET，比把每个 action 白名单进来要脆。
+ */
+const SOURCE_MUTATING_TOOLS = new Set(['register_source', 'import_source', 'manage_ingestion_job'])
+
+function blankTurn(): TurnStats {
+  return {
+    model: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    modelCalls: 0,
+    toolCalls: 0,
+    firstTokenMs: null,
+    elapsedMs: null,
   }
 }
 
-/** 切换「浏览网页」；生成中不允许改（界面也会 disable）。 */
-export function toggleBrowser(): void {
-  if (sending.value || !browserAvailable.value) return
-  browserEnabled.value = !browserEnabled.value
+function recordUsage(event: ChatUsage): void {
+  const turn = (lastTurn.value ??= blankTurn())
+  turn.model = event.model || turn.model
+  turn.inputTokens += event.input_tokens || 0
+  turn.outputTokens += event.output_tokens || 0
+  turn.cachedTokens += event.cached_tokens || 0
+  turn.reasoningTokens += event.reasoning_tokens || 0
+  turn.modelCalls += 1
+  sessionUsage.value.inputTokens += event.input_tokens || 0
+  sessionUsage.value.outputTokens += event.output_tokens || 0
+  sessionUsage.value.cachedTokens += event.cached_tokens || 0
 }
 
 export const isEmpty = computed(() => messages.value.length === 0)
@@ -80,6 +130,8 @@ export const isEmpty = computed(() => messages.value.length === 0)
 /** 当前会话 id：按它隔离后端记忆（见文件头注释） */
 let threadId = randomId('t')
 let activeController: AbortController | null = null
+/** 本轮开始时刻（`performance.now()`）；停止路径在 sendMessage 的 finally 之外，也要用它算耗时 */
+let turnStartedAt = 0
 
 /** 只动最后一条助手消息：它是一个响应式代理，原地改即可（不要整表复制） */
 function settleLast(status: ChatMessageStatus, error?: string): void {
@@ -101,6 +153,10 @@ export function sendMessage(raw: string): void {
     { id: randomId('m'), role: 'assistant', content: '', status: 'streaming' },
   )
   sending.value = true
+  // 新的一轮：用量从零记（会话累计不清），耗时从前端收到请求开始算
+  lastTurn.value = blankTurn()
+  turnStartedAt = performance.now()
+  const startedAt = turnStartedAt
 
   const controller = new AbortController()
   activeController = controller
@@ -110,12 +166,16 @@ export function sendMessage(raw: string): void {
         {
           message: text,
           thread_id: threadId,
-          browser_enabled: browserEnabled.value,
         },
         {
           onEvent: (event) => {
             switch (event.type) {
               case 'token': {
+                // 首字延迟：第一个 token 到达的时间（含排队与工具前的模型调用）
+                const turn = lastTurn.value
+                if (turn && turn.firstTokenMs === null) {
+                  turn.firstTokenMs = Math.round(performance.now() - startedAt)
+                }
                 const last = messages.value.at(-1)
                 if (last?.role === 'assistant') {
                   if (last.segReset) {
@@ -143,9 +203,24 @@ export function sendMessage(raw: string): void {
                 const last = messages.value.at(-1)
                 // 标记下一段 token 要重开：模型这一轮说了什么会在工具结果回来后作废
                 if (last?.role === 'assistant') last.segReset = true
+                if (event.status === 'start' && lastTurn.value) {
+                  lastTurn.value.toolCalls += 1
+                }
                 recordToolStep(event)
+                // 注册/启停来源的工具刚刚跑完且成功：重拉来源清单（shared store），
+                // 让新来源立刻出现在抓取表单下拉与来源管理页，不用整页刷新
+                if (
+                  event.status === 'done' &&
+                  event.ok &&
+                  SOURCE_MUTATING_TOOLS.has(event.name)
+                ) {
+                  void loadSources()
+                }
                 break
               }
+              case 'usage':
+                recordUsage(event)
+                break
               case 'error':
                 settleLast('error', event.message)
                 break
@@ -167,6 +242,9 @@ export function sendMessage(raw: string): void {
         activeController = null
         sending.value = false
         settleLast('done') // 服务端没发 done 就断流时的兜底
+        if (lastTurn.value) {
+          lastTurn.value.elapsedMs = Math.round(performance.now() - startedAt)
+        }
       }
     }
   })()
@@ -222,6 +300,11 @@ export function stopGeneration(): void {
   activeController = null
   sending.value = false
   settleLast('stopped')
+  // 停止路径不走 sendMessage 的 finally（它在 activeController 已被清空后跳过），
+  // 这里补上耗时，底部小字不至于永远显示「进行中」
+  if (lastTurn.value && lastTurn.value.elapsedMs === null) {
+    lastTurn.value.elapsedMs = Math.round(performance.now() - turnStartedAt)
+  }
 }
 
 /**
@@ -256,4 +339,7 @@ export function resetChat(): void {
   stopGeneration()
   messages.value = []
   threadId = randomId('t')
+  // 用量是「这次会话」的，新会话从零起（后端的 InMemorySaver 上下文也一起丢了）
+  lastTurn.value = null
+  sessionUsage.value = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }
 }

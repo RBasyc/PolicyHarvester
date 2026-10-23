@@ -7,14 +7,17 @@
 
 from collections.abc import Callable
 from contextvars import ContextVar
+from datetime import datetime
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 
+from app.agent.history import sanitize_tool_pairs
 from app.agent.state import AgentState
 from app.agent.tools import all_tools
+from app.agent.usage import extract_usage
 from app.browser.context import get_browser_run
 from app.browser.tools import all_browser_tool_names, pipeline_only_tool_names
 from app.config import get_settings
@@ -62,17 +65,25 @@ def _build_llm(
     return ChatOpenAI(**kwargs)
 
 
-def _tools_for_current_run() -> list[BaseTool]:
-    """按当前请求是否挂着浏览器运行来裁剪绑定给模型的工具。
+# 国务院政策库的原始 MCP 工具：**保留在注册表里给流水分支用**（`find_tool` 直接按名取），
+# 但不绑定给对话模型——`search_policy_library` 已经把它们包进「来源」这一层（gov.cn 是内置来源），
+# 两套入口同时暴露只会让模型在「查国务院政策用哪个」上摇摆，而地方政策又只有后者能答。
+_MCP_TOOL_NAMES = frozenset({"get_latest_policies", "get_policy_facets", "get_policy_fulltext"})
 
-    `ToolNode` 始终持有全部工具（含 browser_*），否则开关打开后模型发来的调用会找不到
-    执行器；这里只控制**模型能看到哪些 schema**：
-    - 没开「浏览网页」→ 全部 browser_* 都不绑定（省 token）；
-    - 开了 → 绑定对话可用的 11 个；`browser_collect_links` / `browser_finish` 是流水线
-      发现循环专用的，对话模型看不到。
+
+def _tools_for_current_run() -> list[BaseTool]:
+    """按「本轮挂了什么」裁剪绑定给模型的工具。
+
+    `ToolNode` 始终持有全部工具（含 browser_*、MCP），否则模型发来的调用会找不到执行器；
+    这里只控制**模型能看到哪些 schema**：
+    - 引擎可用（`BROWSER_ENABLED=true` 且装了 playwright）→ 每轮都绑定对话可用的 11 个；
+      `browser_collect_links` / `browser_finish` 是流水线发现循环专用的，对话模型看不到；
+    - 引擎不可用 → 全部 browser_* 都不绑定（省 token，也不会让模型尝试注定失败的动作）；
+    - MCP 原始检索工具始终不绑定：统一走 `search_policy_library`（见上方常量注释）。
     """
     run = get_browser_run()
-    hidden = pipeline_only_tool_names() if run is not None else all_browser_tool_names()
+    hidden = set(_MCP_TOOL_NAMES)
+    hidden |= pipeline_only_tool_names() if run is not None else all_browser_tool_names()
     return [item for item in all_tools() if item.name not in hidden]
 
 
@@ -81,12 +92,24 @@ async def call_model(state: AgentState) -> dict:
     run = get_browser_run()
     llm = _build_llm().bind_tools(_tools_for_current_run())
     # 提示词**在调用时**从 prompts/ 读（不进图、不进缓存）：改完即刻生效，不用重启。
-    # 浏览器提示词只在本次请求真的开了浏览器时追加。
-    system_parts = [load_prompt("chat")]
+    # 浏览器提示词只在引擎可用、本轮挂了 BrowserRun 时追加。
+    # 当天日期直接写进系统提示——比给模型一个 `get_current_time` 工具便宜一次往返，
+    # 「近 N 天」「今年」这类相对时间才有可靠基准。
+    today = datetime.now().strftime("%Y-%m-%d")
+    system_parts = [load_prompt("chat"), f"今天是 {today}（以服务器本地时区为准）。"]
     if run is not None:
         system_parts.append(load_prompt("chat_browser"))
-    messages = [SystemMessage(content="\n\n".join(system_parts)), *state["messages"]]
+    # 取消/断线可能留下「有 tool_calls、没有 ToolMessage」的半轮（见 history.py）；
+    # 原样发给 DeepSeek 会 400，且会污染该 thread 之后的所有请求。
+    history = sanitize_tool_pairs(state["messages"])
+    messages = [SystemMessage(content="\n\n".join(system_parts)), *history]
     response = await llm.ainvoke(messages)
+    # 流式对话把本轮用量推给前端（底部小字）；非流式请求由路由把 usage 放进响应体。
+    emit = chat_emit_var.get()
+    if emit is not None:
+        usage = extract_usage(response)
+        if usage:
+            emit({"type": "usage", **usage})
     return {"messages": [response]}
 
 

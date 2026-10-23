@@ -718,7 +718,8 @@ export interface SourceBrowserCreated {
  * 对话流事件（对应 server/app/api/routes/agent.py::chat_stream）。
  *
  * - `token`：模型输出的文本片段；
- * - `tool` ：浏览器动作步骤（start = 开始，done = 结束并带回 ok）；只有开启「浏览网页」时才有；
+ * - `tool` ：工具调用步骤（start = 开始，done = 结束并带回 ok）；浏览器动作也走这里，
+ *   但只有无头浏览器可用（`BROWSER_ENABLED=true` 且装了 playwright）时才会出现；
  * - `done` ：正常收尾（客户端主动断开时服务端不发）；
  * - `error`：服务端错误。
  */
@@ -730,9 +731,22 @@ export interface ChatToolEvent {
   ok: boolean
 }
 
+/** 一次对话模型调用的用量（镜像 server/app/schemas/chat.py::ChatUsage）。 */
+export interface ChatUsage {
+  /** 网关返回的模型名；没返回时为空 */
+  model: string | null
+  input_tokens: number
+  output_tokens: number
+  /** 命中的缓存输入 token（DeepSeek / OpenAI 口径已归一） */
+  cached_tokens: number
+  /** 思考 token（模型不返回时为 0） */
+  reasoning_tokens: number
+}
+
 export type ChatStreamEvent =
   | { type: 'token'; content: string }
   | ChatToolEvent
+  | ({ type: 'usage' } & ChatUsage)
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -740,11 +754,9 @@ export type ChatStreamEvent =
 export interface ChatRequest {
   message: string
   thread_id: string
-  /** 本请求是否挂载无头浏览器（模型可见 browser_* 工具） */
-  browser_enabled?: boolean
 }
 
-/** 功能开关（GET /api/config/features）：可用 ≠ 已启用，前端据此决定是否显示开关。 */
+/** 功能开关（GET /api/config/features）：后端口径，不启动 Chromium。 */
 export interface FeatureFlags {
   /** BROWSER_ENABLED=true 且装了 playwright（不启动 Chromium） */
   browser_available: boolean

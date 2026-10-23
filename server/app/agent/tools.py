@@ -12,9 +12,7 @@
 后三者只依赖服务层、不依赖 MCP，所以可以顶层导入并直接进 `TOOLS`。
 """
 
-from datetime import datetime
-
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 
 from app.agent.ingestion_tools import INGESTION_TOOLS
 from app.agent.library_tools import LIBRARY_TOOLS
@@ -23,18 +21,13 @@ from app.agent.schedule_tools import SCHEDULE_TOOLS
 from app.browser.tools import browser_tools
 
 
-@tool
-def get_current_time() -> str:
-    """获取当前的日期和时间。"""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
 # 本地工具注册表。
-# 浏览器工具（browser_*）必须无条件进 `ToolNode`，否则开了「浏览网页」开关后模型发出的
-# 工具调用会「没有对应工具」；但**绑定给模型**时按当前请求过滤（见 agent/nodes.py），
-# 没开开关的对话看不到这些 schema，省 token。
+# 当天日期不单独给工具：`call_model` 每次拼系统提示时直接写入「今天是 YYYY-MM-DD」，
+# 比让模型多调一次工具便宜，也避免相对时间在工具往返之间漂移。
+# 浏览器工具（browser_*）必须无条件进 `ToolNode`，否则模型发出的工具调用会「没有对应工具」；
+# 但**绑定给模型**时按引擎可用性过滤（见 agent/nodes.py）：不可用（BROWSER_ENABLED=false
+# 或没装 playwright）的对话看不到这些 schema，省 token。
 TOOLS = [
-    get_current_time,
     *LIBRARY_TOOLS,
     *ONBOARDING_TOOLS,
     *INGESTION_TOOLS,
