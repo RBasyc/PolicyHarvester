@@ -4,8 +4,10 @@
 无需 API Key。langchain-mcp-adapters 会把 MCP 工具转成 LangChain BaseTool，
 可直接交给 ToolNode 执行、bind_tools 绑定。
 
-提供的工具：
+提供的工具（**不直接绑定给对话模型**，对话统一走 `search_policy_library`；
+流水线、facets 服务经 `find_tool` 直接用）：
 - get_latest_policies：按关键词 / 日期范围检索国务院政策列表
+- get_policy_facets：发布机构 / 文种类目与计数
 - get_policy_fulltext：抓取并解析指定 gov.cn 政策全文
 
 服务不可用时返回空列表，由调用方降级为仅本地工具，不影响主服务启动。

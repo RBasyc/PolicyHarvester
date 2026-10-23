@@ -23,7 +23,8 @@ async def get_features() -> FeatureFlags:
     """功能开关（目前只有无头浏览器）。
 
     `browser_available` = `BROWSER_ENABLED=true` 且装了 playwright；**不启动 Chromium**。
-    前端只用它决定是否显示「浏览网页」开关；真正开启浏览时后端还会再校验一次。
+    对话侧不再按请求开关浏览器（引擎可用时每轮都挂 `browser_*`），这里保留给页面/外部
+    调用方判断能力是否就绪。
     """
     return FeatureFlags(
         browser_available=browser_runtime.available(),

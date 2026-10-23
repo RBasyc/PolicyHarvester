@@ -1,24 +1,19 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 import AppIcon from '../components/AppIcon.vue'
 import MarkdownText from '../components/MarkdownText.vue'
 import {
-  browserAvailable,
-  browserEnabled,
   isEmpty,
-  loadFeatures,
+  lastTurn,
   messages,
   resetChat,
   retryLast,
   sendMessage,
   sending,
+  sessionUsage,
   stopGeneration,
-  toggleBrowser,
 } from '../store/chat'
-
-// 功能开关（浏览器可用性）：后端不可用时静默隐藏，不影响对话
-onMounted(() => void loadFeatures())
 
 /**
  * Agent 入口页（首页）——design.pen 的 `Ry4ES` 帧，Phase 19 起接真实对话。
@@ -77,6 +72,58 @@ function onKeydown(event: KeyboardEvent) {
     onSend()
   }
 }
+
+/* ---------- 输入框底部的用量小字 ---------- */
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n)
+  // 一万以上不再留小数位（「12.5k」和「125k」读起来差不多，但少一位更短）
+  return n < 10000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
+}
+
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s`
+}
+
+/** 模型名只留最后一段：网关常带 `deepseek/` 之类的前缀，底部一行放不下 */
+function shortModel(name: string): string {
+  return name.split('/').at(-1) || name
+}
+
+/**
+ * 一次工具调用可能对应多次模型调用（ReAct 每往返一次就调一次），所以这里把
+ * 「模型 N 次 / 工具 N 次」分开列——两者不等就说明这一轮绕了圈。
+ * 没拿到 usage 的网关只显示次数与耗时，不编 token 数。
+ */
+const usageLine = computed(() => {
+  const turn = lastTurn.value
+  if (!turn) return ''
+  const parts: string[] = []
+  if (turn.model) parts.push(shortModel(turn.model))
+  if (turn.inputTokens || turn.outputTokens) {
+    let input = `输入 ${fmtTokens(turn.inputTokens)}`
+    if (turn.cachedTokens && turn.inputTokens) {
+      const hit = Math.round((turn.cachedTokens / turn.inputTokens) * 100)
+      input += `（缓存 ${fmtTokens(turn.cachedTokens)} · ${hit}%）`
+    }
+    parts.push(input)
+    let output = `输出 ${fmtTokens(turn.outputTokens)}`
+    if (turn.reasoningTokens) output += `（思考 ${fmtTokens(turn.reasoningTokens)}）`
+    parts.push(output)
+  }
+  if (turn.modelCalls > 1) parts.push(`模型 ${turn.modelCalls} 次`)
+  if (turn.toolCalls) parts.push(`工具 ${turn.toolCalls} 次`)
+  if (turn.firstTokenMs !== null) parts.push(`首字 ${fmtMs(turn.firstTokenMs)}`)
+  if (turn.elapsedMs !== null) parts.push(`耗时 ${fmtMs(turn.elapsedMs)}`)
+  else if (sending.value) parts.push('计时中…')
+  const session = sessionUsage.value
+  if (session.inputTokens || session.outputTokens) {
+    parts.push(`本会话 ↑${fmtTokens(session.inputTokens)} ↓${fmtTokens(session.outputTokens)}`)
+  }
+  return parts.join(' · ')
+})
 
 /**
  * 自动滚底。`stopPropagation` 那套不需要——`.chat` 就是唯一的滚动容器，
@@ -238,22 +285,8 @@ watch(
       ></textarea>
 
       <div class="composer-tools">
-        <!-- 左槽：「浏览网页」开关 / 对话态「新对话」。空态下不再列能力标签（它们不可点，容易被误认成按钮） -->
+        <!-- 左槽：对话态「新对话」。浏览器工具在引擎可用时始终可用，不再需要每轮开关。 -->
         <div class="tools-left">
-          <button
-            v-if="browserAvailable"
-            class="browse-toggle"
-            :class="{ active: browserEnabled }"
-            type="button"
-            :aria-pressed="browserEnabled"
-            :disabled="sending"
-            title="让 Agent 用无头浏览器打开任意公网站点（只读、遵守 robots.txt）"
-            @click="toggleBrowser"
-          >
-            <AppIcon name="globe" :size="12" />
-            <span>浏览网页</span>
-          </button>
-
           <button v-if="!isEmpty" class="new-chat" type="button" @click="resetChat">
             <AppIcon name="plus" :size="13" />
             <span>新对话</span>
@@ -281,6 +314,10 @@ watch(
         </button>
       </div>
     </div>
+
+    <!-- 用量小字：放在输入卡片外、页面最底部居中；只显示拿得到的指标
+         （网关不回 usage 时只剩耗时与工具次数），不估算 -->
+    <p v-if="usageLine" class="composer-stats">{{ usageLine }}</p>
   </div>
 </template>
 
@@ -682,6 +719,21 @@ watch(
   color: var(--text-tertiary);
 }
 
+/* 用量小字：输入卡片下方居中；11px、三级文字色，仅作参考读数，不与输入内容抢注意力。
+   放在卡片外意味着它是 .agent 列的最后一项，必须 flex-shrink: 0，否则窄屏时会被压扁 */
+.composer-stats {
+  flex-shrink: 0;
+  margin: 8px 0 0;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
 .composer-tools {
   display: flex;
   align-items: center;
@@ -696,40 +748,8 @@ watch(
   min-width: 0;
 }
 
-/* 「浏览网页」开关：胶囊观感，激活时用 accent（scoped 样式，不复用 ConfigPanel 的
-   .chip——那两个类名只在本组件内有效） */
-.browse-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  padding: 6px 11px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: normal;
-  white-space: nowrap;
-}
-
-.browse-toggle:hover:not(:disabled) {
-  border-color: var(--text-tertiary);
-  color: var(--text-primary);
-}
-
-.browse-toggle.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.browse-toggle:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
+/* 「新对话」胶囊按钮（scoped 样式，不复用 ConfigPanel 的 .chip——那两个类名只在
+   该组件内有效） */
 .new-chat {
   display: flex;
   align-items: center;

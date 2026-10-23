@@ -176,9 +176,21 @@ def _build_payload(**kwargs: Any) -> tuple[Any, str | None]:
     if err:
         return None, err
 
+    # 来源名先解析成注册表里的**展示名**再落库：`schedule_job.source` 是任务行的外键，
+    # 流水线 `get_by_label` 只按展示名解析——key 或别名原样存进去，调度器每轮都会
+    # 告警并静默回退 gov.cn（2026-10-23「中国新闻网」定时任务抓成国务院即此漏）。
+    # 接受 key（src_…）、完整展示名或其中一段；对不上直接报错并给出可用清单，
+    # 与 `ingest_policies` 的 strict 口径一致（不解析等于允许静默抓错站点）。
+    from app.services.ingestion import IngestionRejected, resolve_source_label
+
+    try:
+        resolved_source = resolve_source_label(kwargs.get("source"), strict=True)
+    except IngestionRejected as exc:
+        return None, str(exc)
+
     fields: dict[str, Any] = {
         "name": kwargs.get("name"),
-        "source": (kwargs.get("source") or "国务院政策文件库（gov.cn）").strip(),
+        "source": resolved_source,
         "keywords": list(kwargs.get("keywords") or []),
         "agencies": list(kwargs.get("agencies") or []),
         "doc_types": list(kwargs.get("doc_types") or []),
