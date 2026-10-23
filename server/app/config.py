@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     mcp_policy_command: str = "node"
     mcp_policy_args: list[str] = [_DEFAULT_POLICY_MCP_ENTRY]
 
+    # --- 联网检索（Tavily）：对话侧 ingest_policies(web_search=true) 的入口发现 ---
+    # 用户说「帮我查一下清远市的政策」而系统没有覆盖该地域的来源时，先用 Tavily 把
+    # 「一句话」检索成官方政策页面 URL，再交给无头浏览器入口（见 services/websearch.py）。
+    # key 留空 = 功能明确报错（中文明示怎么配），不静默走别的路。
+    # 本组走 Settings（进程启动时读取），改 .env 需重启；浏览器可用性另见 BROWSER_*。
+    tavily_api_key: str = ""
+    tavily_max_results: int = 10  # 单次 Tavily 返回的条数上限（头部再挑官方域名）
+    tavily_timeout_seconds: float = 15.0  # 单次 Tavily 请求超时秒数
+
     # --- 入库判别（judge · Phase 13）：检索阶段对候选篇目标「建议/不建议入库」 ---
     # **总开关**：false = laya 标题判别与正文预检都不写 judge_tagged（只影响新任务；
     # 正文预检仍抓全文回填日期/机构/文号，确认面板照样能看元数据）。

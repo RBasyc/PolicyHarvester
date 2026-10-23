@@ -33,7 +33,11 @@ from datetime import date
 from typing import Any
 
 from app.db import repositories as repo
-from app.sources.browser_any import BROWSER_SOURCE_KEY, browser_source_available
+from app.sources.browser_any import (
+    BROWSER_SOURCE_KEY,
+    BROWSER_SOURCE_LABEL,
+    browser_source_available,
+)
 from app.sources.registry import all_sources, get, get_by_label, get_default
 
 logger = logging.getLogger(__name__)
@@ -43,9 +47,15 @@ _SETTLED_STATUSES = ("awaiting_confirmation", "completed", "failed")
 # 「检索完成、等人确认要抓哪些篇目」——确认闸门
 _AWAITING_STATUS = "awaiting_confirmation"
 
-# 等检索段结束的轮询节奏与默认上限（工具侧用它把「一次调用」变成「一次可读的结论」）
-_POLL_SECONDS = 1.5
+# 等检索段结束的超时上限（工具侧用它把「一次调用」变成「一次可读的结论」）
 DEFAULT_WAIT_SECONDS = 120.0
+# web_search 的 start 可以等更久：无头浏览器逐页收集本来就慢（2026-10-23 实机 6 候选
+# 花了两分多钟），而事件驱动下「挂着等」不烧任何 SQL / 对话步数——上限不是成本，
+# 只是给「任务行永远等不到停」的场景个出口。
+WEB_SEARCH_START_WAIT_SECONDS = 300.0
+# `inspect_ingestion(wait_seconds=...)` 的单次等待上限：与 start 的等待上限一致——
+# 再长不如让模型「等完再看下一眼」，而不是把一次工具往返挂到几分钟。
+_MAX_INSPECT_WAIT = DEFAULT_WAIT_SECONDS
 
 # 本任务最多处理多少篇（与 TaskCreate 的 ge=1/le=50 对齐）
 _MAX_POLICIES_MIN = 1
@@ -200,13 +210,18 @@ async def start_ingestion(
     `awaiting_confirmation`，**不会自己入库**——入库要等 `confirm_ingestion`。
     本函数立即返回，不等检索；要等就用 `wait_for_settled`。
 
-    `browse_url` / `browse_goal` 只对无头浏览器来源有效。两种形态：
+    `browse_url` / `browse_goal` 只对无头浏览器来源有效。三种形态：
 
     - **持久化的 browser_driven 来源**（推荐）：入口网址来自来源配置（`source_obj
-      .entry_url`），payload 里的 `browse_url` 被**忽略**（来源才是入口的权威）；
-      `browse_goal` 取自 payload（抓取时填的自然语言目标）。
-    - **遗留伪来源「任意网站（无头浏览器）」**（仅存任务兼容）：`browse_url` 必填。
-      新代码不要再生成这种任务——从来源管理保存无头来源后在抓取页选它。
+      .entry_url`，可能为空），payload 里的 `browse_url` 被**来源配置**顶掉（来源才是
+      入口的权威）；`browse_goal` 取自 payload（抓取时填的自然语言目标）。
+    - **对话侧联网检索（web_search）借用遗留伪来源「任意网站（无头浏览器）」**：入口网址
+      每次 Tavily 都检索出不一样的官方页面，没有「来源配置可持久化」可言——这是唯一
+      合理的载体（`fetch_fulltext` 同样走无头）。**发起前已做浏览器可用性与入口可达校验**
+      （`start_web_search_ingestion` 先查运行时，再过 `ensure_navigable_sync`），调用方
+      必须是它，不要从页面或定时任务直接选这个伪来源。
+    - **遗留任务的存量行**：`browse_url` 必填，新任务（页面/定时）不要再生成这种任务
+      ——从来源管理保存无头来源后在抓取页选它。
 
     非浏览器来源传了入口地址会直接拒绝（否则用户以为它生效了，实际流水线走的是
     站点检索）。`pipeline_overrides` 是页面「高级设置」的直通口（键为 `pipeline_*`
@@ -217,13 +232,20 @@ async def start_ingestion(
     source_obj = get_by_label(source)
     url_value = (browse_url or "").strip() or None
     goal_value = (browse_goal or "").strip()[:500] or None
-    if getattr(source_obj, "browser_driven", False):
+    # browser_driven：持久化无头来源；遗留伪来源没有该类标记（调度器靠它排除），
+    # 但对话联网检索需要一个「任意入口网址」的载体，按 key 显式承认它只服务这条入口。
+    is_browser = (
+        getattr(source_obj, "browser_driven", False) or source_obj.key == BROWSER_SOURCE_KEY
+    )
+    if is_browser:
         if not browser_source_available():
             from app.browser import runtime as browser_runtime
 
             raise IngestionRejected(browser_runtime.unavailable_reason())
-        # browser_driven：入口以来源配置为准；遗留 browser_any：用 payload 的地址。
-        url_value = url_value or str(source_obj.entry_url).strip()
+        # browser_driven：入口以来源配置为准；遗留 browser_any 没有该属性（联网检索
+        # 每次都用 payload 的地址），getattr 防御而不是 AttributeError。
+        entry_url = getattr(source_obj, "entry_url", None)
+        url_value = url_value or (str(entry_url).strip() if entry_url else "")
         if not url_value:
             raise IngestionRejected("无头浏览器来源缺少入口网址（来源配置里没有 browse.url）")
         from app.browser.guard import BrowserBlocked, ensure_navigable_sync
@@ -252,7 +274,7 @@ async def start_ingestion(
         pipeline_overrides=_sanitize_overrides(pipeline_overrides),
     )
 
-    if getattr(source_obj, "browser_driven", False):
+    if is_browser:
         log_line = f"已创建浏览器抓取任务（入口：{url_value}；目标：{goal_value or '未填写'}）"
     else:
         keyword_hint = "、".join(keywords) if keywords else "未设置"
@@ -271,6 +293,74 @@ async def start_ingestion(
 
     start_pipeline(task_id)
     return task_id
+
+
+# ---------- 发起：联网检索（Tavily → 官方入口页 → 无头浏览器发现循环） ----------
+
+
+async def start_web_search_ingestion(
+    *,
+    query: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    browse_goal: str | None = None,
+    pipeline_overrides: dict[str, int | str | None] | None = None,
+    origin: str | None = None,
+) -> dict[str, Any]:
+    """「帮我查一下某地/某机构的政策」≠ 知道该用哪个网址：先联网，再抓取。
+
+    顺序固定为「**先花浏览器检查的功夫，再花 Tavily 的钱，最后才建任务**」，失败在
+    花钱之前就停：① 无头浏览器不可用直接拒绝（Tavily 找到入口也没人去浏览）；
+    ② Tavily 找入口（`services/websearch.find_entry_url`，官方域名优先）；③ 把入口
+    URL 交给 `start_ingestion` 走遗留伪来源（此入口的必经处，见其 docstring）。
+
+    等价于页面手填「任意网站 + 入口网址」，只是**入口由联网检索得出**；确认闸门照旧
+    ——检索段结束仍停在 `awaiting_confirmation`，不会自己入库。返回
+    `{task_id, entry_url, official, alternatives}`：`official=False` 时调用方要提醒用户
+    「找到的不是 .gov.cn 官方域名，候选可能偏窄」。
+    """
+    query = (query or "").strip()
+    if not query:
+        raise IngestionRejected(
+            "联网检索需要至少一个搜索词（地域/机构名），服务用它先找官方入口页"
+        )
+    _validate_range(date_from, date_to)
+
+    # ① 浏览器可用性先查：Tavily 找到了入口也没有人去浏览，白花一次检索
+    if not browser_source_available():
+        from app.browser import runtime as browser_runtime
+
+        raise IngestionRejected(browser_runtime.unavailable_reason())
+
+    # ② 联网找官方入口（不抛异常，错误是中文人话）
+    from app.services import websearch
+
+    hit = await websearch.find_entry_url(query)
+    if not hit.get("ok"):
+        raise IngestionRejected(str(hit.get("error") or "联网检索失败"))
+
+    # ③ 复用 start_ingestion 的全部校验（可达性 / SSRF / 日志 / 建任务 + 首条日志）
+    goal = (browse_goal or "").strip()[:500] or (
+        f"收集与「{query}」相关的最新政策原文详情页链接"
+    )
+    task_id = await start_ingestion(
+        source=BROWSER_SOURCE_LABEL,
+        keywords=[query],
+        date_from=date_from,
+        date_to=date_to,
+        browse_url=str(hit.get("url") or ""),
+        browse_goal=goal,
+        pipeline_overrides=pipeline_overrides,
+        origin=origin,
+    )
+    return {
+        "task_id": task_id,
+        "query": query,
+        "entry_url": str(hit.get("url") or ""),
+        "entry_title": str(hit.get("title") or ""),
+        "official": bool(hit.get("official")),
+        "alternatives": list(hit.get("alternatives") or []),
+    }
 
 
 # ---------- 查看 ----------
@@ -300,6 +390,7 @@ async def inspect_ingestion(
     *,
     candidate_limit: int = 40,
     log_limit: int = 20,
+    wait_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """看一个任务：状态 / 阶段 / 计数 + 候选篇目（含判别与「已在库」标注）。
 
@@ -310,12 +401,27 @@ async def inspect_ingestion(
     `task_id` 留空 = **最近一次任务**（`repo.fetch_current_task`）：跨会话问
     「刚才那个任务怎么样了」时，模型手上往往没有 id。带 `logs` 是因为检索 0 结果
     或大量篇目被判「不建议」时，光看状态与计数猜不出原因——日志里写着。
+
+    `wait_seconds` > 0：先把「还在跑」**等到停或本参数用尽再看**——一次工具往返顶掉
+    模型 N 次「隔几秒查一次」的轮询（对话侧递归上限按动作预算给，轮询进度是烧它
+    的最大项，2026-10-23 task 248 的 GraphRecursionError 就是这么烧光的）。上限
+    `_MAX_INSPECT_WAIT`；超时**如实返回当下状态**，不是错误（`wait.settled=false`）。
     """
     if task_id is None:
         current = await repo.fetch_current_task()
         if current is None:
             raise IngestionNotFound("当前没有任何抓取任务")
         task_id = int(current["id"])
+
+    wait_meta: dict[str, Any] | None = None
+    if wait_seconds and float(wait_seconds) > 0:
+        result = await wait_for_settled(
+            task_id, timeout=min(float(wait_seconds), _MAX_INSPECT_WAIT)
+        )
+        wait_meta = {
+            "settled": bool(result.get("settled")),
+            "status": result.get("status"),
+        }
 
     task = await repo.fetch_task(task_id)
     if task is None:
@@ -333,6 +439,8 @@ async def inspect_ingestion(
         "source": task["source"],
         "status": task["status"],
         "stage": task.get("stage"),
+        # wait_seconds>0 时的等待结论：settled=false 表示「等到上限还在跑」（不是错误）
+        "wait": wait_meta,
         "keywords": list(task.get("keywords") or []),
         "date_from": task.get("date_from"),
         "date_to": task.get("date_to"),
@@ -360,31 +468,69 @@ async def inspect_ingestion(
     }
 
 
+# ---------- 等待（事件驱动：DB 广播 → asyncio.Event） ----------
+
+
+# 「任务停下」的进程内信号：数据层写停态即广播（`repo.on_task_settled`），等待方按
+# task_id 挂 Event。一次广播可能对应多个等待方（start 与后续 inspect 同时挂），集合兜住；
+# 广播在**事件循环上同步回调**，set() 不需要唤醒远线程。
+_settled_events: dict[int, set[asyncio.Event]] = {}
+
+
+def _on_repo_settled(task_id: int, status: str) -> None:
+    """数据层停态广播的转发口：把对应 Event 全部点燃（谁等谁醒，不解释状态）。"""
+    for event in tuple(_settled_events.get(int(task_id), ())):
+        event.set()
+
+
+repo.on_task_settled(_on_repo_settled)
+
+
 async def wait_for_settled(
     task_id: int, *, timeout: float = DEFAULT_WAIT_SECONDS
 ) -> dict[str, Any]:
-    """等检索段停下来（等确认 / 已失败 / 已完成）；超时**如实返回还在跑**，不抛错。
+    """等检索段停下来（等确认 / 已失败 / 已完成）——**事件驱动，不轮询**。
 
-    只轮询任务行，不阻塞流水线：流水线在 `start_pipeline` 的后台 asyncio 任务里跑
-    （`_track` 登记，取消/关停都能定位到它）。超时不是错误——大关键词集的检索本身
-    可能要一分多钟，调用方应据此告诉用户「还在检索，稍后再看」。
+    数据层每次把任务写成停态都会广播（`repo.on_task_settled` → 下面的
+    `_on_repo_settled`），等待方挂 `asyncio.Event`：信号一到就醒，挂起期间
+    **一次 SQL 都不发**（旧实现每 1.5s 查一次库，2026-10-23 改为事件驱动）。
+    超时**如实返回还在跑**，不抛错——它也是兜底：信号是进程内一次性广播，
+    服务重启导致的僵尸任务不会再有广播（启动时的 `fail_stale_tasks` 会广播失败，
+    覆盖重启窗口），等非本进程写停的任务自然落在超时上。
+
+    不阻塞流水线：流水线在 `start_pipeline` 的后台 asyncio 任务里跑
+    （`_track` 登记，取消/关停都能定位到它）。
     """
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while True:
+    event = asyncio.Event()
+    bucket = _settled_events.setdefault(int(task_id), set())
+    bucket.add(event)
+    try:
+        # 先查一次：任务可能早就停了（广播发生在监听登记之前）
         task = await repo.fetch_task(task_id)
         if task is None:
             raise IngestionNotFound(f"任务不存在：{task_id}")
         if task["status"] in _SETTLED_STATUSES:
             return {"settled": True, "timed_out": False, "status": task["status"]}
-        if loop.time() >= deadline:
-            return {
-                "settled": False,
-                "timed_out": True,
-                "status": task["status"],
-                "stage": task.get("stage"),
-            }
-        await asyncio.sleep(_POLL_SECONDS)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        # 终态以 DB 为准（广播只是「该醒来看一眼」的信号，不是结论本身）
+        task = await repo.fetch_task(task_id)
+        if task is None:
+            raise IngestionNotFound(f"任务不存在：{task_id}")
+        settled = task["status"] in _SETTLED_STATUSES
+        return {
+            "settled": settled,
+            "timed_out": not settled,
+            "status": task["status"],
+            "stage": None if settled else task.get("stage"),
+        }
+    finally:
+        bucket.discard(event)
+        if not bucket:
+            _settled_events.pop(int(task_id), None)
 
 
 # ---------- 终止 ----------

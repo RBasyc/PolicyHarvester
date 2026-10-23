@@ -51,6 +51,7 @@
 | 36 | 修复：工具内部模型调用的原始 JSON 泄漏到对话界面 | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 37 | 移除对话「浏览网页」开关（引擎可用即挂载 `browser_*`） | 🟨 进行中（代码与文档完成，未构建未运行；待实机验收） | — |
 | 38 | 工具收敛（MCP 不再绑对话 / 日期进提示词 / 接入默认一键）+ 输入框用量小字 | 🟨 进行中（代码与文档完成，未构建未运行；待实机验收） | — |
+| 39 | 对话联网检索（Tavily → 官方入口 URL → 无头浏览器发现循环） | 🟨 进行中（代码与文档完成，未构建未运行；2026-10-23，待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1255,3 +1256,20 @@ cd web && pnpm dev
 - [x] **文档镜像**：`docs/architecture/chat-agent.md`（工具裁剪 / 四动作 / `usage` 事件 / 日期注入 / 前端读数）、`docs/architecture/overview.md`（AgentPage 底部小字）、`README.md` / `README.zh-CN.md`（SSE 事件列表）、`.claude/skills/website-source-onboarding/references/tool-map.md`（删 `get_current_time`、补四动作与 MCP 不绑对话说明）、`prompts/chat.md`
 - [x] **静态核对（仅此）**：改动过的 9 个 Python 文件 `ast.parse` 全部通过；全仓 `get_current_time` 只剩历史记录（TODO/日志/测试里的虚构工具名）
 - [ ] **待实机验收**：① `cd web && pnpm build` 通过；② 重启 server + `pnpm dev` → `/agent` 发一句 → 底部出现一行小字（模型名、输入/缓存、输出、耗时），多轮工具问答后「模型 N 次 / 工具 N 次」分别出现，点「新对话」清零；③ 网关不回 usage 时该行只剩次数与耗时，不出现 0 token；④ 问「今年发布了哪些 AI 政策」→ 模型直接用系统提示里的日期，**不再**出现查时间的工具步骤；⑤ 问「浙江有哪些相关政策」→ 只调 `search_policy_library`，步骤里没有 `get_latest_policies`；⑥ 说「接入 <https://www.12371.cn/>」→ 第一步是 `import_source`
+
+## Phase 39 — 对话联网检索（Tavily → 官方入口 URL → 无头浏览器发现循环）
+
+**状态**：🟨 进行中（代码与文档完成，未构建未运行；2026-10-23，待实机验收） ｜ **目标**：用户说「帮我查一下清远市的政策」而**系统里没有覆盖该地域的来源**时，对话 Agent 不再只能说「这个范围没有来源」——`ingest_policies` 新增 `web_search=true`：服务先用 Tavily 把这句话检索成**官方政策页面的入口 URL**（`.gov.cn` 优先），再把 URL 交给现有的无头浏览器发现循环（`browse_url` 入口），之后的判别 / 正文预检 / 确认闸门 / 提取全部复用 —— 管线在「候选 URL 已知之后」本来就与发现方式解耦，本阶段只补「发现」这条腿。前提：`BROWSER_ENABLED=true` + Tavily key。
+
+- [x] **Tavily 薄客户端**（新增 `server/app/services/websearch.py`）：一次 POST 到 `api.tavily.com/search`（httpx，无 SDK 依赖），只产 URL 不做入库决策；排序键 =（官方域名 `.gov.cn` 优先，其次 Tavily 相关度分）；**不抛异常**——没配 key / 网络失败 / 0 结果都是 `{ok:false, error}` 中文错误，由调用方翻成 `IngestionRejected`；`official=false` 时照常回第一名但让调用方提醒用户「入口不是 .gov.cn 域名」；返回 `alternatives`（前 5 个候选，备用）
+- [x] **服务层编排**（`services/ingestion.py::start_web_search_ingestion`）：顺序固定「先浏览器检查 → 再 Tavily（花钱的在前两个失败之后）→ 最后才复用 `start_ingestion` 建任务」，确认闸门照旧（停在 `awaiting_confirmation`）
+- [x] **`start_ingestion` 认留伪来源这条新入口**：browser 分支条件扩为 `browser_driven 标记 or key == browser_any`——遗留伪来源没有该类标记（调度器靠它排除），但对话联网检索每次入口都不同（Tavily 检出什么抓什么），没有「来源配置可持久化」可言，是唯一合理载体；防御性读取 `entry_url`（`BrowserAnySource` 无该属性）；**仅此一条入口**：页面/定时/来源管理不生成这类任务（available_sources 仍然过滤它）
+- [x] **对话工具**：`ingest_policies` 加 `web_search: bool = False`——与 `source` / `browse_url` 互斥（给了就用那套，混传报错）、必须带 `keywords`（搜索词）；返回新增 `web_search{query, entry_url, entry_title, official_domain, alternatives}`；`official_domain=false` 且检索段已结束时 `next` 里前置提醒（提示词要求模型把这一点说给用户）
+- [x] **配置**：`Settings` 加 `tavily_api_key` / `tavily_max_results=10` / `tavily_timeout_seconds=15.0`（Settings 组，改 .env **需重启**；key 留空 = 该能力报「未配置」而不可用，不静默走别的路）；`.env.example` 在 MCP 段后新增 `TAVILY_*` 小节
+- [x] **提示词**：`prompts/chat.md` 两处——「抓取入库」工具条目写两种发起方式（指定来源 vs `web_search=true`，互斥）；「先查来源」节补「系统没覆盖该范围时，用户想查/抓就 web_search（official_domain=false 要如实说），想长期接入是另一件事要走接入工具」
+- [x] **文档镜像**：`docs/architecture/chat-agent.md`（Ingestion tools 下新增 web_search 条目，含伪来源准入与确认闸门不变两点）
+- [x] **冒烟脚本**：新增 `server/scripts/test_websearch.py`（联网段：契约实测 + official 标志与域名一致 + alternatives 形状；离线段：`_is_gov_domain` 断言；未配 key 打印 `SKIP:` 并给配置步骤，不算失败）
+- [x] **验证证据（静态）**：5 个改动/新增 Python 文件 `ast.parse` + `py_compile` 全通过；现有 venv `--no-sync` 只读核对：`_is_gov_domain` 断言、`Settings` 三字段读数（key 未配置 → `find_entry_url` 返回中文错误不抛）、`start_web_search_ingestion` 签名、工具 docstring 含 `web_search`；**未起服务、未连库、未跑 Tavily**（硬规则 1）
+- [x] **实机暴露缺陷修复（2026-10-23 首跑 task 248）**：首次实机跑通「web_search → 惠州市工信局官方栏目 → 浏览器收集 6 候选」，但**对话侧**被进度轮询烧穿 `GraphRecursionError`（`recursion_limit = 2×(browser_max_actions+4)=48`，浏览器可用时按动作预算给）：模型隔几秒 `inspect` 空查、中间还夹 `browser_wait` 等进度，每轮烧 agent→tools 两步。修法：`inspect` 加 `wait_seconds`（服务端**先等到停或 120s 上限**再返回视图，返回含 `wait.settled`，超时不是错误）；`_note_for_start` / `_inspect` 的 `next` 文案改成「带 `wait_seconds=60` 一次等到位，**不要**空查、**不要** browser_wait 等抓取」；`prompts/chat.md` 补「查进度的纪律」段。**流水线侧零改动**——task 248 本身照常停到了等确认；崩溃的只是对话轮次
+- [x] **改事件驱动等待（2026-10-23 第二轮实机反馈）**：「不做轮询、做钩子」——`repositories.py` 加**回调登记口** `on_task_settled(listener)`（依赖倒置：DB 层不 import 服务层，快照遍历、单监听异常不影响写库），在三个停态写入点广播：`await_task_confirmation`、`finish_task`、`fail_stale_tasks`（重启回收僵尸任务，**事务提交成功才广播**）；`services/ingestion.py` 挂 `_settled_events: dict[int, set[asyncio.Event]]`，`wait_for_settled` 重写为「先查一次（弥合广播早于登记的窗口）→ 挂 Event → 醒后**以 DB 为准**回结论」——挂起期间**零 SQL**（旧实现每 1.5s 查一次库），`_POLL_SECONDS` 删除；web_search 的 `start` 等待上限抬到 `WEB_SEARCH_START_WAIT_SECONDS=300`（事件驱动下挂着等不烧步数/SQL）。对话轮次烧光的旧账由上一轮的 `inspect(wait_seconds)` + 提示词纪律堵住，本轮把等待本身改成信号唤醒
+- [ ] **待实机验收**：① `cd server && uv run python scripts/test_websearch.py`（配好 key 后应打印 `OK: 联网检索冒烟通过`；未配 key 打印 `SKIP` 并指明加 `TAVILY_API_KEY` 到 .env 后重启）；② 重启 server（`TAVILY_*` + 确认 `.env.features` 的 `BROWSER_ENABLED=true`）→ `/agent` 说「帮我查一下清远市的政策，抓进库里」→ 模型应调用 `ingest_policies(action="start", web_search=true, keywords=["清远市"])`，步骤面板出现该工具，返回里 `entry_url` 是 qingyuan.gov.cn 系地址（`official_domain=true`）且任务停在等确认，任务日志源为「任意网站（无头浏览器）」；③ 官方域名缺席的场景（如某机构 Tavily 排不到 gov.cn）→ 回答里应出现「入口不是 .gov.cn 官方域名的提醒」；④ 未配 key 时同样的话 → 工具报错「未配置 TAVILY_API_KEY（.env 里加一行…）」，模型转述；⑤ `BROWSER_ENABLED=false` → 报「无头浏览器不可用」而非白烧一次 Tavily；⑥ 既有链路回归：指定 gov.cn 来源的普通入库不传 `web_search`，行为不变

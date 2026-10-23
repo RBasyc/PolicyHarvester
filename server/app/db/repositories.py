@@ -8,12 +8,40 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Callable
 from datetime import date
 from typing import Any, TypedDict
 
 from app.db.pool import get_pool
 
+logger = logging.getLogger(__name__)
+
 Row = dict[str, Any]
+
+# ── 任务「停下」信号（依赖倒置：DB 层不 import 服务层，谁在等谁来登记）───────
+# 任务写成停态（awaiting_confirmation / completed / failed）就广播一次；
+# 监听器失败绝不影响写库本身（try/except 记日志继续）。
+_settled_listeners: set[Callable[[int, str], None]] = set()
+
+
+def on_task_settled(listener: Callable[[int, str], None]) -> None:
+    """登记「任务停下」监听：`(task_id, status)` 会被同步回调（同一事件循环）。
+
+    运行中的任务**不**广播；重复停下（重跑再停）会再广播，监听器要自己幂等。
+    """
+    _settled_listeners.add(listener)
+
+
+def _fire_task_settled(task_id: int, status: str) -> None:
+    """快照遍历：监听器回调里若再登记/注销也不打断本轮。"""
+    for listener in tuple(_settled_listeners):
+        try:
+            listener(task_id, status)
+        except Exception:  # noqa: BLE001 - 通知失败不能影响任务本身
+            logger.exception(
+                "任务停下监听器执行失败（task_id=%s, status=%s）", task_id, status
+            )
 
 
 class PolicyRow(TypedDict, total=False):
@@ -454,6 +482,7 @@ async def await_task_confirmation(task_id: int, stage: str) -> None:
                 """,
                 (stage, task_id),
             )
+    _fire_task_settled(task_id, "awaiting_confirmation")
 
 
 async def discard_unselected_policies(task_id: int, keep_ids: list[int]) -> int:
@@ -497,7 +526,9 @@ async def finish_task(task_id: int, status: str, stage: str) -> Row | None:
                 """,
                 (status, stage, task_id),
             )
-            return await cur.fetchone()
+            row = await cur.fetchone()
+    _fire_task_settled(task_id, status)
+    return row
 
 
 async def fail_stale_tasks(reason: str) -> list[int]:
@@ -527,7 +558,11 @@ async def fail_stale_tasks(reason: str) -> list[int]:
                         """,
                         (task_id, reason),
                     )
-                return ids
+        if ids:
+            for task_id in ids:
+                # 事务提交成功才广播（重启后等服务侧等待方醒来能看到「已失败」）
+                _fire_task_settled(task_id, "failed")
+        return ids
 
 
 # ---------- 写：删除与清空 ----------
