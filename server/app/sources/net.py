@@ -349,6 +349,82 @@ async def fetch_text(
     return result
 
 
+async def _revalidate_hop(
+    client: "httpx.AsyncClient",
+    current: str,
+    *,
+    respect_robots: bool,
+    allow_private: bool,
+) -> str:
+    """每一跳的**主机安全复验**：robots.txt 支持 + 域名解析出的地址再查一次。
+
+    入口校验（`check_url`）用的是同步 DNS，域名解析结果在这条异步路径上可能已变；
+    真正的 TOCTOU 防护仍受限于 httpx 无法固定 peer 地址。返回主机名供限频用。
+    """
+    parsed = urlsplit(current)
+    host = parsed.hostname or ""
+    if respect_robots:
+        parser = await _robots_for(client, parsed.scheme, host)
+        if not _robots_allows(parser, current):
+            raise UnsafeURLError(f"robots.txt 不允许抓取：{current}")
+    if not allow_private:
+        for ip in await _resolve_host_async(host):
+            if _blocked_ip(ip):
+                raise UnsafeURLError(
+                    f"拒绝访问非公网地址：{host} → {ip}"
+                    "（确需抓内网站点请设 SOURCE_ALLOW_PRIVATE_HOSTS=true）"
+                )
+    return host
+
+
+def _redirect_next(
+    resp: "httpx.Response",
+    current: str,
+    redirects: int,
+    url: str,
+    *,
+    allowed_domains: list[str] | None,
+    allow_private: bool,
+) -> str:
+    """重定向跳：取 Location、限跳数、**逐跳复验**（协议 / 主机 / 白名单 / 公网地址）。
+    返回下一跳 URL（尚未赋给 `current`）。"""
+    location = resp.headers.get("location")
+    if not location:
+        raise FetchError(f"重定向缺少 Location：{current}")
+    if redirects + 1 > get_settings().source_fetch_max_redirects:
+        raise FetchError(f"重定向次数超过 {get_settings().source_fetch_max_redirects}：{url}")
+    nxt = urljoin(current, location)
+    return check_url(nxt, allowed_domains=allowed_domains, allow_private=allow_private)
+
+
+async def _read_response_body(
+    resp: "httpx.Response",
+    max_bytes: int,
+    redirects: int,
+) -> FetchResult:
+    """非重定向响应：流式读到体积上限为止，组装 `FetchResult`（text 留空待解码）。"""
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    async for chunk in resp.aiter_bytes():
+        total += len(chunk)
+        if total > max_bytes:
+            truncated = True
+            break
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    return FetchResult(
+        url=str(resp.url),
+        status=resp.status_code,
+        text="",
+        raw=raw,
+        content_type=resp.headers.get("content-type"),
+        bytes_len=len(raw),
+        truncated=truncated,
+        redirects=redirects,
+    )
+
+
 async def _fetch_raw(
     url: str,
     *,
@@ -357,7 +433,11 @@ async def _fetch_raw(
     max_bytes: int | None,
     respect_robots: bool | None,
 ) -> FetchResult:
-    """实际取数：逐跳重定向 + 每跳安全复验 + 限频 + 体积上限。"""
+    """实际取数：逐跳重定向 + 每跳安全复验 + 限频 + 体积上限。
+
+    每一跳的复验在 `_revalidate_hop`、重定向在 `_redirect_next`、读体在
+    `_read_response_body`；主循环只剩「复验 → 限频 → 请求 → 分派」四步。
+    """
     settings = get_settings()
     allow_private = settings.source_allow_private_hosts
     timeout = timeout if timeout else settings.source_fetch_timeout
@@ -374,58 +454,21 @@ async def _fetch_raw(
             trust_env=False,  # 内网/白名单地址不受 HTTP_PROXY 劫持（与 judge 同一口径）
         ) as client:
             while True:
-                parsed = urlsplit(current)
-                host = parsed.hostname or ""
-                if respect_robots:
-                    parser = await _robots_for(client, parsed.scheme, host)
-                    if not _robots_allows(parser, current):
-                        raise UnsafeURLError(f"robots.txt 不允许抓取：{current}")
-                # 域名解析出的地址在异步路径上再验一次（入口校验用的是同步 DNS，
-                # 解析结果可能已变；真正的 TOCTOU 防护仍受限于 httpx 无法固定 peer 地址）
-                if not allow_private:
-                    for ip in await _resolve_host_async(host):
-                        if _blocked_ip(ip):
-                            raise UnsafeURLError(
-                                f"拒绝访问非公网地址：{host} → {ip}"
-                                "（确需抓内网站点请设 SOURCE_ALLOW_PRIVATE_HOSTS=true）"
-                            )
+                host = await _revalidate_hop(
+                    client, current, respect_robots=respect_robots, allow_private=allow_private
+                )
                 await _throttle(host)
                 try:
                     async with client.stream("GET", current) as resp:
                         if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-                            location = resp.headers.get("location")
-                            if not location:
-                                raise FetchError(f"重定向缺少 Location：{current}")
-                            redirects += 1
-                            if redirects > settings.source_fetch_max_redirects:
-                                raise FetchError(f"重定向次数超过 {settings.source_fetch_max_redirects}：{url}")
-                            nxt = urljoin(current, location)
-                            # 逐跳复验：协议 / 主机 / 白名单 / 公网地址
-                            current = check_url(
-                                nxt, allowed_domains=allowed_domains, allow_private=allow_private
+                            current = _redirect_next(
+                                resp, current, redirects, url,
+                                allowed_domains=allowed_domains, allow_private=allow_private,
                             )
+                            redirects += 1
                             continue
                         if resp.status_code >= 400:
                             raise FetchError(f"HTTP {resp.status_code}：{current}")
-                        chunks: list[bytes] = []
-                        total = 0
-                        truncated = False
-                        async for chunk in resp.aiter_bytes():
-                            total += len(chunk)
-                            if total > max_bytes:
-                                truncated = True
-                                break
-                            chunks.append(chunk)
-                        raw = b"".join(chunks)
-                        return FetchResult(
-                            url=str(resp.url),
-                            status=resp.status_code,
-                            text="",
-                            raw=raw,
-                            content_type=resp.headers.get("content-type"),
-                            bytes_len=len(raw),
-                            truncated=truncated,
-                            redirects=redirects,
-                        )
+                        return await _read_response_body(resp, max_bytes, redirects)
                 except (httpx.HTTPError, OSError) as exc:
                     raise FetchError(f"抓取失败（{exc.__class__.__name__}: {exc}）：{current}") from exc

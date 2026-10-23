@@ -52,7 +52,11 @@ class JudgeBatch:
 
 
 async def judge_rows(rows: list[dict[str, Any]], *, instructions: str | None = None) -> JudgeBatch:
-    """批量判别候选篇目。未启用 / 空列表 → 空结果（不发请求）。
+    """批量判别候选篇目。laya 子开关关闭 / 未配 URL / 空列表 → 空结果（不发请求）。
+
+    **判别总开关（JUDGE_ENABLED）不在这里 gate**：本函数只是「调用 laya 服务」的薄封装，
+    保留给 scripts/test_judge.py 做提示词校准；「这次要不要打标签」由流水线调用点
+    `crawl_graph._judge_and_preflight` 统一决定。
 
     `instructions` 覆盖默认提示词（.env 的 JUDGE_INSTRUCTIONS），供 scripts/test_judge.py
     做提示词变体对比；生产路径不传、走配置。
@@ -60,7 +64,7 @@ async def judge_rows(rows: list[dict[str, Any]], *, instructions: str | None = N
     任何异常不抛出：该篇记 `JudgeVerdict(False, None)` 并计入 `failures`。
     """
     settings = get_settings()
-    if not settings.judge_enabled or not settings.judge_url or not rows:
+    if not settings.judge_laya_enabled or not settings.judge_url or not rows:
         return JudgeBatch()
 
     semaphore = asyncio.Semaphore(max(1, settings.judge_concurrency))

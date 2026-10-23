@@ -43,6 +43,7 @@ from app.db.repositories import PolicyRow
 from app.pipeline import judge
 from app.pipeline.extract import extract_policy, extract_policy_fields
 from app.pipeline.fulltext_clean import body_metrics, split_fulltext, strip_zero_width
+from app.schemas.policy import FulltextMeta
 from app.sources import SourceError, get_by_label
 from app.sources.base import PolicySource
 from app.sources.util import parse_date
@@ -164,6 +165,13 @@ async def fetch_node(state: PipelineState) -> dict:
         f"{n_lib} 篇已在成果库（置灰展示、默认不勾选）",
         tone="info",
     )
+    if judge_stats.get("tagging_disabled"):
+        await repo.add_task_log(
+            task_id,
+            "入库判别总开关已关闭（JUDGE_ENABLED=false）：本轮不写「建议/不建议入库」标注；"
+            f"正文预检已抓取 {judge_stats.get('preflight_checked', 0)} 篇用于回填日期/机关/文号",
+            tone="info",
+        )
     if not n_keep:
         await repo.add_task_log(
             task_id,
@@ -406,38 +414,49 @@ async def _judge_and_preflight(
     普通检索（逐页调用）与无头浏览器发现（收集完统一调用）共用这一处：两级筛选的
     顺序与口径必须一致，否则同一篇在不同入口会得到不同结论。
 
+    **判别总开关（`JUDGE_ENABLED`）在这里 gate**：关闭时不调用 laya、不写任何标签，
+    但仍走 `_preflight_bodies`——它还要抓详情页回填日期/机关/文号（确认面板依赖）。
+    标题判别的子开关（`JUDGE_LAYA_ENABLED`）由 `judge.judge_rows` 自己判断，这里是
+    「这次要不要打标」与「服务开没开」两层策略的分工。
+
     字段兼容两套条目形状：gov.cn 用 `issuing_agency` / `document_number`，
     浏览器 / 配置化来源用 `agency` / `doc_no`；URL 统一取 `url`。
     """
     if not items:
         return
-    batch = await judge.judge_rows(
-        [
-            {
-                "source_url": it.get("url"),
-                "title": it.get("title"),
-                "agency": it.get("issuing_agency") or it.get("agency"),
-                "doc_no": it.get("document_number") or it.get("doc_no"),
-            }
-            for it in items
-        ]
-    )
-    for it in items:
-        verdict = batch.verdicts.get(it.get("url"))
-        if verdict:
-            it["judge_tagged"] = verdict.tagged
-            it["judge_prob"] = verdict.prob
+    tagging = get_settings().judge_enabled
+    if tagging:
+        batch = await judge.judge_rows(
+            [
+                {
+                    "source_url": it.get("url"),
+                    "title": it.get("title"),
+                    "agency": it.get("issuing_agency") or it.get("agency"),
+                    "doc_no": it.get("document_number") or it.get("doc_no"),
+                }
+                for it in items
+            ]
+        )
+        for it in items:
+            verdict = batch.verdicts.get(it.get("url"))
+            if verdict:
+                it["judge_tagged"] = verdict.tagged
+                it["judge_prob"] = verdict.prob
+        if judge_stats is not None and batch.failures:
+            judge_stats["failures"] = judge_stats.get("failures", 0) + batch.failures
+    elif judge_stats is not None:
+        judge_stats["tagging_disabled"] = 1
     # laya 通过（含 fail-open）的再抓全文预检——图片版页面壳与薄壳转发通知
-    # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）
+    # 只有标题看不出来（2026-10-13 漏网两类，见 _preflight_bodies）。
+    # 总开关关闭时这里仍要跑：它负责回填日期/机关/文号，只是不写标签。
     await _preflight_bodies(
         source,
         [it for it in items if not it.get("judge_tagged")],
         mcp_timeout,
         judge_stats,
         overrides=overrides,
+        tagging_enabled=tagging,
     )
-    if judge_stats is not None and batch.failures:
-        judge_stats["failures"] = judge_stats.get("failures", 0) + batch.failures
 
 
 def _in_date_window(
@@ -546,6 +565,7 @@ async def _preflight_bodies(
     mcp_timeout: int,
     judge_stats: dict[str, int] | None,
     overrides: dict[str, Any] | None = None,
+    tagging_enabled: bool = True,
 ) -> None:
     """正文预检：laya 通过的候选抓全文，清洗后正文「不达标」的同样标「不建议入库」。
 
@@ -560,6 +580,9 @@ async def _preflight_bodies(
     结果只写回 item 的 `judge_tagged` / `judge_reason`（内存标注，落库与确认面板置灰走
     既有判别通道）；此时 `policy_document` 行还没插，全文不落盘，提取阶段照旧重抓。
     抓取失败按不达标处理并单独计数——抓不到正文 = 不该入库，但日志里要说清。
+
+    `tagging_enabled=False`（判别总开关关闭）时**只抓正文、回填元数据，不写任何标签**，
+    也不增加 `body_rejected` / `preflight_failed`——避免日志说「剔除」而库里没有标记。
 
     顺带**把详情页的发布日期 / 发文机关 / 文号写回条目**：配置化来源的列表页通常不带
     这些字段，不在这里补，结果表就要等提取阶段跑完才显示。这次抓取本来就要取详情页，
@@ -591,103 +614,162 @@ async def _preflight_bodies(
                 meta, clean = split_fulltext(result.body)
                 cjk, enders = body_metrics(clean)
                 imgs = result.image_count
-                # 配置化来源的列表轮通常不给日期/机构/文号：预检既然已经取回了详情页，
-                # 就把结构解析结果顺手写回条目。日期只在该来源声明「全文日期 = 发布日期」
-                # 时写（gov.cn 报的是成文日期，不能顶替）；已有值时不覆盖。
-                parsed_agency = strip_zero_width(result.issuer or "").strip() or strip_zero_width(
-                    meta.agency or ""
-                ).strip()
-                parsed_doc_no = strip_zero_width(result.doc_no or "").strip() or strip_zero_width(
-                    meta.doc_no or ""
-                ).strip()
-                if parsed_agency and not _item_field(it, "agency", "issuing_agency"):
-                    it["agency"] = parsed_agency
-                if parsed_doc_no and not _item_field(it, "doc_no", "document_number"):
-                    it["doc_no"] = parsed_doc_no
-                if source.fulltext_date_is_publish and result.date:
-                    # 列表日期可能来自错误的相关推荐/页脚；详情页的可见发布标签或
-                    # 页面发布元数据是更明确的信号，冲突时以详情页为准。
-                    list_date = parse_date(it.get("date"))
-                    detail_explicit = result.date_source in ("label", "meta")
-                    if list_date is None or detail_explicit:
-                        if list_date is not None and list_date != result.date:
-                            logger.info(
-                                "正文预检日期覆盖：列表=%s 详情=%s（%s，来源=%s）",
-                                list_date,
-                                result.date,
-                                it.get("url"),
-                                result.date_source,
-                            )
-                        it["date"] = result.date.isoformat()
-                        # 详情页结构解析/可见标签都是确定性值；确保不会被标记成模型提取。
-                        it["date_source"] = None
-
-                # 成文日期只作展示/元信息，绝不回填 publish_date（见
-                # `PolicySource.fulltext_date_is_publish` 与 docs/architecture/data-pipeline.md）。
-                # 详情页字段规则 / 正文落款任一命中即可；写回条目后由 `_to_policy_row`
-                # 合并进 metadata，确认面板才能在不提取的情况下显示「成文」日期。
-                if result.metadata:
-                    it["metadata"] = {
-                        **(it.get("metadata") or {}),
-                        **result.metadata,
-                    }
-                signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
-                signed = parse_date(signed_text) if signed_text else None
-                if signed is None and meta.signed_date:
-                    # 字段规则只给了年月/原文碎片时，用归档全文解析出的落款再兜一次。
-                    signed = parse_date(meta.signed_date)
-                if signed is not None:
-                    it["signed_date"] = signed.isoformat()
-
-                # 结构解析仍缺的字段：一次模型调用补齐（整页文本，日期/机构/文号常写在
-                # 正文容器外的页头）。补到的字段逐个标 'model'，前端显示「模型提取」。
-                need: list[str] = []
-                if source.fulltext_date_is_publish and not it.get("date"):
-                    need.append("publish_date")
-                if not _item_field(it, "agency", "issuing_agency"):
-                    need.append("agency")
-                if not _item_field(it, "doc_no", "document_number"):
-                    need.append("doc_no")
-                if need:
-                    extracted = await extract_policy_fields(
-                        title=str(it.get("title") or result.title or ""),
-                        text=result.page_text or result.body,
-                        url=url,
-                        fields=need,
-                        max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
-                        model_id=(overrides or {}).get("pipeline_model"),
-                    )
-                    if "publish_date" in need and extracted.publish_date:
-                        it["date"] = extracted.publish_date.isoformat()
-                        it["date_source"] = "model"
-                    if "agency" in need and extracted.agency:
-                        it["agency"] = extracted.agency
-                        it["agency_source"] = "model"
-                    if "doc_no" in need and extracted.doc_no:
-                        it["doc_no"] = extracted.doc_no
-                        it["doc_no_source"] = "model"
+                # 配置化来源的列表轮通常不给元信息：这本就要取详情页，顺手写回（见下）。
+                await _preflight_enrich_item(it, result, source, meta)
+                await _preflight_model_fill(it, result, source, url, overrides)
+                if judge_stats is not None:
+                    judge_stats["preflight_checked"] = judge_stats.get("preflight_checked", 0) + 1
             except Exception as exc:  # noqa: BLE001 - 单篇预检故障不能拖垮检索
-                logger.warning(
-                    "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
-                )
-                if judge_stats is not None:
-                    judge_stats["preflight_failed"] = judge_stats.get("preflight_failed", 0) + 1
-                it["judge_tagged"] = True
-                it["judge_prob"] = None
-                it["judge_reason"] = "预检抓取失败"
+                if tagging_enabled:
+                    logger.warning(
+                        "正文预检抓取失败（%s）——《%s》按不建议入库处理", exc, it.get("title")
+                    )
+                    if judge_stats is not None:
+                        judge_stats["preflight_failed"] = judge_stats.get("preflight_failed", 0) + 1
+                    it["judge_tagged"] = True
+                    it["judge_prob"] = None
+                    it["judge_reason"] = "预检抓取失败"
+                else:
+                    logger.info(
+                        "正文预检抓取失败（%s）——《%s》；判别总开关已关闭，不标注",
+                        exc,
+                        it.get("title"),
+                    )
                 return
-            if (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders):
-                it["judge_tagged"] = True
-                it["judge_prob"] = None
-                it["judge_reason"] = "图片版（正文为页面壳）" if imgs else "正文过短（薄壳/附件版）"
-                if judge_stats is not None:
-                    judge_stats["body_rejected"] = judge_stats.get("body_rejected", 0) + 1
+            if _preflight_thin(it, cjk, enders, imgs, min_cjk, min_enders, tagging_enabled, judge_stats):
                 logger.info(
                     "正文预检剔除《%s》：cjk=%d enders=%d imgs=%d（阈值 %d/%d）",
                     it.get("title"), cjk, enders, imgs, min_cjk, min_enders,
                 )
 
     await asyncio.gather(*(one(it) for it in items))
+
+
+def _preflight_enrich_item(
+    it: dict[str, Any],
+    result: FulltextResult,
+    source: PolicySource,
+    meta: FulltextMeta,
+) -> None:
+    """预检抓回详情页后，把结构解析到的元信息**顺手写回条目**（不增加任何请求）。
+
+    配置化来源的列表轮通常不给日期/机构/文号：不在这里补，结果表就要等提取阶段跑完
+    才显示。日期只在该来源声明「全文日期 = 发布日期」时写（gov.cn 报的是成文日期，
+    不能顶替）；已有值时不覆盖。
+    """
+    # 详情页 agencies/doc_no 回流（统一键名优先，可信度高于列表轮）
+    parsed_agency = strip_zero_width(result.issuer or "").strip() or strip_zero_width(
+        meta.agency or ""
+    ).strip()
+    parsed_doc_no = strip_zero_width(result.doc_no or "").strip() or strip_zero_width(
+        meta.doc_no or ""
+    ).strip()
+    if parsed_agency and not _item_field(it, "agency", "issuing_agency"):
+        it["agency"] = parsed_agency
+    if parsed_doc_no and not _item_field(it, "doc_no", "document_number"):
+        it["doc_no"] = parsed_doc_no
+    if source.fulltext_date_is_publish and result.date:
+        # 列表日期可能来自错误的相关推荐/页脚；详情页的可见发布标签或
+        # 页面发布元数据是更明确的信号，冲突时以详情页为准。
+        list_date = parse_date(it.get("date"))
+        detail_explicit = result.date_source in ("label", "meta")
+        if list_date is None or detail_explicit:
+            if list_date is not None and list_date != result.date:
+                logger.info(
+                    "正文预检日期覆盖：列表=%s 详情=%s（%s，来源=%s）",
+                    list_date,
+                    result.date,
+                    it.get("url"),
+                    result.date_source,
+                )
+            it["date"] = result.date.isoformat()
+            # 详情页结构解析/可见标签都是确定性值；确保不会被标记成模型提取。
+            it["date_source"] = None
+
+    # 成文日期只作展示/元信息，绝不回填 publish_date（见
+    # `PolicySource.fulltext_date_is_publish` 与 docs/architecture/data-pipeline.md）。
+    # 详情页字段规则 / 正文落款任一命中即可；写回条目后由 `_to_policy_row`
+    # 合并进 metadata，确认面板才能在不提取的情况下显示「成文」日期。
+    if result.metadata:
+        it["metadata"] = {
+            **(it.get("metadata") or {}),
+            **result.metadata,
+        }
+    signed_text = (result.metadata or {}).get("signed_date") or meta.signed_date
+    signed = parse_date(signed_text) if signed_text else None
+    if signed is None and meta.signed_date:
+        # 字段规则只给了年月/原文碎片时，用归档全文解析出的落款再兜一次。
+        signed = parse_date(meta.signed_date)
+    if signed is not None:
+        it["signed_date"] = signed.isoformat()
+
+
+async def _preflight_model_fill(
+    it: dict[str, Any],
+    result: FulltextResult,
+    source: PolicySource,
+    url: str,
+    overrides: dict[str, Any] | None,
+) -> None:
+    """结构解析仍缺的字段：一次模型调用补齐（整页文本，日期/机构/文号常写在
+    正文容器外的页头）。补到的字段逐个标 'model'，前端显示「模型提取」。"""
+    need: list[str] = []
+    if source.fulltext_date_is_publish and not it.get("date"):
+        need.append("publish_date")
+    if not _item_field(it, "agency", "issuing_agency"):
+        need.append("agency")
+    if not _item_field(it, "doc_no", "document_number"):
+        need.append("doc_no")
+    if need:
+        extracted = await extract_policy_fields(
+            title=str(it.get("title") or result.title or ""),
+            text=result.page_text or result.body,
+            url=url,
+            fields=need,
+            max_text_chars=_effective(overrides, "pipeline_max_body_chars"),
+            model_id=(overrides or {}).get("pipeline_model"),
+        )
+        if "publish_date" in need and extracted.publish_date:
+            it["date"] = extracted.publish_date.isoformat()
+            it["date_source"] = "model"
+        if "agency" in need and extracted.agency:
+            it["agency"] = extracted.agency
+            it["agency_source"] = "model"
+        if "doc_no" in need and extracted.doc_no:
+            it["doc_no"] = extracted.doc_no
+            it["doc_no_source"] = "model"
+
+
+def _preflight_thin(
+    it: dict[str, Any],
+    cjk: int,
+    enders: int,
+    imgs: int,
+    min_cjk: int,
+    min_enders: int,
+    tagging_enabled: bool,
+    judge_stats: dict[str, int] | None,
+) -> bool:
+    """正文阈值不达标 → 按「不建议入库」标注（返回 True 时调用方只补一条日志）。
+
+    `tagging_enabled=False`（判别总开关关闭）时只记录、不写任何标签——避免日志说
+    「剔除」而库里没有标记。
+    """
+    rejected = (min_cjk > 0 and cjk < min_cjk) or (min_enders > 0 and enders < min_enders)
+    if not rejected:
+        return False
+    if not tagging_enabled:
+        logger.info(
+            "正文预检发现正文偏薄《%s》：cjk=%d enders=%d imgs=%d；判别总开关已关闭，不标注",
+            it.get("title"), cjk, enders, imgs,
+        )
+        return False
+    it["judge_tagged"] = True
+    it["judge_prob"] = None
+    it["judge_reason"] = "图片版（正文为页面壳）" if imgs else "正文过短（薄壳/附件版）"
+    if judge_stats is not None:
+        judge_stats["body_rejected"] = judge_stats.get("body_rejected", 0) + 1
+    return True
 
 
 def _item_field(item: dict[str, Any], *keys: str) -> str | None:

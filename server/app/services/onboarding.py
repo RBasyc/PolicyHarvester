@@ -691,40 +691,23 @@ async def dry_run_ingestion(
     `passed`（可进入注册）/ `failed`（配置或站点结构不符，需调整）/ `blocked`（当前
     环境或站点不允许，需人工/换途径）。
     """
-    built = generate_config(payload)
-    if not built["ok"]:
-        return {
-            "ok": False,
-            "kind": "failed",
-            "status": _STATUS_FAILED,
-            "error": "配置未通过可执行性校验：" + "；".join(built["problems"]),
-            "problems": built["problems"],
-        }
-    config = SourceConfig.model_validate(built["config"])
-    if config.engine == "browser_driven":
-        # 防御：无头浏览器来源的验收在「保存为无头来源」端点完成（真浏览器轻量校验 +
-        # dry_run passed 凭据），这条静态试运行链路对它没有意义（没有入口可探）。
-        return {
-            "ok": False,
-            "kind": "failed",
-            "status": _STATUS_FAILED,
-            "error": "browser_driven（无头浏览器）来源不走静态试运行验收：它的验收在"
-            "保存时已完成（真浏览器打开入口页）；如需复核请用来源卡片上的「试运行」",
-        }
+    prepared = _prepare_dry_run_config(payload)
+    if isinstance(prepared, dict):
+        return prepared
+    config = prepared
     run_id = await _open_run(
         "dry_run", source_key=source_key or config.key, source_id=None,
         payload={"key": config.key, "limit": limit, "pages": pages, "keywords": keywords or []},
     )
 
     # 临时装进注册表：下面的检索链路按 label 解析来源，必须先能解析到
-    try:
-        register_configured(config, replace=True)
-    except Exception as exc:  # noqa: BLE001
+    load_error = _register_dry_run_source(config)
+    if load_error is not None:
         return {
             "ok": False,
             "kind": "failed",
             "status": _STATUS_FAILED,
-            "error": f"配置无法装载：{exc}",
+            "error": f"配置无法装载：{load_error}",
             "run_id": run_id,
         }
 
@@ -740,66 +723,15 @@ async def dry_run_ingestion(
     untested: list[str] = []
     limits: list[str] = []
 
-    from app.pipeline.crawl_graph import PipelineError, _search_policies
-    from app.db import repositories as repo
+    library, library_note = await _load_library_urls()
+    if library_note:
+        untested.append(library_note)
 
-    try:
-        library: set[str] = await repo.fetch_library_urls()
-    except Exception as exc:  # noqa: BLE001 - 数据库不可用时「已在库」这项测不了
-        library = set()
-        untested.append(f"成果库去重比对（数据库不可用：{exc}）")
-
-    overrides = {
-        "source": config.label,
-        "pipeline_per_keyword_limit": max(limit, 5),
-        "pipeline_mcp_timeout": int(get_settings().source_fetch_timeout),
-    }
-    judge_stats: dict[str, int] = {}
-    try:
-        items = await _search_policies(
-            list(keywords or []),
-            date_from,
-            date_to,
-            None,
-            None,
-            overrides=overrides,
-            exclude_urls=set(),
-            library_urls=library,
-            target_new=None,
-            judge_stats=judge_stats,
-        )
-        search_error = None
-    except PipelineError as exc:
-        items = []
-        search_error = str(exc)
-    except Exception as exc:  # noqa: BLE001
-        items = []
-        search_error = f"检索链路异常：{exc}"
-
+    items, judge_stats, search_error = await _dry_run_search(
+        config, keywords, date_from, date_to, limit, library
+    )
     if search_error:
-        blocked = _blocked_reason(search_error)
-        report.update(
-            {
-                "status": _STATUS_BLOCKED if blocked else _STATUS_FAILED,
-                "search_error": search_error,
-                "criteria": criteria,
-            }
-        )
-        _cleanup_draft(config.key, passed=False)
-        await _close_run(
-            run_id,
-            status=report["status"],
-            summary={"search_error": search_error},
-            report=report,
-            failure_reason=search_error,
-        )
-        return {
-            **report,
-            "ok": False,
-            "kind": "blocked" if blocked else "failed",
-            "run_id": run_id,
-            "error": search_error,
-        }
+        return await _search_failure_response(report, run_id, config, search_error, criteria)
 
     # 检索型入口的探测关键词：优先用本次试运行给的关键词（就是要抓的那些词），
     # 没给就用一个通用词——**只为验证「检索页取回来能解析出条目」**，与内容相关性无关。
@@ -814,109 +746,16 @@ async def dry_run_ingestion(
         config, date_from, date_to, keyword=probe_keyword
     )
 
-    # 失败归因（2026-10-20）：所有入口取回的都是疑似 JS 渲染空壳 → 不是配置写错，是
-    # 静态引擎（html_list）根本拿不到内容。给出明确的换引擎建议，别让用户在配置里瞎调。
-    render_suggestion = None
-    if (
-        config.engine == "html_list"
-        and per_entry
-        and all(row.get("items") == 0 for row in per_entry)
-        and any(row.get("js_shell") for row in per_entry)
-    ):
-        render_suggestion = (
-            "所有入口取回的都是疑似 JS 渲染空壳（可见文本极少、内容在前端填充）："
-            "静态引擎 html_list 抓不到内容，这不是配置写错。改用无头浏览器来源"
-            "（engine=browser_driven：入口页 + 抓取目标，无选择器配置）——页面导入的"
-            "失败条目上点「启用无头抓取模式」即可，对话接入用 generate_source_config "
-            "写 engine=\"browser_driven\"（需 BROWSER_ENABLED=true 且已安装 playwright）"
-        )
-        report["suggestion"] = render_suggestion
+    # 失败归因（换引擎建议 / 受阻判定）交给 `_entry_block_reason`，细节见其注释。
+    render_suggestion, blocked = _entry_block_reason(report, config, per_entry, entry_errors)
+    if blocked:
+        return await _entry_block_response(report, run_id, config, blocked, per_entry, criteria)
 
-    # 全部入口都失败，且失败原因是「访问控制 / 安全策略」→ 报受阻而不是失败：
-    # 这类问题不是配置写错，而是站点不允许，按接入规范不绕过（第七节硬要求）。
-    if per_entry and entry_errors and all(row["items"] == 0 for row in per_entry):
-        blocked = next((r for r in (_blocked_reason(e) for e in entry_errors) if r), None)
-        if blocked:
-            report.update(
-                {
-                    "status": _STATUS_BLOCKED,
-                    "reason": blocked,
-                    "criteria": criteria,
-                    "entrypoints": per_entry,
-                    "search_error": None,
-                }
-            )
-            _cleanup_draft(config.key, passed=False)
-            await _close_run(
-                run_id,
-                status=_STATUS_BLOCKED,
-                summary={"reason": blocked},
-                report=report,
-                failure_reason=blocked,
-            )
-            return {**report, "ok": False, "kind": "blocked", "run_id": run_id, "error": blocked}
-
-    # 栏目入口与检索型入口分开算：检索入口的条数取决于探测关键词在站点索引里的命中数，
-    # 拿它一起去 min 会让一个 0 命中的检索入口把判据 1「栏目列表都取到条目」判成失败。
-    list_rows = [row for row in per_entry if row.get("kind") != "search"]
-    search_rows = [row for row in per_entry if row.get("kind") == "search"]
-    min_items = min((row["items"] for row in list_rows), default=0)
-    if list_rows:
-        criteria.append(
-            _criterion(
-                "列表发现",
-                f"每个栏目入口第 1 页 ≥ 1 条（共 {len(list_rows)} 个栏目入口）",
-                f"最少 {min_items} 条",
-                passed=min_items >= 1,
-                hard=True,
-                # 空壳归因优先于逐条取数错误——换引擎才是正解，逐条错误只是表象
-                note=render_suggestion or "；".join(entry_errors) or None,
-            )
-        )
-    else:
-        untested.append("列表发现（这份配置只有检索型入口，没有栏目列表页可探）")
-
-    # 检索型入口单独判：它取回来的条数取决于**探测关键词在站点索引里有多少命中**，
-    # 所以「有条目」才算这个入口是活的。用本次试运行自己的关键词探测时是硬判据
-    # （用户就是要用这些词抓）；用通用探测词时是软判据——那个词在站点里可能本来就 0 命中。
-    if search_rows:
-        worst = min(row["items"] for row in search_rows)
-        criteria.append(
-            _criterion(
-                "站内检索入口",
-                f"检索型入口用关键词探测时第 1 页 ≥ 1 条（共 {len(search_rows)} 个）",
-                f"最少 {worst} 条（探测关键词「{probe_keyword}」）",
-                passed=worst >= 1,
-                hard=bool(given_keyword),
-                note=(
-                    "；".join(
-                        f"{row['name']}：{row['error']}" for row in search_rows if row.get("error")
-                    )
-                    or "关键词确实送进了站点检索接口（URL 见 entrypoints[].url）"
-                ),
-            )
-        )
-        if not given_keyword:
-            untested.append(
-                f"站内检索入口只用通用探测词「{probe_keyword}」验证过，"
-                "未用你实际要抓的关键词跑一遍（正式抓取时才会用）"
-            )
-
-    # ---- 判据 2：检索链路产出（扇出 + 条目标过滤 + 去重后） ----
-    criteria.append(
-        _criterion(
-            "检索链路产出",
-            "扇出检索后至少剩 1 条可用条目",
-            f"{len(items)} 条",
-            passed=bool(items),
-            hard=True,
-            note=(
-                f"判别剔除 {judge_stats.get('body_rejected', 0)} 条（正文预检）"
-                f"／{sum(1 for i in items if i.get('judge_tagged'))} 条（已标注）"
-                if judge_stats else None
-            ),
-        )
+    _criteria_entry_discovery(
+        criteria, untested, per_entry, entry_errors, render_suggestion,
+        given_keyword, probe_keyword,
     )
+    _criteria_search_output(criteria, items, judge_stats)
 
     # ---- 判据 3：正文完整性（逐篇真实取详情页） ----
     index = {str(item.get("url") or "").strip(): item for item in items}
@@ -925,93 +764,15 @@ async def dry_run_ingestion(
     details = [
         await _probe_detail(index[url], config) for url in sample_urls
     ]
-    body_ok = sum(1 for row in details if row["body_ok"])
-    body_ratio = body_ok / max(1, len(details))
-    criteria.append(
-        _criterion(
-            "正文完整性",
-            f"抽样 {len(details)} 篇中正文达标（CJK ≥ {config.detail.min_body_chars} 且句末 ≥ {_MIN_SENT_ENDERS}）的比例 ≥ {_BODY_PASS_RATIO:.0%}",
-            f"{body_ok}/{len(details)} = {body_ratio:.0%}",
-            passed=bool(details) and body_ratio >= _BODY_PASS_RATIO,
-            hard=True,
-        )
-    )
-    if len(details) < _MIN_SAMPLES_FOR_BODY:
-        untested.append(
-            f"正文完整性只有 {len(details)} 篇样本（< {_MIN_SAMPLES_FOR_BODY} 篇），结论为初步"
-        )
+    _criteria_body_integrity(criteria, untested, details, config)
 
     # ---- 判据 4：元信息命中率（软判据：取不到就如实报低，不算失败） ----
-    date_hit = sum(1 for row in details if row["date"]) / max(1, len(details))
-    agency_hit = sum(1 for row in details if row["agency"]) / max(1, len(details))
-    # 抽样日期**值**恒定 = 假命中：日期候选多半取到了页脚/模板里那个固定日期，命中率再高也没用
-    # （2026-10-15 用户报的「其他来源的日期一直是 3 月 20 日」就是这样一路绿灯进来的）。
-    sampled_dates = sorted({str(row["date"]) for row in details if row["date"]})
-    same_date_note = (
-        f"⚠ 抽样 {len(details)} 篇的发布日期**全部相同**（{sampled_dates[0]}）：疑似取到了"
-        "页脚/模板元素，命中率高不代表取对了——请逐篇核对 detail.date_selectors"
-        if len(details) >= 2 and len(sampled_dates) == 1
-        else None
-    )
-    criteria.append(
-        _criterion(
-            "详情页日期命中率",
-            f"≥ {_DATE_HIT_RATIO:.0%}",
-            f"{date_hit:.0%}",
-            passed=date_hit >= _DATE_HIT_RATIO,
-            hard=False,
-            note=(
-                same_date_note
-                or "缺日期的条目在时间窗口生效时会按配置决定去留（drop_undated_when_windowed）"
-            ),
-        )
-    )
-    if same_date_note:
-        limits.append(same_date_note)
-    criteria.append(
-        _criterion(
-            "详情页机构命中率",
-            f"≥ {_AGENCY_HIT_RATIO:.0%}",
-            f"{agency_hit:.0%}",
-            passed=agency_hit >= _AGENCY_HIT_RATIO,
-            hard=False,
-            note="机构取不到通常是该站详情页没有固定字段，需要补 agency_selectors",
-        )
-    )
+    _criteria_detail_hits(criteria, limits, details)
 
-    # ---- 判据 5：翻页（配置声明了翻页就必须真的能翻） ----
-    paginated = [ep for ep in config.entrypoints if ep.pagination.kind != "none"]
-    if not paginated:
-        untested.append("翻页（配置为单页模式，未声明翻页规则）")
-    else:
-        page2 = await _probe_page2(config, date_from, date_to, keyword=probe_keyword)
-        criteria.append(
-            _criterion(
-                "翻页可用性",
-                "声明翻页的入口第 2 页能取到且不是第 1 页的重复",
-                page2["detail"],
-                passed=page2["passed"],
-                hard=True,
-                note=page2["note"],
-            )
-        )
-
-    # ---- 判据 5b：单页入场的召回边界（软性，只如实说清楚，不做拦截） ----
-    # 「单页」过去是静默默认值，这条路上没有任何环节会说出来，于是「抓了 N 篇就不动了」
-    # 无法与「站点就这么多」区分。这里逐个点名，并带上组装阶段写好的入口备注（如有）。
-    single_page = [
-        ep for ep in config.entrypoints if ep.pagination.kind == "none" and not ep.is_search
-    ]
-    if single_page:
-        limits.append(
-            f"有 {len(single_page)} 个入口声明为单页（{'、'.join(ep.name for ep in single_page)}）："
-            "只取第 1 页。页内命名区域的预览块默认如此——若该栏目其实有更多页，"
-            "召回会被截断（组装阶段已用页面证据核对过，能补的翻页规则已补上）"
-        )
-    for ep in config.entrypoints:
-        note = (ep.notes or "").strip()
-        if note:
-            limits.append(f"入口「{ep.name}」备注：{note}")
+    # ---- 判据 5：翻页 / 判据 5b：单页入场的召回边界 ----
+    await _criteria_pagination(
+        criteria, untested, limits, config, date_from, date_to, probe_keyword
+    )
 
     # ---- 判据 6：去重 ----
     criteria.append(
@@ -1025,47 +786,9 @@ async def dry_run_ingestion(
     )
 
     # ---- 判据 7：来源标识与原始证据（结构性检查 + 附件探测） ----
-    attachments = [
-        (row["url"], attachment)
-        for row in details
-        for attachment in row["attachments"]
-    ]
-    criteria.append(
-        _criterion(
-            "来源可追溯",
-            "每条都带原始 URL 与来源标识",
-            f"{len(details)} 篇均带 source_url",
-            passed=all(row["url"] for row in details),
-            hard=True,
-            note="落库时 source_name = 来源展示名，fetched_by = html_list:<key>",
-        )
+    probed_attachments = await _criteria_traceability(
+        criteria, untested, limits, config, details, run_id
     )
-    # 探测上限取 `min(常量, SOURCE_MAX_ARTIFACTS_PER_RUN)`：试运行只抽查可达性，不是全量归档。
-    # 这个值同时决定**报告里列出哪几个附件**——报告必须与真实探测范围一致（见下方 attachments_probed）。
-    probe_cap = max(1, min(_MAX_ATTACHMENT_PROBE, get_settings().source_max_artifacts_per_run))
-    probed_attachments = attachments[:probe_cap]
-    if not attachments:
-        untested.append("附件可达性（抽样页面未发现附件）")
-        limits.append("本次抽样未发现附件，附件链路未验证")
-    else:
-        probes = await _probe_attachments(config, probed_attachments, run_id)
-        ok_count = sum(1 for row in probes if row["ok"])
-        ratio = ok_count / max(1, len(probes))
-        criteria.append(
-            _criterion(
-                "附件可达性",
-                f"抽查 {len(probes)} 个附件可达率 ≥ {_ATTACHMENT_PASS_RATIO:.0%}",
-                f"{ok_count}/{len(probes)} = {ratio:.0%}",
-                passed=ratio >= _ATTACHMENT_PASS_RATIO,
-                hard=False,
-                note="可达性只验证「能取回」，附件正文（PDF/OFD 文字）本轮不解析",
-            )
-        )
-        limits.append("附件只做了可达性与归档验证，未做正文抽取（PDF/OFD 文字提取为已知缺口）")
-        if len(attachments) > len(probes):
-            limits.append(
-                f"抽样页共发现 {len(attachments)} 个附件，只抽查了 {len(probes)} 个（其余未验证）"
-            )
 
     # ---- 覆盖范围限制（必须写清楚这次**没**验证什么） ----
     limits.extend(
@@ -1112,6 +835,429 @@ async def dry_run_ingestion(
         "run_id": run_id,
         "error": None if status == _STATUS_PASSED else "验收未通过：" + "；".join(c["name"] for c in hard_failed),
     }
+
+
+def _prepare_dry_run_config(payload: dict[str, Any]) -> "SourceConfig | dict[str, Any]":
+    """试运行前置：生成 + 校验配置。合法时返回 `SourceConfig`，否则直接给失败响应。"""
+    built = generate_config(payload)
+    if not built["ok"]:
+        return {
+            "ok": False,
+            "kind": "failed",
+            "status": _STATUS_FAILED,
+            "error": "配置未通过可执行性校验：" + "；".join(built["problems"]),
+            "problems": built["problems"],
+        }
+    config = SourceConfig.model_validate(built["config"])
+    if config.engine == "browser_driven":
+        # 防御：无头浏览器来源的验收在「保存为无头来源」端点完成（真浏览器轻量校验 +
+        # dry_run passed 凭据），这条静态试运行链路对它没有意义（没有入口可探）。
+        return {
+            "ok": False,
+            "kind": "failed",
+            "status": _STATUS_FAILED,
+            "error": "browser_driven（无头浏览器）来源不走静态试运行验收：它的验收在"
+            "保存时已完成（真浏览器打开入口页）；如需复核请用来源卡片上的「试运行」",
+        }
+    return config
+
+
+def _register_dry_run_source(config: SourceConfig) -> str | None:
+    """把配置临时装进进程内注册表。装载失败时返回错误信息，成功返回 None。"""
+    try:
+        register_configured(config, replace=True)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    return None
+
+
+async def _load_library_urls() -> tuple[set[str], str | None]:
+    """成果库 URL 集（用于「已在库」比对）。数据库不可用时返回空集 + 未测试说明。"""
+    from app.db import repositories as repo
+
+    try:
+        return await repo.fetch_library_urls(), None
+    except Exception as exc:  # noqa: BLE001 - 数据库不可用时「已在库」这项测不了
+        return set(), f"成果库去重比对（数据库不可用：{exc}）"
+
+
+async def _dry_run_search(
+    config: SourceConfig,
+    keywords: list[str] | None,
+    date_from: date | None,
+    date_to: date | None,
+    limit: int,
+    library: set[str],
+) -> tuple[list[dict[str, Any]], dict[str, int], str | None]:
+    """走正式抓取的检索编排 `_search_policies`（与流水线同一套扇出/预检/去重）。
+
+    返回 `(条目, 判别统计, 检索错误信息或 None)`——检索炸了不抛，让调用方按受阻/失败收尾。
+    """
+    from app.pipeline.crawl_graph import PipelineError, _search_policies
+
+    overrides = {
+        "source": config.label,
+        "pipeline_per_keyword_limit": max(limit, 5),
+        "pipeline_mcp_timeout": int(get_settings().source_fetch_timeout),
+    }
+    judge_stats: dict[str, int] = {}
+    try:
+        items = await _search_policies(
+            list(keywords or []),
+            date_from,
+            date_to,
+            None,
+            None,
+            overrides=overrides,
+            exclude_urls=set(),
+            library_urls=library,
+            target_new=None,
+            judge_stats=judge_stats,
+        )
+        return items, judge_stats, None
+    except PipelineError as exc:
+        return [], judge_stats, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return [], judge_stats, f"检索链路异常：{exc}"
+
+
+async def _search_failure_response(
+    report: dict[str, Any],
+    run_id: int | None,
+    config: SourceConfig,
+    search_error: str,
+    criteria: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """检索链路炸了 → 按受阻/失败收尾（清草稿、关 run），报告里如实记录错误。"""
+    blocked = _blocked_reason(search_error)
+    report.update(
+        {
+            "status": _STATUS_BLOCKED if blocked else _STATUS_FAILED,
+            "search_error": search_error,
+            "criteria": criteria,
+        }
+    )
+    _cleanup_draft(config.key, passed=False)
+    await _close_run(
+        run_id,
+        status=report["status"],
+        summary={"search_error": search_error},
+        report=report,
+        failure_reason=search_error,
+    )
+    return {
+        **report,
+        "ok": False,
+        "kind": "blocked" if blocked else "failed",
+        "run_id": run_id,
+        "error": search_error,
+    }
+
+
+def _entry_block_reason(
+    report: dict[str, Any],
+    config: SourceConfig,
+    per_entry: list[dict[str, Any]],
+    entry_errors: list[str],
+) -> tuple[str | None, str | None]:
+    """入口探测后的失败归因。返回 `(换引擎建议, 受阻原因)`。
+
+    ① 所有入口取回的都是疑似 JS 渲染空壳 → 不是配置写错，是静态引擎（html_list）根本
+    拿不到内容，给出明确的换引擎建议（建议写进 report["suggestion"]）；
+    ② 全部入口都失败，且失败原因是「访问控制 / 安全策略」→ 报受阻而不是失败：这类问题
+    不是配置写错，而是站点不允许，按接入规范不绕过（第七节硬要求）。
+    """
+    render_suggestion = None
+    if (
+        config.engine == "html_list"
+        and per_entry
+        and all(row.get("items") == 0 for row in per_entry)
+        and any(row.get("js_shell") for row in per_entry)
+    ):
+        render_suggestion = (
+            "所有入口取回的都是疑似 JS 渲染空壳（可见文本极少、内容在前端填充）："
+            "静态引擎 html_list 抓不到内容，这不是配置写错。改用无头浏览器来源"
+            "（engine=browser_driven：入口页 + 抓取目标，无选择器配置）——页面导入的"
+            "失败条目上点「启用无头抓取模式」即可，对话接入用 generate_source_config "
+            "写 engine=\"browser_driven\"（需 BROWSER_ENABLED=true 且已安装 playwright）"
+        )
+        report["suggestion"] = render_suggestion
+
+    if not (per_entry and entry_errors and all(row["items"] == 0 for row in per_entry)):
+        return render_suggestion, None
+    blocked = next((r for r in (_blocked_reason(e) for e in entry_errors) if r), None)
+    return render_suggestion, blocked
+
+
+async def _entry_block_response(
+    report: dict[str, Any],
+    run_id: int | None,
+    config: SourceConfig,
+    blocked: str,
+    per_entry: list[dict[str, Any]],
+    criteria: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """全部入口被访问控制拦下 → 受阻收尾（清草稿、关 run），不判配置失败。"""
+    report.update(
+        {
+            "status": _STATUS_BLOCKED,
+            "reason": blocked,
+            "criteria": criteria,
+            "entrypoints": per_entry,
+            "search_error": None,
+        }
+    )
+    _cleanup_draft(config.key, passed=False)
+    await _close_run(
+        run_id,
+        status=_STATUS_BLOCKED,
+        summary={"reason": blocked},
+        report=report,
+        failure_reason=blocked,
+    )
+    return {**report, "ok": False, "kind": "blocked", "run_id": run_id, "error": blocked}
+
+
+def _criteria_entry_discovery(
+    criteria: list[dict[str, Any]],
+    untested: list[str],
+    per_entry: list[dict[str, Any]],
+    entry_errors: list[str],
+    render_suggestion: str | None,
+    given_keyword: str | None,
+    probe_keyword: str | None,
+) -> None:
+    """判据 1：列表发现。栏目入口与检索型入口分开算——检索入口的条数取决于探测关键词
+    在站点索引里的命中数，拿它一起去 min 会让一个 0 命中的检索入口把「栏目列表都取到
+    条目」判成失败。"""
+
+    list_rows = [row for row in per_entry if row.get("kind") != "search"]
+    search_rows = [row for row in per_entry if row.get("kind") == "search"]
+    min_items = min((row["items"] for row in list_rows), default=0)
+    if list_rows:
+        criteria.append(
+            _criterion(
+                "列表发现",
+                f"每个栏目入口第 1 页 ≥ 1 条（共 {len(list_rows)} 个栏目入口）",
+                f"最少 {min_items} 条",
+                passed=min_items >= 1,
+                hard=True,
+                # 空壳归因优先于逐条取数错误——换引擎才是正解，逐条错误只是表象
+                note=render_suggestion or "；".join(entry_errors) or None,
+            )
+        )
+    else:
+        untested.append("列表发现（这份配置只有检索型入口，没有栏目列表页可探）")
+
+    # 检索型入口单独判：它取回来的条数取决于**探测关键词在站点索引里有多少命中**，
+    # 所以「有条目」才算这个入口是活的。用本次试运行自己的关键词探测时是硬判据
+    # （用户就是要用这些词抓）；用通用探测词时是软判据——那个词在站点里可能本来就 0 命中。
+    if search_rows:
+        worst = min(row["items"] for row in search_rows)
+        criteria.append(
+            _criterion(
+                "站内检索入口",
+                f"检索型入口用关键词探测时第 1 页 ≥ 1 条（共 {len(search_rows)} 个）",
+                f"最少 {worst} 条（探测关键词「{probe_keyword}」）",
+                passed=worst >= 1,
+                hard=bool(given_keyword),
+                note=(
+                    "；".join(
+                        f"{row['name']}：{row['error']}" for row in search_rows if row.get("error")
+                    )
+                    or "关键词确实送进了站点检索接口（URL 见 entrypoints[].url）"
+                ),
+            )
+        )
+        if not given_keyword:
+            untested.append(
+                f"站内检索入口只用通用探测词「{probe_keyword}」验证过，"
+                "未用你实际要抓的关键词跑一遍（正式抓取时才会用）"
+            )
+
+
+def _criteria_search_output(
+    criteria: list[dict[str, Any]], items: list[dict[str, Any]], judge_stats: dict[str, int]
+) -> None:
+    """判据 2：检索链路产出（扇出 + 条目标过滤 + 去重后至少剩 1 条可用条目）。"""
+    criteria.append(
+        _criterion(
+            "检索链路产出",
+            "扇出检索后至少剩 1 条可用条目",
+            f"{len(items)} 条",
+            passed=bool(items),
+            hard=True,
+            note=(
+                f"判别剔除 {judge_stats.get('body_rejected', 0)} 条（正文预检）"
+                f"／{sum(1 for i in items if i.get('judge_tagged'))} 条（已标注）"
+                if judge_stats else None
+            ),
+        )
+    )
+
+
+def _criteria_body_integrity(
+    criteria: list[dict[str, Any]],
+    untested: list[str],
+    details: list[dict[str, Any]],
+    config: SourceConfig,
+) -> None:
+    """判据 3：正文完整性（抽样详情页里正文达标的比例）。样本过少时明确说结论是初步的。"""
+    body_ok = sum(1 for row in details if row["body_ok"])
+    body_ratio = body_ok / max(1, len(details))
+    criteria.append(
+        _criterion(
+            "正文完整性",
+            f"抽样 {len(details)} 篇中正文达标（CJK ≥ {config.detail.min_body_chars} 且句末 ≥ {_MIN_SENT_ENDERS}）的比例 ≥ {_BODY_PASS_RATIO:.0%}",
+            f"{body_ok}/{len(details)} = {body_ratio:.0%}",
+            passed=bool(details) and body_ratio >= _BODY_PASS_RATIO,
+            hard=True,
+        )
+    )
+    if len(details) < _MIN_SAMPLES_FOR_BODY:
+        untested.append(
+            f"正文完整性只有 {len(details)} 篇样本（< {_MIN_SAMPLES_FOR_BODY} 篇），结论为初步"
+        )
+
+
+def _criteria_detail_hits(
+    criteria: list[dict[str, Any]], limits: list[str], details: list[dict[str, Any]]
+) -> None:
+    """判据 4：详情页元信息命中率（软判据：取不到就如实报低，不算失败）。"""
+    date_hit = sum(1 for row in details if row["date"]) / max(1, len(details))
+    agency_hit = sum(1 for row in details if row["agency"]) / max(1, len(details))
+    # 抽样日期**值**恒定 = 假命中：日期候选多半取到了页脚/模板里那个固定日期，命中率再高也没用
+    # （2026-10-15 用户报的「其他来源的日期一直是 3 月 20 日」就是这样一路绿灯进来的）。
+    sampled_dates = sorted({str(row["date"]) for row in details if row["date"]})
+    same_date_note = (
+        f"⚠ 抽样 {len(details)} 篇的发布日期**全部相同**（{sampled_dates[0]}）：疑似取到了"
+        "页脚/模板元素，命中率高不代表取对了——请逐篇核对 detail.date_selectors"
+        if len(details) >= 2 and len(sampled_dates) == 1
+        else None
+    )
+    criteria.append(
+        _criterion(
+            "详情页日期命中率",
+            f"≥ {_DATE_HIT_RATIO:.0%}",
+            f"{date_hit:.0%}",
+            passed=date_hit >= _DATE_HIT_RATIO,
+            hard=False,
+            note=(
+                same_date_note
+                or "缺日期的条目在时间窗口生效时会按配置决定去留（drop_undated_when_windowed）"
+            ),
+        )
+    )
+    if same_date_note:
+        limits.append(same_date_note)
+    criteria.append(
+        _criterion(
+            "详情页机构命中率",
+            f"≥ {_AGENCY_HIT_RATIO:.0%}",
+            f"{agency_hit:.0%}",
+            passed=agency_hit >= _AGENCY_HIT_RATIO,
+            hard=False,
+            note="机构取不到通常是该站详情页没有固定字段，需要补 agency_selectors",
+        )
+    )
+
+
+async def _criteria_pagination(
+    criteria: list[dict[str, Any]],
+    untested: list[str],
+    limits: list[str],
+    config: SourceConfig,
+    date_from: date | None,
+    date_to: date | None,
+    probe_keyword: str | None,
+) -> None:
+    """判据 5：翻页（声明了翻页就必须真的能翻）+ 判据 5b：单页入场的召回边界（软性）。
+
+    「单页」过去是静默默认值，这条路上没有任何环节会说出来，于是「抓了 N 篇就不动了」
+    无法与「站点就这么多」区分。这里逐个点名，并带上组装阶段写好的入口备注（如有）。
+    """
+    paginated = [ep for ep in config.entrypoints if ep.pagination.kind != "none"]
+    if not paginated:
+        untested.append("翻页（配置为单页模式，未声明翻页规则）")
+    else:
+        page2 = await _probe_page2(config, date_from, date_to, keyword=probe_keyword)
+        criteria.append(
+            _criterion(
+                "翻页可用性",
+                "声明翻页的入口第 2 页能取到且不是第 1 页的重复",
+                page2["detail"],
+                passed=page2["passed"],
+                hard=True,
+                note=page2["note"],
+            )
+        )
+
+    single_page = [
+        ep for ep in config.entrypoints if ep.pagination.kind == "none" and not ep.is_search
+    ]
+    if single_page:
+        limits.append(
+            f"有 {len(single_page)} 个入口声明为单页（{'、'.join(ep.name for ep in single_page)}）："
+            "只取第 1 页。页内命名区域的预览块默认如此——若该栏目其实有更多页，"
+            "召回会被截断（组装阶段已用页面证据核对过，能补的翻页规则已补上）"
+        )
+    for ep in config.entrypoints:
+        note = (ep.notes or "").strip()
+        if note:
+            limits.append(f"入口「{ep.name}」备注：{note}")
+
+
+async def _criteria_traceability(
+    criteria: list[dict[str, Any]],
+    untested: list[str],
+    limits: list[str],
+    config: SourceConfig,
+    details: list[dict[str, Any]],
+    run_id: int | None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """判据 7：来源可追溯 + 附件探测。返回 `probed_attachments`（进报告的原始证据）。"""
+    attachments = [
+        (row["url"], attachment)
+        for row in details
+        for attachment in row["attachments"]
+    ]
+    criteria.append(
+        _criterion(
+            "来源可追溯",
+            "每条都带原始 URL 与来源标识",
+            f"{len(details)} 篇均带 source_url",
+            passed=all(row["url"] for row in details),
+            hard=True,
+            note="落库时 source_name = 来源展示名，fetched_by = html_list:<key>",
+        )
+    )
+    # 探测上限取 `min(常量, SOURCE_MAX_ARTIFACTS_PER_RUN)`：试运行只抽查可达性，不是全量归档。
+    # 这个值同时决定**报告里列出哪几个附件**——报告必须与真实探测范围一致（见下方 attachments_probed）。
+    probe_cap = max(1, min(_MAX_ATTACHMENT_PROBE, get_settings().source_max_artifacts_per_run))
+    probed_attachments = attachments[:probe_cap]
+    if not attachments:
+        untested.append("附件可达性（抽样页面未发现附件）")
+        limits.append("本次抽样未发现附件，附件链路未验证")
+    else:
+        probes = await _probe_attachments(config, probed_attachments, run_id)
+        ok_count = sum(1 for row in probes if row["ok"])
+        ratio = ok_count / max(1, len(probes))
+        criteria.append(
+            _criterion(
+                "附件可达性",
+                f"抽查 {len(probes)} 个附件可达率 ≥ {_ATTACHMENT_PASS_RATIO:.0%}",
+                f"{ok_count}/{len(probes)} = {ratio:.0%}",
+                passed=ratio >= _ATTACHMENT_PASS_RATIO,
+                hard=False,
+                note="可达性只验证「能取回」，附件正文（PDF/OFD 文字）本轮不解析",
+            )
+        )
+        limits.append("附件只做了可达性与归档验证，未做正文抽取（PDF/OFD 文字提取为已知缺口）")
+        if len(attachments) > len(probes):
+            limits.append(
+                f"抽样页共发现 {len(attachments)} 个附件，只抽查了 {len(probes)} 个（其余未验证）"
+            )
+    return probed_attachments
 
 
 def _criterion(
@@ -1841,7 +1987,12 @@ async def manage_source(
                     "kind": r["kind"],
                     "status": r["status"],
                     "started_at": str(r["started_at"]),
+                    "finished_at": str(r["finished_at"]) if r.get("finished_at") else None,
                     "failure_reason": r["failure_reason"],
+                    # 验收报告原样带上（与 routes/sources.py::_run_dto 同一形状）：详情页
+                    # 的「最近一次试运行报告」直接吃 report，缺了会恒显「还没有试运行记录」。
+                    "summary": r.get("summary"),
+                    "report": r.get("report"),
                 }
                 for r in runs
             ],

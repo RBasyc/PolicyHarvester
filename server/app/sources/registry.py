@@ -55,10 +55,17 @@ def get_default() -> PolicySource:
 
 
 def get_by_label(label: str | None) -> PolicySource:
-    """按任务行上的自由文本来源名解析适配器；不认识的名字告警并回退默认源。"""
+    """按任务行上的自由文本来源名解析适配器；不认识的名字告警并回退默认源。
+
+    展示名优先，其次兜底一次**精确 key 匹配**：旧版对话工具曾把来源 key（如
+    `src_www_chinanews_com_cn`）原样落进任务行 / 定时任务快照，调度器再按它建任务
+    时只剩这条兜底能救回——key 是唯一标识，能匹配上就比静默回退默认源强。
+    """
     for source in _registry.values():
         if source.label == label:
             return source
+    if label and label in _registry:
+        return _registry[label]
     if label:
         logger.warning("未知抓取源「%s」，回退默认源 %s", label, get_default().label)
     return get_default()

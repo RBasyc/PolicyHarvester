@@ -33,7 +33,24 @@ description: 把一个新的网站来源接进本项目的采集链路。当用�
 6. **未执行的、未验证的、未完成的，不得报告为成功**。`failed` / `blocked` / 未测试项都要原样转述给用户。
 7. **注册与启用要有记录和确认**：默认注册为「草案（draft）」；直接启用（`approved=true`）必须先有指纹一致的通过验收。人工强推（`force=true`）必须由用户**明确同意**后才用，并写清变更说明。
 
-## 七阶段流程
+## 默认路径：先一键，再手工
+
+**用户给一个网址说「接进来」时，默认只调 `import_source(action="import")`**——
+它跑的是页面「导入网址」同一套六阶段编排（勘察 → 内容发现 → 生成配置 → 试运行验收 →
+注册），返回验收结论、失败归因与 `headless_eligible`。不要一上来就手工跑九步流程。
+
+```
+import_source(url=栏目页, target=采集目标)
+  ├─ status=completed / report 通过 → 转述结论；注册出来是 draft，用户点头再启用
+  ├─ 失败归因 = 选择器/入口/翻页  → 才进入下方「手工排查」
+  └─ 失败归因 = JS 渲染空壳      → import_source(action="save_browser")
+```
+
+手工阶段工具（`inspect_source` → `discover_content` → `sample_content` → …）用于：
+① 一键接入失败后按归因修规则；② 用户明确要精细控制（自定义选择器、检索型入口、
+命名区域等）。**它们不是接入的主线**。
+
+## 手工排查：七阶段流程
 
 > 每步的工具都在 `server/app/agent/onboarding_tools.py`；参数、返回字段、边界见
 > [references/tool-map.md](references/tool-map.md)。配置字段见 [references/config-schema.md](references/config-schema.md)；
