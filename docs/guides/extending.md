@@ -12,13 +12,15 @@
 | 加抓取流水线阶段   | `server/app/pipeline/crawl_graph.py` 加节点与边（分支还要动 `_route_after_fetch`）                    |
 | **加一个落库字段** | 需**同时**改四处（见下）                                                                              |
 | 调流水线参数       | 根目录 `.env` 的 `PIPELINE_*`；页面「高级设置」可再按任务覆盖                                         |
+| 开关一个功能       | 根目录 `.env.features`（判别 / 无头 / MCP / Langfuse）；改完重启                                        |
 | 换模型 / 网关      | `.env` 的 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`，或往 `PIPELINE_MODELS` 注册表加一项  |
 | 接入一个新网站     | 写一份 `SourceConfig`，**不要**写爬虫（见下）                                                         |
 | 改无头浏览器       | `server/app/browser/` + 两个提示词；导航必须过 `guard`（见下）                                        |
 
 ## Agent
 
-- New local tool: add a `@tool` function in `app/agent/tools.py` and append it to `TOOLS` — no graph changes needed.
+- New local tool: add a `@tool` function in `app/agent/tools.py` and append it to `TOOLS` — no graph changes needed. It is bound to the chat model by default; if it should only be visible under some conditions (like the browser tools), add its name to the hide set in `nodes.py::_tools_for_current_run()` rather than removing it from `all_tools()` — ToolNode still needs to be able to execute it.
+- Model usage for the composer stats is emitted by `call_model` only (`usage` SSE event, extracted by `app/agent/usage.py`). Models called *inside* a tool are deliberately not reported — don't add a second emitter, or the turn's token count would mix in extraction cost the user cannot see elsewhere.
 - New graph behavior (interrupts, conditional routing): edit `app/agent/graph.py`.
 - New state fields: `app/agent/state.py` (use reducers like `add_messages` for mergeable fields).
 
@@ -49,4 +51,5 @@ Nothing generates item 4 — it is a hand-kept mirror. Keep all four in step.
 | source-onboarding behaviour (enable gate, refusal wording, troubleshooting) | `.claude/skills/website-source-onboarding/SKILL.md` + `references/{config-schema,acceptance-criteria,tool-map}.md` |
 | filter capability (`sources/config.capability_summary()` / `PolicySource.filter_capabilities()`) | `app/api/routes/filters.py` + `app/schemas/task.FacetSupports` + `web/src/api/types.ts` + `web/src/store.ts` (`sourceFilterNote`) |
 | pipeline & agent behaviour | this wiki (`docs/architecture/*.md`) + `CLAUDE.md` |
+| env keys & feature switches (`server/app/config.py` `Settings`) | `.env.example` / `.env.features.example` + `start.sh` (`env_value` reads both files, `.env.features` wins) + [commands.md](commands.md) → *Configuration* |
 | prompt text in `prompts/*.md` | `prompts/README.md`'s file table + the consumer note in [chat-agent.md](../architecture/chat-agent.md) (which ones are hot-read vs. restart) |

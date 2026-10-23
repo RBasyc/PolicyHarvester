@@ -50,7 +50,7 @@ PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之�
 | **定时入库**       | 按分钟/小时/每日/每周自动抓取，跳过确认闸门直接入库                         |
 | **成本可观测**     | 可用页数、正文长度、并发数、检索预算均可按任务覆盖                          |
 | **网站来源接入**   | 粘贴网址自动勘察 → 生成配置 → 试运行验收 → 注册启用，接入任意政策站点       |
-| **无头浏览器来源** | JS 渲染站自动落为浏览器取数来源；对话侧「浏览网页」工具同源共用（可选启用） |
+| **无头浏览器来源** | JS 渲染站自动落为浏览器取数来源；对话侧浏览器工具同源共用（引擎可用即用）   |
 | **站内检索优先**   | 带站点自带检索入口时，关键词/日期推给站点检索页执行，而非取回后过滤         |
 | **筛选能力声明**   | 机读声明关键词/日期筛选在哪一层生效，前端如实标注召回边界                   |
 
@@ -58,7 +58,7 @@ PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之�
 
 ## 它长什么样
 
-**政策助手** — ReAct 对话 Agent 入口，接入国务院政策检索工具链与「浏览网页」工具，回答流式输出
+**政策助手** — ReAct 对话 Agent 入口，接入国务院政策检索工具链与浏览器 `browser_*` 工具，回答流式输出
 
 ![政策助手](static/screenshot/agent-chat.png)
 
@@ -91,7 +91,8 @@ PolicyHarvester 的做法是：**把最贵的提取步骤放在人工确认之�
 ```bash
 git clone https://github.com/RBasyc/policyharvester
 cd policyharvester
-cp .env.example .env   # 填入 LLM 认证
+cp .env.example .env                      # 填入 LLM 认证
+cp .env.features.example .env.features    # 可选：功能开关
 ./start.sh
 ```
 
@@ -145,7 +146,7 @@ FastAPI（:8000）
 
 ## 配置
 
-所有配置集中在仓库根目录的 `.env`。完整注释见 `.env.example`。
+配置分两个文件，都在仓库根目录：`.env` 放静态配置（模型网关、数据库、流水线与安全参数），`.env.features` 放功能开关（判别、无头浏览器、MCP、可观测性）。完整注释见 `.env.example` 与 `.env.features.example`。两个文件都可缺失；同名键以 `.env.features` 为准，真实 shell 环境变量优先级最高。配置在进程启动时读取——改完需重启服务（`PIPELINE_MODELS` 是唯一的热读项）。
 
 | 分组     | 关键项                                              | 说明                                                                 |
 | -------- | --------------------------------------------------- | -------------------------------------------------------------------- |
@@ -153,8 +154,9 @@ FastAPI（:8000）
 | 模型     | `MODEL_NAME` / `MAX_TOKENS` / `PIPELINE_MODELS`     | `PIPELINE_MODELS` 是高级设置下拉框的数据源，热读                     |
 | 数据库   | `DATABASE_URL`                                      | 默认 `postgresql://kos:kos@localhost:5433/agent_demo`                |
 | 流水线   | `PIPELINE_*`                                        | 最大篇数、每页条数、检索预算、提取并发、正文截断、预检阈值           |
-| 入库判别 | `JUDGE_*`                                           | 判别服务地址与提示词；**不可达时 fail-open**，不阻断抓取             |
-| 浏览器   | `BROWSER_ENABLED` + `BROWSER_*`                     | 无头浏览器总开关与动作/页面/时长预算；关闭时浏览工具与渲染来源不可用 |
+| 入库判别 | `JUDGE_*`                                           | 判别服务地址与提示词；**不可达时 fail-open**，不阻断抓取。`.env.features` 的 `JUDGE_ENABLED` 是所有「不建议入库」标注的总开关 |
+| 浏览器   | `BROWSER_ENABLED`（`.env.features`）+ `BROWSER_*`（`.env`） | 无头浏览器总开关与动作/页面/时长预算；关闭时浏览工具与渲染来源不可用 |
+| 功能开关 | `.env.features`                                     | `JUDGE_ENABLED` / `JUDGE_LAYA_ENABLED` / `BROWSER_ENABLED` / `BROWSER_HEADLESS` / `MCP_POLICY_ENABLED` / `LANGFUSE_ENABLED`；改完需重启 |
 
 页面的「高级设置」可在创建任务时按任务覆盖其中几项与提取模型。
 
@@ -167,7 +169,7 @@ FastAPI（:8000）
 **对话（ReAct Agent）**
 
 - `POST /api/chat` — 非流式；相同 `thread_id` 共享记忆（`InMemorySaver`，重启丢失）
-- `POST /api/chat/stream` — SSE：`{"type":"token"|"tool"|"done"|"error", ...}`（工具调用有 start/done 步骤条事件）
+- `POST /api/chat/stream` — SSE：`{"type":"token"|"tool"|"usage"|"done"|"error", ...}`（工具调用有 start/done 步骤条事件；`usage` 带每次模型调用的 token / 缓存读数）
 
 **抓取任务**
 
@@ -254,7 +256,8 @@ cd tools/China-Central-Policy-MCP && npm install && npm run build
 ```
 policyharvester/
 ├── start.sh / start.bat     # 一键启动 / 自检 / 停止
-├── .env.example             # 环境变量模板
+├── .env.example             # 静态配置模板
+├── .env.features.example    # 功能开关模板
 ├── PLAN.md / TODO.md        # 实施计划 / 进度清单
 ├── CLAUDE.md                # AI 编码助手的入口（索引 + 硬性规则）
 ├── AGENTS.md                # coding agent 的仓库级硬规则与架构速查

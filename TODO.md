@@ -46,6 +46,11 @@
 | 26 | 无头浏览器来源落库（保存为无头来源 + 取值方式开关） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 27 | 来源页体验修复与改版（向导完成后重置 + 卡片列表 + 来源详情页） | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
 | 28 | 品牌视觉：Logo 落到顶栏 / 首页 / 浏览器标签 | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 34 | 修复：对话历史悬空 `tool_calls` 导致 DeepSeek 400 | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 35 | 判别总开关 + 配置拆分（`.env` 静态 / `.env.features` 开关） | 🟨 进行中（代码与文档完成，未构建未运行；待实机验收） | — |
+| 36 | 修复：工具内部模型调用的原始 JSON 泄漏到对话界面 | 🟨 进行中（代码完成，未构建未运行；待实机验收） | — |
+| 37 | 移除对话「浏览网页」开关（引擎可用即挂载 `browser_*`） | 🟨 进行中（代码与文档完成，未构建未运行；待实机验收） | — |
+| 38 | 工具收敛（MCP 不再绑对话 / 日期进提示词 / 接入默认一键）+ 输入框用量小字 | 🟨 进行中（代码与文档完成，未构建未运行；待实机验收） | — |
 
 > **整体状态说明**：Phase 1–7 的代码与文档均已落地，但**全部验收标准都需要实机运行**（连库、起服务、抓 gov.cn、调大模型）。按本仓库约定（见 [CLAUDE.md](CLAUDE.md)）由用户自行编译运行，因此所有 Phase 暂记 `🟨 进行中（代码完成，待实机验收）`，**未**标 `✅`。实机跑通后请对照各 Phase 的「验收」逐条勾选并在此更新。
 
@@ -1192,3 +1197,61 @@ cd web && pnpm dev
 - [x] **批次 3（P1 写侧 D1/E1/F1）已落地**：① **D1 定时任务**——新增 `app/services/schedule.py`（`list_jobs` / `create_job` / `toggle_job` / `run_job` / `delete_job`），`/api/schedules*` **转调服务层**；新工具 `manage_schedule`（`app/agent/schedule_tools.py`，五动作）。**口径写进工具说明与提示词**：定时任务每轮**自动确认并入库**（调度器绕过对话侧确认闸），建之前先跟用户对齐来源/关键词/周期/篇数上限。② **E1 facets**——`app/services/facets.py` 下沉 `GET /api/filters/facets` 的三条分支（gov.cn 实时 / 配置化来源栏目名 / 无头来源不支持，页面载荷逐字不变），工具加 `action="facets"`（并自带 fallback 口径说明）。③ **F1 一键接入**——新工具 `import_source`（`app/agent/onboarding_tools.py`）：`import`（跑页面那套六阶段编排并等结束，返回验收结论/失败归因/`headless_eligible`）、`status`（看还在跑的作业）、`save_browser`（**保存为无头浏览器来源**，此前 agent 完全够不着）。九个阶段工具保留给需要精细控制的场景
 - [x] **批次 4（P2 G1–G3）已落地**：① **G1 预算/翻页接 `pipeline_*`**——只读检索的每关键词条数取 `settings.pipeline_per_keyword_limit`、总调用数共享 `settings.pipeline_max_search_calls` 预算（跨来源）、**支持翻页**（某页取不到新链接即停，与流水线「整轮零收获即停」同款，挡住站点忽略页码参数的死循环）；自造的 `_MAX_COMBOS` 保留为组合数上限。② **G2 判别缺席的措辞**——每次检索返回恒定 `caveats`：「只读结果**未经相关性判别**，是候选不是定论」。③ **G3 字段为空的表述**——`caveats` 第二条：「机构/文号来自列表页解析，**没解析到**就是空，不是「没有发文机关」」。两条同时写进 `prompts/chat.md`
 - [ ] **待实机验收**：① `cd server && uv run python scripts/test_library_search.py`（应打印「全部通过」）② 加 `--db` 跑读库用例（需 server-db-1）③ 重启 server 后按上面「验证」节逐条试一遍对话行为
+
+## Phase 34 — 修复：对话历史悬空 `tool_calls` 导致 DeepSeek 400
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-22，待实机验收） ｜ **目标**：用户中断（停止/关页面）后，同一 `thread_id` 的下一条消息不再因「assistant tool_calls 没有配对的 ToolMessage」被网关 400 拒绝
+
+- [x] **根因**：LangGraph 按 superstep 提交 checkpoint——`agent` 节点的 `AIMessage(tool_calls)` 已落盘，`tools` 节点被 `chat_stream.finally` 取消，`ToolMessage` 未提交；前端「停止后不换 id」，下一条消息带新 input 时 LangGraph 不补跑挂起的 tools 任务（`_loop.py::_first` 只在 input=None/Command 时 resume），孤立工具调用被反复发给 DeepSeek
+- [x] **新增 `server/app/agent/history.py`**：`sanitize_tool_pairs` 发请求前做前向校验——每个 `tool_calls[].id` 必须有紧邻 `ToolMessage`；缺失则整轮丢弃、孤立 `ToolMessage` 丢弃；只作用于本次请求视图，**不**伪造工具结果，打 warning
+- [x] **接入点**：`server/app/agent/nodes.py::call_model` 在拼 `SystemMessage + 历史` 前调用
+- [x] **离线用例**：`server/scripts/test_agent_history.py`（完整配对 / 缺结果 / 孤立结果 / 并行只回一条 / 普通消息）
+- [x] **文档镜像**：`docs/architecture/chat-agent.md` 新增 *Tool-call pairing* 条目；`docs/progress/log.md` 追加 2026-10-22 行
+- [ ] **待实机验收**：① `cd server && uv run python scripts/test_agent_history.py` 应打印「全部通过」；② 重启 server 后，在曾报 400 的同一会话里继续发消息不再报错；③ 正常多轮工具调用（含并行调用）行为不变
+
+## Phase 35 — 判别总开关 + 配置拆分（`.env` 静态 / `.env.features` 开关）
+
+**状态**：🟨 进行中（代码与文档完成，未构建未运行；2026-10-22，待实机验收） ｜ **目标**：① `JUDGE_ENABLED=false` 真正关掉**一切**「不建议入库」标注（此前只关了 laya，正文预检仍在打标）；② 把静态配置与功能开关分到两个 env 文件，开关不再藏在 100+ 行参数里。计划：[docs/plans/2026-10-22-env-features-split.md](docs/plans/2026-10-22-env-features-split.md)
+
+- [x] **根因确认**：`judge.judge_rows`（laya 标题判别）与 `crawl_graph._preflight_bodies`（正文预检）是两条独立打标通道，`JUDGE_ENABLED` 只 gate 了前者
+- [x] **总开关语义**：`JUDGE_ENABLED` 升级为总开关（false = laya + 正文预检都不写 `judge_tagged` / `judge_prob` / `judge_reason`），**只影响新任务**；新增 `JUDGE_LAYA_ENABLED`（默认 true）只管 laya 调用；总开关关闭时**仍抓全文**回填日期/机构/文号并写一条任务日志
+- [x] **`server/app/config.py`**：`_ENV_FILES = (.env, .env.features)`，`dotenv_values` 手工合并（后文件覆盖）后灌 `os.environ`（跳过真实 shell 变量）；`SettingsConfigDict(env_file=...)` 改成序列；`_live_env` 保住 `PIPELINE_MODELS` 热读
+- [x] **`start.sh`**：`env_value()` 读两个文件（后者优先）；缺 `.env.features` 时若 `.env` 仍有功能键只提示迁移、**不**自动复制模板；`check_ingest_judge()` 支持总开关
+- [x] **模板**：新增 [.env.features.example](../../.env.features.example)；`.env.example` 移走六个开关；`.gitignore` 加 `.env.features`；本机 `.env` 的三行开关移入 `.env.features`（密钥未动）
+- [x] **离线用例**：`server/scripts/test_feature_switches.py`（合并优先级 / `Settings.env_file` 一致 / 热读 / 总开关关闭不调 laya 不写标但回填 / laya 子开关关闭时预检仍打标 / laya 标记者跳过预检）
+- [x] **校准脚本口径**：`scripts/test_judge.py` 打印总开关 + laya 子开关；`scripts/test_ingest_filter.py` 的 `laya_available` 改读 `judge_laya_enabled`
+- [x] **文档镜像**：`CLAUDE.md`、`AGENTS.md`、`README.md`、`README.zh-CN.md`、`docs/guides/{commands,extending}.md`、`docs/architecture/{data-pipeline,browser,chat-agent}.md`、`server/README.md`、`database/README.md`、`docs/验收-无头浏览器.md`、`docs/progress/log.md`
+- [ ] **待实机验收**：① `cd server && uv run python scripts/test_feature_switches.py` 应打印「全部通过」；② `./start.sh check` 输出「判别总开关已关闭」；③ 重启 server 后新任务的确认面板**没有**「不建议入库」徽标，但日期/机构/文号仍在、任务日志有「判别总开关已关闭」；④ 临时设 `JUDGE_ENABLED=true` + `JUDGE_LAYA_ENABLED=false` 再抓：只剩正文预检的标签；⑤ `uv run python scripts/test_judge.py` 仍能正常调用 laya
+
+## Phase 36 — 修复：工具内部模型调用的原始 JSON 泄漏到对话界面
+
+**状态**：🟨 进行中（代码完成，未构建未运行；2026-10-22，待实机验收） ｜ **目标**：对话里跑 `import_source` / `ingest_policies` 时，用户气泡不再出现 `{"publish_date": …, "evidence": …}` 这类工具内部字段抽取的原始输出
+
+- [x] **根因**：`/api/chat/stream` 用 `stream_mode="messages"` 转发**整张图**里所有 `AIMessageChunk`；LangChain 通过 contextvar 把回调配置传播给工具内部的模型调用（页面分析、`extract_policy_fields`、入库链路），这些 chunk 也被当成 `token` 事件推到前端；多个抽取并发时 token 还会在同一个气泡里互相穿插（截图中 `{"publish_date":"2026-10-{"21p ublish00_date"…`）
+- [x] **修复**：`server/app/api/routes/agent.py::pump` 按 `metadata["langgraph_node"]` 过滤，只转发 `agent` 节点的文本；工具内部（`tools` 节点及后台任务）的模型输出一律丢弃
+- [x] **文档镜像**：`docs/architecture/chat-agent.md` 的 *SSE streaming* 增加 *Token frames are filtered by node*，写明如果新增 stream mode 要保持这条过滤
+- [ ] **待实机验收**：重启 server 后在对话里说「接入 <https://www.12371.cn/>」→ 步骤面板只有 `import_source` 与正常回复，**不再**出现原始 JSON；普通对话与 `browser_*` 工具的流式输出不受影响
+
+## Phase 37 — 移除对话「浏览网页」开关（引擎可用即挂载 `browser_*`）
+
+**状态**：🟨 进行中（代码与文档完成，未构建未运行；2026-10-22，待实机验收） ｜ **目标**：对话页不再有「浏览网页」开关——用户确认「既然 Agent 会自己调无头，留着按钮没有意义」。引擎可用 = 工具可用；不可用 = 模型根本看不到 `browser_*`。
+
+- [x] **后端**：`schemas/chat.py` 删掉 `ChatRequest.browser_enabled`；`routes/agent.py` 新增 `_new_browser_run(ctx, emit)`，`/chat` 与 `/chat/stream` 在 `browser_runtime.available()` 时无条件建 `BrowserRun`（会话仍按请求惰性打开、`finally` 关闭）；删掉「流开始前 400」与 `_ensure_browser_available`；`recursion_limit` 依据引擎可用性提升
+- [x] **过滤与提示词**：`call_model` 在存在 `BrowserRun` 时挂全部工具并追加 `chat_browser.md`（措辞改为「本轮可用」），否则不暴露 `browser_*` schema；`agent/tools.py`、`api/routes/config.py` 注释同步
+- [x] **前端**：`store/chat.ts` 删 `browserAvailable` / `browserEnabled` / `loadFeatures` / `toggleBrowser`，请求体只剩 `{message, thread_id}`；`AgentPage.vue` 删开关按钮、`onMounted` 取 feature 与 `.browse-toggle` 样式（只留「新对话」）；`api/types.ts` 的 `ChatRequest` / 注释同步
+- [x] **文档镜像**：`AGENTS.md`、`README.md`、`README.zh-CN.md`、`.env.example`、`.env.features.example`、`start.sh` 提示、`prompts/README.md`、`prompts/chat_browser.md`、`docs/architecture/{browser,chat-agent,overview}.md`、`docs/guides/commands.md`、`docs/验收-无头浏览器.md`（A2 / A4 / E1）
+- [ ] **待实机验收**：① `BROWSER_ENABLED=true` 重启 server + `pnpm dev` → `/agent` 输入区**没有**「浏览网页」按钮；② 直接说「打开 <https://www.news.cn/politics/> 找 3 条时政新闻」→ 模型自行调用 `browser_*` 并渲染步骤条；③ 普通政策问答行为不变；④ `BROWSER_ENABLED=false` 重启 → 对话照常，模型不调用浏览器工具，无报错；⑤ `cd web && pnpm build` 通过（`ChatRequest` 字段已收敛）
+
+## Phase 38 — 工具收敛（去掉重叠入口 / 日期进提示词 / 接入默认一键）+ 输入框底部用量小字
+
+**状态**：🟨 进行中（代码与文档完成，未构建未运行；2026-10-22，待实机验收） ｜ **目标**：① 对话模型看到的工具从 26 个降到 25 个且**不再有重叠入口**（三个原始 MCP 工具与 `search_policy_library` 二选一）；② 日期不再占一次工具往返；③ 网站接入默认走一键，九步流程降为排障；④ 输入框底部一行小字显示**能查到**的用量指标。
+
+- [x] **MCP 原始工具不再绑对话**：`nodes.py::_tools_for_current_run` 恒隐藏 `get_latest_policies` / `get_policy_facets` / `get_policy_fulltext`（`_MCP_TOOL_NAMES`）；它们仍在 `MCP_TOOLS` 里供流水线与 facets 服务经 `find_tool` 使用；`ToolNode` 仍持有全部工具
+- [x] **补齐替代能力**：`search_policy_library` 的 `search` 增加 `agencies` / `doc_types`（透传 `source.search_plan` 的服务端筛选），docstring 改为「四个动作」；`services/library_search.py::_search_one` / `search_sources` 透传
+- [x] **日期进系统提示**：`call_model` 在 `chat.md` 后追加「今天是 YYYY-MM-DD（服务器本地时区）」；删除 `get_current_time` 工具；`prompts/chat.md` 明确「不要再调工具查时间」
+- [x] **接入默认一键**：`prompts/chat.md` 与 `.claude/skills/website-source-onboarding/SKILL.md` 统一为「先 `import_source(action="import")`，失败归因是选择器/入口/翻页才转手工；JS 空壳用 `save_browser`」；SKILL 新增 *默认路径：先一键，再手工*，原七阶段改为 *手工排查*
+- [x] **用量上报（后端）**：新增 `app/agent/usage.py::extract_usage`——从 LangChain `usage_metadata` 与各家 `response_metadata.token_usage`（OpenAI `prompt_tokens_details.cached_tokens` / DeepSeek `prompt_cache_hit_tokens`）里取输入/输出/缓存命中/思考 token；**拿不到就返回 `None`，不估算**；`call_model` 经 `chat_emit_var` 发 `{"type":"usage",…}`（一次模型调用一条）；非流式 `/api/chat` 把同一结构放进 `ChatResponse.usage`（`schemas/chat.py::ChatUsage`）；工具内部模型调用不上报
+- [x] **用量展示（前端）**：`api/types.ts` 加 `ChatUsage` 与 `usage` 事件；`store/chat.ts` 累计 `lastTurn`（模型名 / 输入 / 缓存 / 输出 / 思考 / 模型调用次数 / 工具次数 / 首字延迟 / 总耗时）与 `sessionUsage`，`resetChat` 清零；`AgentPage.vue` 在输入卡片**外**、页面最底部加居中 11px 单行 `.composer-stats`（`fmtTokens` / `fmtMs`），没有 usage 的网关只显示次数/耗时。不落库、不新增持久化字段
+- [x] **文档镜像**：`docs/architecture/chat-agent.md`（工具裁剪 / 四动作 / `usage` 事件 / 日期注入 / 前端读数）、`docs/architecture/overview.md`（AgentPage 底部小字）、`README.md` / `README.zh-CN.md`（SSE 事件列表）、`.claude/skills/website-source-onboarding/references/tool-map.md`（删 `get_current_time`、补四动作与 MCP 不绑对话说明）、`prompts/chat.md`
+- [x] **静态核对（仅此）**：改动过的 9 个 Python 文件 `ast.parse` 全部通过；全仓 `get_current_time` 只剩历史记录（TODO/日志/测试里的虚构工具名）
+- [ ] **待实机验收**：① `cd web && pnpm build` 通过；② 重启 server + `pnpm dev` → `/agent` 发一句 → 底部出现一行小字（模型名、输入/缓存、输出、耗时），多轮工具问答后「模型 N 次 / 工具 N 次」分别出现，点「新对话」清零；③ 网关不回 usage 时该行只剩次数与耗时，不出现 0 token；④ 问「今年发布了哪些 AI 政策」→ 模型直接用系统提示里的日期，**不再**出现查时间的工具步骤；⑤ 问「浙江有哪些相关政策」→ 只调 `search_policy_library`，步骤里没有 `get_latest_policies`；⑥ 说「接入 <https://www.12371.cn/>」→ 第一步是 `import_source`

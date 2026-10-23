@@ -17,11 +17,12 @@
 | 改抓取流水线、检索/判别/预检、调度、配置 | [architecture/data-pipeline.md](architecture/data-pipeline.md) |
 | 改无头浏览器抓取（任意网站 / JS 渲染页，对话与流水线双入口） | [architecture/browser.md](architecture/browser.md) |
 | **改 gov.cn 检索逻辑前**（一手实测证据） | [architecture/gov-cn-search-quirks.md](architecture/gov-cn-search-quirks.md) |
-| 接入一个新的网站来源（Skill / 9 个工具 / 页面入口） | [architecture/source-onboarding.md](architecture/source-onboarding.md) |
+| 接入一个新的网站来源（Skill / `import_source` 一键 + 9 个手工工具 / 页面入口） | [architecture/source-onboarding.md](architecture/source-onboarding.md) |
 | 命令、环境变量、脚本 | [guides/commands.md](guides/commands.md) |
 | ⛔「不要主动构建/运行」的约定 | [guides/building.md](guides/building.md) |
 | 扩展点一览（加工具 / 加阶段 / 加字段 / 镜像清单） | [guides/extending.md](guides/extending.md) |
 | **agent 线与流水线线的差距清单**（待排期，Phase 33） | [plans/2026-10-21-agent-alignment.md](plans/2026-10-21-agent-alignment.md) |
+| 判别总开关 + 配置拆分（Phase 35） | [plans/2026-10-22-env-features-split.md](plans/2026-10-22-env-features-split.md) |
 | 进度日志（2026-10-12 起，明细） | [progress/log.md](progress/log.md) |
 
 ## 目录结构
@@ -41,7 +42,8 @@ docs/
 │   ├── building.md               #   构建/运行约定（硬性规则）
 │   └── extending.md              #   扩展指引 + 镜像清单
 ├── plans/                        # 中文：改造计划与待排期清单（定稿后落档）
-│   └── 2026-10-21-agent-alignment.md   #   Agent 线与流水线线的对齐清单（Phase 33）
+│   ├── 2026-10-21-agent-alignment.md   #   Agent 线与流水线线的对齐清单（Phase 33）
+│   └── 2026-10-22-env-features-split.md #   判别总开关 + 配置拆分（Phase 35）
 └── progress/
     └── log.md                    # 中文：进度日志明细（TODO.md 的下沉）
 ```

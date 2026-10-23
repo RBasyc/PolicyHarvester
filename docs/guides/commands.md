@@ -24,11 +24,12 @@ Headless browser (optional, Phase 24):
 ```bash
 uv sync --extra browser            # install playwright (not part of the default sync)
 uv run playwright install chromium # ~150 MB browser binary
-# root .env: BROWSER_ENABLED=true, then restart the server
+# root .env.features: BROWSER_ENABLED=true, then restart the server
 ```
 
-Without the extra the server still starts; the 「任意网站（无头浏览器）」 source and the chat
-「浏览网页」 toggle stay hidden (`GET /api/config/features` reports `browser_available=false`).
+Without the extra the server still starts; the 「任意网站（无头浏览器）」 source stays hidden
+and the chat model is not given any `browser_*` tools (`GET /api/config/features` reports
+`browser_available=false`). There is no chat-side toggle: engine available = tools available.
 `./start.sh` syncs the extra automatically when `BROWSER_ENABLED=true` and prints a
 non-blocking Chromium hint. See [browser.md](../architecture/browser.md).
 
@@ -53,10 +54,16 @@ npm run build  # = tsc; the server loads build/index.js, so src/ edits need this
 
 ## Configuration
 
-Copy the root-level [.env.example](../../.env.example) to `.env` (both live at the **repo root**, not in `server/`; `app/config.py` resolves the path from `__file__`, so the working directory doesn't matter).
+Configuration is split across two files at the **repo root** (not in `server/`; `app/config.py` resolves both from `__file__`, so the working directory doesn't matter):
+
+- [.env.example](../../.env.example) → `.env`: static configuration (LLM gateway, database, pipeline parameters, judge service address, source security constraints).
+- [.env.features.example](../../.env.features.example) → `.env.features`: feature switches (`JUDGE_ENABLED`, `JUDGE_LAYA_ENABLED`, `BROWSER_ENABLED`, `BROWSER_HEADLESS`, `MCP_POLICY_ENABLED`, `LANGFUSE_ENABLED`).
+
+Both files are optional. On duplicate keys `.env.features` wins over `.env`; a real shell environment variable wins over both. Settings are read at process start — **restart the server after editing either file**; the only hot-read item is `PIPELINE_MODELS`.
 
 - **LLM** speaks the **OpenAI-compatible protocol**: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME` in the repo-root `.env`. Any `/v1/chat/completions` gateway works (DeepSeek, Kimi/Moonshot, OpenAI, local vLLM). To add a model, append an entry to the `PIPELINE_MODELS` JSON registry (hot-read, no restart).
 - The crawl pipeline additionally needs `DATABASE_URL` (default `postgresql://kos:kos@localhost:5433/agent_demo`) and the `server-db-1` container running.
 - The model registry is `PIPELINE_MODELS` (JSON) — hot-read, so editing `.env` needs no restart for model changes. See [data-pipeline.md](../architecture/data-pipeline.md) → *Config*.
-- **Observability (optional, off by default)**: `LANGFUSE_ENABLED` + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` + `LANGFUSE_BASE_URL` (or `LANGFUSE_HOST` — both names are accepted) point the chat graph and the extraction pipeline at a **self-hosted** Langfuse/Litefuse instance (`app/tracing.py`, Phase 21). Missing keys, `LANGFUSE_ENABLED=false`, or an uninstalled `langfuse` package all degrade to "no tracing" with one startup log line — never an error. These go through `Settings`, so they need a restart. **Keep the URL local** — pointing it at a cloud endpoint ships conversations and policy full texts to a third party. See [chat-agent.md](../architecture/chat-agent.md) → *Observability*.
+- **Admission judge**: `JUDGE_ENABLED` in `.env.features` is the master switch for every "not recommended for ingestion" tag (laya title judging + body preflight). `JUDGE_LAYA_ENABLED` controls only the laya service call. Switching the master off affects new tasks only and still fetches full text to backfill date/agency/doc number.
+- **Observability (optional, off by default)**: `LANGFUSE_ENABLED` (in `.env.features`) + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` + `LANGFUSE_BASE_URL` (or `LANGFUSE_HOST` — both names are accepted, in `.env`) point the chat graph and the extraction pipeline at a **self-hosted** Langfuse/Litefuse instance (`app/tracing.py`, Phase 21). Missing keys, `LANGFUSE_ENABLED=false`, or an uninstalled `langfuse` package all degrade to "no tracing" with one startup log line — never an error. These go through `Settings`, so they need a restart. **Keep the URL local** — pointing it at a cloud endpoint ships conversations and policy full texts to a third party. See [chat-agent.md](../architecture/chat-agent.md) → *Observability*.
 - **Prompts are files, not env vars**: they live in the repo-root [`prompts/`](../../prompts/) (`chat` / `chat_browser` / `browser_browse` / `extract` / `extract_json_fallback` / `extract_fields` / `judge`), one `.md` per prompt, loaded by `app/prompts.py`. Editing `chat.md`, `chat_browser.md`, `browser_browse.md` or `judge.md` takes effect on the next call (no restart); `extract*.md` are bound to module constants, so those need a restart. A missing file raises at the call site — intentionally loud. `JUDGE_INSTRUCTIONS` still overrides `judge.md`.

@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PolicyHarvester 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "policyharvester-architecture.html",
+    "views": [
+      {
+        "id": "main-path",
+        "label": "主链路",
+        "focus": ["users", "spa", "api", "db"],
+        "note": "使用者打开 SPA，经 REST/SSE 进入 FastAPI，SQL 落到 PostgreSQL。"
+      },
+      {
+        "id": "crawl-chain",
+        "label": "抓取与判别",
+        "focus": ["crawl", "sched", "mcp", "govcn", "judge", "llm"],
+        "note": "管线经 MCP 检索 gov.cn，判别与抽取都走 LLM 网关。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "users", "type": "external", "label": "使用者", "sublabel": "浏览器 · 操作员", "pos": [60, 62], "size": [110, 64] },
+    { "id": "spa", "type": "frontend", "label": "Vue 3 SPA", "sublabel": "Vite :5173 · 5 个路由", "pos": [60, 160], "size": [170, 84] },
+    { "id": "api", "type": "backend", "label": "FastAPI", "sublabel": "REST + SSE · :8000", "tag": "uv · Python 3.12", "pos": [60, 310], "size": [170, 84] },
+    { "id": "db", "type": "database", "label": "PostgreSQL", "sublabel": "agent_demo · :5433", "pos": [60, 460], "size": [170, 84] },
+    { "id": "chat", "type": "backend", "label": "对话 Agent 图", "sublabel": "ReAct + MCP 工具", "pos": [400, 170], "size": [200, 80] },
+    { "id": "crawl", "type": "backend", "label": "抓取管线图", "sublabel": "检索 → 判别 → 确认 → 抽取", "pos": [400, 340], "size": [200, 80] },
+    { "id": "sched", "type": "backend", "label": "定时调度器", "sublabel": "15 s 轮询", "pos": [400, 490], "size": [190, 76] },
+    { "id": "llm", "type": "external", "label": "LLM 网关", "sublabel": "OpenAI 兼容协议", "pos": [740, 170], "size": [190, 80] },
+    { "id": "judge", "type": "external", "label": "laya 判别服务", "sublabel": "POST /v1/systemone", "pos": [740, 330], "size": [190, 80] },
+    { "id": "mcp", "type": "backend", "label": "gov.cn MCP", "sublabel": "Node · 检索 / 全文", "pos": [740, 490], "size": [190, 80] },
+    { "id": "govcn", "type": "external", "label": "中国政府网", "sublabel": "gov.cn", "pos": [990, 490], "size": [170, 80] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "server/ · 同一 FastAPI 进程", "wraps": ["chat", "crawl", "sched"] }
+  ],
+  "connections": [
+    { "id": "open-spa", "from": "users", "to": "spa", "fromSide": "bottom", "toSide": "top" },
+    { "id": "spa-to-api", "from": "spa", "to": "api", "label": "REST + SSE", "fromSide": "bottom", "toSide": "top", "labelDy": 26 },
+    { "id": "api-sql", "from": "api", "to": "db", "label": "SQL · psycopg3", "fromSide": "bottom", "toSide": "top", "labelDy": 26 },
+    { "id": "api-holds-chat", "from": "api", "to": "chat", "label": "POST /api/chat/stream" },
+    { "id": "api-holds-crawl", "from": "api", "to": "crawl", "label": "POST /api/tasks", "labelDx": 38, "labelDy": 46 },
+    { "id": "schedule-runs", "from": "sched", "to": "crawl", "label": "跳过确认门", "fromSide": "top", "toSide": "bottom" },
+    { "id": "chat-llm", "from": "chat", "to": "llm", "label": "对话 · 工具决策" },
+    { "id": "crawl-llm", "from": "crawl", "to": "llm", "label": "抽取 事实/信息/知识", "toSide": "bottom" },
+    { "id": "crawl-judge", "from": "crawl", "to": "judge", "label": "标题判定" },
+    { "id": "crawl-mcp", "from": "crawl", "to": "mcp", "label": "检索 / 全文" },
+    { "id": "mcp-govcn", "from": "mcp", "to": "govcn", "label": "HTTP" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "前端与主链路",
+      "items": [
+        "Vue 3 + Vite，模块级 store（无 Pinia），HTTP/SSE 全走 api/client.ts",
+        "任务进度用 EventSource，对话用 POST 流式读取",
+        "开发 history 路由，生产 hash 路由"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "后端两张图",
+      "items": [
+        "对话图：ReAct + MCP 工具，按需浏览、按需入库",
+        "抓取图两阶段：检索 → 判别 → 等确认结束；确认后 抽取 → 汇总",
+        "定时任务绕过确认门，直接 run_extraction_phase"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "外部依赖与数据",
+      "items": [
+        "gov.cn 只通过 MCP 访问，前端不直连站点",
+        "判别与抽取同走一个 OpenAI 兼容网关，模型注册表热读 .env",
+        "无头浏览器（Playwright）为可选组件，启用后才有 browser_* 工具"
+      ]
+    }
+  ]
+}

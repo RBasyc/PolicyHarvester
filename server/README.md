@@ -13,7 +13,7 @@ server/
 │   └── test_db.py          # 数据库读写冒烟测试
 └── app/
     ├── main.py             # FastAPI 应用工厂、lifespan（开池 -> MCP -> 编译图）、路由注册
-    ├── config.py           # pydantic-settings 配置（读取 .env）
+    ├── config.py           # pydantic-settings 配置（读取仓库根 .env + .env.features）
     ├── agent/              # A. ReAct 对话 Agent
     │   ├── state.py        #   图状态定义（messages + add_messages reducer）
     │   ├── tools.py        #   工具定义（@tool），在 TOOLS 列表中注册
@@ -42,10 +42,11 @@ server/
 # 1. 安装依赖（需要 uv）
 uv sync
 
-# 2. 配置模型网关：复制仓库根目录（../.env.example）的模板为 ../.env，
-#    填写 OPENAI_API_KEY + OPENAI_BASE_URL + MODEL_NAME（OpenAI 兼容协议，
-#    DeepSeek / Kimi(Moonshot) / OpenAI / 本地 vLLM 通吃；.env 统一放在仓库根目录，
-#    server 会自动定位，与启动时的工作目录无关）
+# 2. 配置模型网关：复制仓库根目录的模板（../.env.example → ../.env，
+#    ../.env.features.example → ../.env.features），填写 OPENAI_API_KEY + OPENAI_BASE_URL
+#    + MODEL_NAME（OpenAI 兼容协议，DeepSeek / Kimi(Moonshot) / OpenAI / 本地 vLLM 通吃）。
+#    .env 放静态配置，.env.features 放功能开关（判别 / 无头 / MCP / Langfuse）；同名键后者优先，
+#    改完需重启。两个文件都放在仓库根目录，server 会自动定位，与启动时的工作目录无关。
 #    抓取流水线还需要 DATABASE_URL（默认 postgresql://kos:kos@localhost:5433/agent_demo）
 
 # 3. 准备数据库（docker 容器 server-db-1 运行中）
@@ -58,7 +59,7 @@ python main.py
 
 启动后访问 <http://localhost:8000/docs> 查看交互式 API 文档。
 
-> 两个冒烟脚本：`uv run python scripts/test_mcp.py`（MCP 工具列表 + `get_latest_policies` 调用）、`uv run python scripts/test_db.py`（读 `crawl_task` / `v_policy_results` / `extraction`+`fact_item`）。
+> 冒烟脚本：`uv run python scripts/test_mcp.py`（MCP 工具列表 + `get_latest_policies` 调用）、`uv run python scripts/test_db.py`（读 `crawl_task` / `v_policy_results` / `extraction`+`fact_item`）、`uv run python scripts/test_feature_switches.py`（两个 env 文件的合并优先级 + 判别总开关，离线）。
 
 ## API
 
@@ -152,4 +153,5 @@ curl -N http://localhost:8000/api/tasks/1/stream     # SSE：task / log / done /
 - **改流水线**：在 `app/pipeline/crawl_graph.py` 加节点与边；新增落库字段需同时改 `database/schema.sql`、`app/db/repositories.py`、`app/schemas/*.py` 与 `web/src/api/types.ts`（前端类型是手工镜像，不会自动生成）。
 - **换模型 / 网关**：修改根目录 `.env` 中的 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`（OpenAI 兼容协议），或往 `PIPELINE_MODELS` 注册表加一项。
 - **调流水线参数**：根目录 `.env` 中的 `PIPELINE_*`（每关键词条数、最大篇数、提取并发、正文截断长度、MCP 超时）；页面「高级设置」可在创建任务时按任务覆盖（值落在 `crawl_task.pipeline_*` 列，NULL = 用全局默认）。
-- **接可观测性**：`app/tracing.py`（Langfuse / Litefuse，**自托管**）。在根目录 `.env` 配 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`（`LANGFUSE_HOST` 也认）即可，对话每轮一条 trace、每篇提取一条 trace；密钥不配或 `LANGFUSE_ENABLED=false` 就是关的，不影响业务。新调用点只要 `config.update(trace_config(...))`，关掉时它返回 `{}`。
+- **开关功能**：根目录 `.env.features`（复制 `.env.features.example`）——`JUDGE_ENABLED`（判别**总开关**：false = laya 标题判别和正文预检都不打「不建议入库」标签，只影响新任务，全文仍会抓来回填日期/机构/文号）、`JUDGE_LAYA_ENABLED`（laya 子开关）、`BROWSER_ENABLED` / `BROWSER_HEADLESS`、`MCP_POLICY_ENABLED`、`LANGFUSE_ENABLED`。改完需重启。
+- **接可观测性**：`app/tracing.py`（Langfuse / Litefuse，**自托管**）。在根目录 `.env` 配 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`（`LANGFUSE_HOST` 也认），`.env.features` 里 `LANGFUSE_ENABLED` 控制开关，对话每轮一条 trace、每篇提取一条 trace；密钥不配或开关关闭就是关的，不影响业务。新调用点只要 `config.update(trace_config(...))`，关掉时它返回 `{}`。地址保持本机——指向云端等于把对话和正文发给第三方。

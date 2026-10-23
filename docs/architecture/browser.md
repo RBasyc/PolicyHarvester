@@ -12,7 +12,8 @@ simply disappear.
 
 There are **two entrances** and one shared action layer:
 
-- **Chat** (`/agent`): the user flips 「浏览网页」; the chat model can call `browser_*` tools.
+- **Chat** (`/agent`): whenever the engine is available the chat model can call `browser_*`
+  tools (no per-turn toggle since 2026-10-22).
 - **Pipeline** (`/crawl`): source 「任意网站（无头浏览器）」 + an entry URL + a natural-language
   goal; a compact ReAct discovery loop collects candidate detail pages, then the **existing**
   judge/preflight/confirm/extract stages take over.
@@ -92,7 +93,7 @@ budgets + untrusted wrapping); anti-bot sites may return an empty shell.
 
 ## Tools
 
-Available to the chat model when the toggle is on; available to the pipeline discovery loop.
+Available to the chat model whenever the engine is available (no toggle); available to the pipeline discovery loop.
 
 | Tool | Notes |
 | --- | --- |
@@ -110,19 +111,19 @@ the budget line.
 
 ## Chat entry
 
-- `ChatRequest.browser_enabled` (default `false`). With it on, `api/routes/agent.py` creates a
-  `BrowserRun` (SSE emitter for the stream, no-op for `/chat`), sets the contextvar in the same
-  `isolated_context()` used for tracing, and closes the run in `finally`.
+- **No per-turn switch.** When `browser_runtime.available()` (`BROWSER_ENABLED=true` and
+  playwright importable), every chat request creates a `BrowserRun` (SSE emitter for the stream,
+  none for `/chat`), sets the contextvar in the same `isolated_context()` used for tracing, and
+  closes the run in `finally`. The session is opened lazily on the first `browser_*` call, so an
+  unused run costs one dataclass. When the engine is unavailable there is no run and no tools —
+  no 400, no toggle; the model simply never sees `browser_*`.
 - `agent/tools.py::all_tools()` always exposes the browser tools to `ToolNode`, but
   `call_model` filters the list before `bind_tools`: without an active run the model never sees
   the schemas (saves tokens; `ToolNode` can still execute any tool name).
 - `agent/nodes.py::call_model` appends `prompts/chat_browser.md` (hot-read) while a run is
   active.
 - `_chat_config()` raises LangGraph's `recursion_limit` to `max(25, 2*(BROWSER_MAX_ACTIONS+4))`
-  when browsing (each agent↔tools roundtrip is two steps).
-- `browser_enabled=true` while the engine is unavailable returns **400** before the stream
-  starts, carrying the install instructions (`BROWSER_ENABLED` or `uv sync --extra browser` +
-  `playwright install chromium`).
+  when the engine is available (each agent↔tools roundtrip is two steps).
 - **SSE `tool` events**: the stream now emits `{"type":"tool","name","detail","status","ok"}`
   (`status` = `start|done`) between `token` frames. `web/src/store/chat.ts` pairs `done` with
   the most recent matching `start` and renders the steps inside the assistant bubble. Unknown
@@ -157,12 +158,20 @@ the budget line.
 
 `GET /api/config/features` → `{browser_available, browser_enabled}` (does **not** launch
 Chromium). `browser_available` = `BROWSER_ENABLED=true` **and** playwright importable.
-`/api/sources`, `available_sources()`, and `web/src/store/chat.ts` gate on it; the browser
-source also disappears from the source dropdown.
+`/api/sources` and `available_sources()` gate on it; the browser source also disappears from
+the source dropdown. The chat entry gates on `browser_runtime.available()` server-side (it no
+longer reads a UI toggle).
+
+`.env.features`:
 
 ```ini
 BROWSER_ENABLED=false           # master switch (restart to change)
 BROWSER_HEADLESS=true
+```
+
+`.env`:
+
+```ini
 BROWSER_MAX_SESSIONS=2          # contexts; also bounds browser fetch concurrency
 BROWSER_MAX_ACTIONS=20
 BROWSER_MAX_PAGES=10
@@ -178,8 +187,8 @@ BROWSER_ALLOWED_DOMAINS=[]      # JSON array; empty = any public site
 policy. `SOURCE_ALLOW_PRIVATE_HOSTS=true` also relaxes the browser (local debugging only).
 
 Install: `cd server && uv sync --extra browser && uv run playwright install chromium`, then
-`BROWSER_ENABLED=true`. `start.sh` syncs the extra when enabled and prints a non-blocking hint
-if Playwright/Chromium is missing.
+set `BROWSER_ENABLED=true` in `.env.features`. `start.sh` syncs the extra when enabled and
+prints a non-blocking hint if Playwright/Chromium is missing.
 
 ## Limits / deliberately not done
 
